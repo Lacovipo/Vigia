@@ -672,7 +672,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         return 0;
     }
 
-    if board.halfmove_clock >= 100 || ctx.is_repetition(board.hash) {
+    if board.halfmove_clock >= 100 || ctx.is_repetition(board.hash) || is_insufficient_material(board) {
         return 0;
     }
 
@@ -1045,6 +1045,29 @@ fn has_non_pawn_material(board: &Board, color: Color) -> bool {
         .any(|&kind| !matches!(kind, PieceType::Pawn | PieceType::King) && !board.pieces_of(color, kind).is_empty())
 }
 
+/// A position where no sequence of legal moves, played by either side no
+/// matter how badly, could ever produce checkmate: no pawns left to
+/// promote into fresh material, and at most one minor piece on the whole
+/// board. This stays deliberately conservative — two knights, two bishops,
+/// or a bishop pair can force mate in at least some lines, so those are
+/// left for the search to work out on its own rather than risk misjudging
+/// a position that's actually still winnable as an automatic draw.
+fn is_insufficient_material(board: &Board) -> bool {
+    for color in [Color::White, Color::Black] {
+        if !board.pieces_of(color, PieceType::Pawn).is_empty()
+            || !board.pieces_of(color, PieceType::Rook).is_empty()
+            || !board.pieces_of(color, PieceType::Queen).is_empty()
+        {
+            return false;
+        }
+    }
+    let minors = board.pieces_of(Color::White, PieceType::Knight).count()
+        + board.pieces_of(Color::White, PieceType::Bishop).count()
+        + board.pieces_of(Color::Black, PieceType::Knight).count()
+        + board.pieces_of(Color::Black, PieceType::Bishop).count();
+    minors <= 1
+}
+
 fn capture_victim_value(board: &Board, mv: Move) -> i32 {
     if mv.flag == MoveFlag::EnPassant {
         eval::piece_value(crate::types::PieceType::Pawn)
@@ -1213,6 +1236,40 @@ mod tests {
         assert!(!has_non_pawn_material(&kp_only, Color::White));
         let with_knight = Board::from_fen("4k3/8/8/8/8/8/4P3/3NK3 w - - 0 1").unwrap();
         assert!(has_non_pawn_material(&with_knight, Color::White));
+    }
+
+    #[test]
+    fn is_insufficient_material_detects_bare_kings_and_lone_minors() {
+        let bare_kings = Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        assert!(is_insufficient_material(&bare_kings));
+        let lone_knight = Board::from_fen("4k3/8/8/8/8/8/8/3NK3 w - - 0 1").unwrap();
+        assert!(is_insufficient_material(&lone_knight));
+        let lone_bishop = Board::from_fen("4k3/8/8/8/8/8/8/3BK3 w - - 0 1").unwrap();
+        assert!(is_insufficient_material(&lone_bishop));
+        // Two bishops (or any other pairing of minors) can, at least in
+        // some lines, force checkmate, so they must not be swept into the
+        // same automatic draw.
+        let two_bishops = Board::from_fen("4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1").unwrap();
+        assert!(!is_insufficient_material(&two_bishops));
+        let with_pawn = Board::from_fen("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
+        assert!(!is_insufficient_material(&with_pawn));
+    }
+
+    #[test]
+    fn search_scores_bare_kings_as_a_dead_draw() {
+        let result = search_to_depth("4k3/8/8/8/8/8/8/4K3 w - - 0 1", 4);
+        assert_eq!(result.score, 0);
+    }
+
+    #[test]
+    fn search_recognizes_that_capturing_the_last_pawn_leaves_insufficient_material() {
+        // White Ka1, Pe4 (undefended); Black Ke5 to move. This is a proven
+        // draw (see eval::kpk_exact_score) however Black plays it, but
+        // before this fix, a line that captured the pawn and then wandered
+        // a few more plies through bare-king king-square-table noise could
+        // leak a small nonzero score instead of a clean draw.
+        let result = search_to_depth("8/8/8/4k3/4P3/8/8/K7 b - - 0 1", 4);
+        assert_eq!(result.score, 0);
     }
 
     #[test]

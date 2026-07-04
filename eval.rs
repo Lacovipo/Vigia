@@ -1,5 +1,6 @@
 use crate::bitboard::Bitboard;
 use crate::board::Board;
+use crate::kpk;
 use crate::movegen;
 use crate::types::{Color, PieceType, Square};
 
@@ -153,8 +154,18 @@ fn tapered_king_score(board: &Board, color: Color, phase: i32) -> i32 {
 }
 
 /// Static evaluation of `board`, in centipawns from White's perspective:
-/// positive means White is better, negative means Black is better.
+/// positive means White is better, negative means Black is better. A pure
+/// king-and-one-pawn ending is answered exactly (see `kpk_exact_score`)
+/// instead of through the generic heuristics below, since that specific
+/// case is a fully solved endgame, not a judgment call.
 pub fn evaluate(board: &Board) -> i32 {
+    if game_phase(board) == 0 {
+        let total_pawns =
+            board.pieces_of(Color::White, PieceType::Pawn).count() + board.pieces_of(Color::Black, PieceType::Pawn).count();
+        if total_pawns == 1 {
+            return kpk_exact_score(board);
+        }
+    }
     material_score(board)
         + piece_square_score(board)
         + mobility_score(board)
@@ -164,6 +175,54 @@ pub fn evaluate(board: &Board) -> i32 {
         + mop_up_score(board)
         + rook_file_score(board)
         + knight_outpost_score(board)
+        + pawn_endgame_score(board)
+}
+
+/// Decisive bonus for a King+Pawn vs King ending that `kpk::probe` has
+/// proven won, comfortably below `search::MATE_SCORE`'s
+/// mate-distance-pruning threshold (29000) so it's never mistaken for a
+/// forced-mate score, but far above any ordinary positional or material
+/// swing so the search always prefers forcing a trade down into a position
+/// this certain over any merely-promising alternative.
+const KPK_DECISIVE_BONUS: i32 = 2000;
+
+/// Exact evaluation of a position with exactly one pawn and otherwise bare
+/// kings, via `kpk::probe`. A proven draw scores a flat `0` — deliberately:
+/// this is the direct answer to the classic "an extra pawn in the ending is
+/// just won" rule of thumb, which is false often enough (wrong rook pawn,
+/// king too far away...) that pretending otherwise would be worse than
+/// useless here. A proven win gets `KPK_DECISIVE_BONUS` plus a small,
+/// bounded shaping term (pawn advancement and king proximity) so the search
+/// still prefers the more efficient winning technique among several
+/// choices, without ever reading as anything less than certain.
+fn kpk_exact_score(board: &Board) -> i32 {
+    let (pawn_color, pawn_sq) = if let Some(sq) = board.pieces_of(Color::White, PieceType::Pawn).lsb() {
+        (Color::White, sq)
+    } else if let Some(sq) = board.pieces_of(Color::Black, PieceType::Pawn).lsb() {
+        (Color::Black, sq)
+    } else {
+        return 0; // only reachable mid-test with a pawnless FEN
+    };
+    let strong_king = board.pieces_of(pawn_color, PieceType::King).lsb();
+    let weak_king = board.pieces_of(pawn_color.opposite(), PieceType::King).lsb();
+    let (strong_king, weak_king) = match (strong_king, weak_king) {
+        (Some(s), Some(w)) => (s, w),
+        _ => return 0, // only reachable mid-test with a kingless FEN
+    };
+
+    let outcome = kpk::probe(pawn_color, strong_king, weak_king, pawn_sq, board.side_to_move);
+    let sign = if pawn_color == Color::White { 1 } else { -1 };
+    match outcome {
+        kpk::Outcome::Draw => 0,
+        kpk::Outcome::Win => {
+            let advance = match pawn_color {
+                Color::White => pawn_sq.rank() as i32,
+                Color::Black => 7 - pawn_sq.rank() as i32,
+            };
+            let shaping = advance * 8 + (7 - chebyshev_distance(strong_king, pawn_sq)) * 4;
+            sign * (KPK_DECISIVE_BONUS + shaping)
+        }
+    }
 }
 
 /// Only kicks in once the position is both clearly winning for one side
@@ -535,6 +594,275 @@ pub fn knight_outpost_score(board: &Board) -> i32 {
     knight_outpost_score_for(board, Color::White) - knight_outpost_score_for(board, Color::Black)
 }
 
+// ---------------------------------------------------------------------
+// Pure pawn ending heuristics (two or more pawns total, otherwise bare
+// kings). The single-pawn case is answered exactly by `kpk_exact_score`
+// instead; everything here is a judgment call layered on top of the
+// generic terms above (passed-pawn advance, king PST, ...), for the
+// concepts that only really matter once no piece but the kings can
+// intervene: races, key squares/opposition, and latent (candidate) passers
+// from a pawn majority.
+// ---------------------------------------------------------------------
+
+fn queening_square(sq: Square, color: Color) -> Square {
+    match color {
+        Color::White => Square::new(sq.file(), 7),
+        Color::Black => Square::new(sq.file(), 0),
+    }
+}
+
+/// How many of *this pawn's own* moves it needs to reach the back rank,
+/// ignoring interference from either king (that's handled separately by
+/// `is_square_rule_catch`): the plain rank distance, minus one tempo if
+/// it's still on its starting rank and can use the double step.
+fn plies_to_queen(sq: Square, color: Color) -> i32 {
+    let (advance, start_rank) = match color {
+        Color::White => (7 - sq.rank() as i32, 1),
+        Color::Black => (sq.rank() as i32, 6),
+    };
+    if sq.rank() == start_rank {
+        advance - 1
+    } else {
+        advance
+    }
+}
+
+/// The passed pawn of `color` closest to queening, if any.
+fn best_passer(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> Option<Square> {
+    pawns
+        .filter(|&sq| is_passed_pawn(sq, color, enemy_pawns))
+        .min_by_key(|&sq| plies_to_queen(sq, color))
+}
+
+/// The classic "rule of the square", generalized with tempo: can
+/// `defender_king` reach the pawn's queening square in time to stop it,
+/// crediting it an extra step of head start if it's the defender's move?
+fn is_square_rule_catch(pawn: Square, pawn_color: Color, defender_king: Square, defender_to_move: bool) -> bool {
+    let target = queening_square(pawn, pawn_color);
+    let mut king_distance = chebyshev_distance(defender_king, target);
+    if defender_to_move {
+        king_distance -= 1;
+    }
+    king_distance <= plies_to_queen(pawn, pawn_color)
+}
+
+/// Bonus for having the pawn race clearly won: one side's most dangerous
+/// passer is outrunning the defending king (per the square rule) while the
+/// other side has no such runner, or, if both do, whichever queens first
+/// once whose move it is gets credited. A genuine tie is left for the
+/// search to resolve on its own (checks, a defended queening square, etc.
+/// can decide it in ways this heuristic can't see).
+const RACE_WIN_BONUS: i32 = 120;
+const RACE_TEMPO_WEIGHT: i32 = 15;
+const RACE_TEMPO_CAP: i32 = 5;
+
+fn pawn_race_score(board: &Board) -> i32 {
+    let white_pawns = board.pieces_of(Color::White, PieceType::Pawn);
+    let black_pawns = board.pieces_of(Color::Black, PieceType::Pawn);
+    let (Some(white_king), Some(black_king)) = (
+        board.pieces_of(Color::White, PieceType::King).lsb(),
+        board.pieces_of(Color::Black, PieceType::King).lsb(),
+    ) else {
+        return 0; // only reachable mid-test with a kingless FEN
+    };
+
+    let white_best = best_passer(white_pawns, black_pawns, Color::White);
+    let black_best = best_passer(black_pawns, white_pawns, Color::Black);
+    let white_to_move = board.side_to_move == Color::White;
+
+    let white_runs_free = white_best.is_some_and(|sq| !is_square_rule_catch(sq, Color::White, black_king, !white_to_move));
+    let black_runs_free = black_best.is_some_and(|sq| !is_square_rule_catch(sq, Color::Black, white_king, white_to_move));
+
+    match (white_runs_free, black_runs_free) {
+        (true, false) => RACE_WIN_BONUS,
+        (false, true) => -RACE_WIN_BONUS,
+        (false, false) => 0,
+        (true, true) => {
+            let margin = plies_to_queen(black_best.unwrap(), Color::Black) - plies_to_queen(white_best.unwrap(), Color::White);
+            let adjusted = if white_to_move { margin } else { margin - 1 };
+            match adjusted.cmp(&0) {
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => RACE_WIN_BONUS + adjusted.min(RACE_TEMPO_CAP) * RACE_TEMPO_WEIGHT,
+                std::cmp::Ordering::Less => -(RACE_WIN_BONUS + (-adjusted).min(RACE_TEMPO_CAP) * RACE_TEMPO_WEIGHT),
+            }
+        }
+    }
+}
+
+/// Extra credit, beyond the flat advance-based bonus `pawn_structure_score`
+/// already gives every passed pawn, for two properties that matter far
+/// more once nothing but a king can ever stop the pawn: being protected by
+/// another pawn (the defending king can't approach without walking into
+/// that defender), and being an "outside" passer, far from the rest of the
+/// pawns (it's an equally strong runner, but it also drags the defending
+/// king away from the theater where the other pawns live).
+const PROTECTED_PASSER_BONUS: i32 = 20;
+const OUTSIDE_PASSER_BONUS_PER_FILE: i32 = 8;
+const OUTSIDE_PASSER_MAX_FILES: i32 = 5;
+
+fn outside_passer_bonus(passer: Square, other_pawns: Bitboard) -> i32 {
+    if other_pawns.is_empty() {
+        return 0;
+    }
+    let count = other_pawns.count() as i32;
+    let file_sum: i32 = other_pawns.map(|sq| sq.file() as i32).sum();
+    let avg_file = file_sum / count;
+    let distance = (passer.file() as i32 - avg_file).abs();
+    (distance - 2).clamp(0, OUTSIDE_PASSER_MAX_FILES) * OUTSIDE_PASSER_BONUS_PER_FILE
+}
+
+fn passer_quality_score_for(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> i32 {
+    let mut score = 0;
+    for sq in pawns {
+        if !is_passed_pawn(sq, color, enemy_pawns) {
+            continue;
+        }
+        if is_defended_by_pawn(sq, color, pawns) {
+            score += PROTECTED_PASSER_BONUS;
+        }
+        let mut other_own = pawns;
+        other_own.clear(sq);
+        score += outside_passer_bonus(sq, other_own | enemy_pawns);
+    }
+    score
+}
+
+fn passer_quality_score(board: &Board) -> i32 {
+    let white_pawns = board.pieces_of(Color::White, PieceType::Pawn);
+    let black_pawns = board.pieces_of(Color::Black, PieceType::Pawn);
+    passer_quality_score_for(white_pawns, black_pawns, Color::White) - passer_quality_score_for(black_pawns, white_pawns, Color::Black)
+}
+
+/// Rough "key squares" for a pawn that hasn't queened yet: the three
+/// squares two ranks ahead of it (clamped to the board), a standard
+/// approximation of classical key-square theory that is deliberately not
+/// exact about the pawn's most advanced ranks — this is a heuristic for
+/// the multi-pawn case, not the exact single-pawn oracle in `kpk.rs`.
+fn key_squares(pawn: Square, color: Color) -> [Option<Square>; 3] {
+    let target_rank = match color {
+        Color::White => (pawn.rank() as i32 + 2).min(7),
+        Color::Black => (pawn.rank() as i32 - 2).max(0),
+    };
+    let file = pawn.file() as i32;
+    let mut squares = [None; 3];
+    for (i, df) in [-1, 0, 1].into_iter().enumerate() {
+        let f = file + df;
+        if (0..8).contains(&f) {
+            squares[i] = Some(Square::new(f as u8, target_rank as u8));
+        }
+    }
+    squares
+}
+
+/// Bonus for the attacking king occupying one of the pawn's key squares,
+/// penalty if the defending king got there first (the classical drawing
+/// mechanism), halved for a rook pawn since the defending king only needs
+/// the corner, not genuine control of specific squares, to hold the draw.
+const KEY_SQUARE_BONUS: i32 = 25;
+
+fn key_square_control_score(pawn: Square, color: Color, attacker_king: Square, defender_king: Square) -> i32 {
+    let mut score = 0;
+    for sq in key_squares(pawn, color).into_iter().flatten() {
+        if sq == attacker_king {
+            score += KEY_SQUARE_BONUS;
+        }
+        if sq == defender_king {
+            score -= KEY_SQUARE_BONUS;
+        }
+    }
+    if pawn.file() == 0 || pawn.file() == 7 {
+        score /= 2;
+    }
+    score
+}
+
+/// Kings squarely facing off on the same file or rank, close enough for it
+/// to matter (direct or one-move-removed "distant" opposition): the side
+/// that does *not* have to move right now holds the opposition. This is
+/// the one place in Vigia's eval where having the move is treated as a
+/// potential liability rather than a plus — the zugzwang risk that barely
+/// exists anywhere else in chess but is central to king-and-pawn endings.
+const OPPOSITION_BONUS: i32 = 15;
+
+fn opposition_score(white_king: Square, black_king: Square, side_to_move: Color) -> i32 {
+    let same_file = white_king.file() == black_king.file();
+    let same_rank = white_king.rank() == black_king.rank();
+    if !same_file && !same_rank {
+        return 0;
+    }
+    let distance = chebyshev_distance(white_king, black_king);
+    if distance != 2 && distance != 4 {
+        return 0;
+    }
+    match side_to_move.opposite() {
+        Color::White => OPPOSITION_BONUS,
+        Color::Black => -OPPOSITION_BONUS,
+    }
+}
+
+fn key_square_and_opposition_score(board: &Board) -> i32 {
+    let white_pawns = board.pieces_of(Color::White, PieceType::Pawn);
+    let black_pawns = board.pieces_of(Color::Black, PieceType::Pawn);
+    let (Some(white_king), Some(black_king)) = (
+        board.pieces_of(Color::White, PieceType::King).lsb(),
+        board.pieces_of(Color::Black, PieceType::King).lsb(),
+    ) else {
+        return 0; // only reachable mid-test with a kingless FEN
+    };
+
+    let mut score = opposition_score(white_king, black_king, board.side_to_move);
+    if let Some(sq) = best_passer(white_pawns, black_pawns, Color::White) {
+        score += key_square_control_score(sq, Color::White, white_king, black_king);
+    }
+    if let Some(sq) = best_passer(black_pawns, white_pawns, Color::Black) {
+        score -= key_square_control_score(sq, Color::Black, black_king, white_king);
+    }
+    score
+}
+
+/// A pawn majority on a wing with no passed pawn there yet is a *candidate*
+/// passer: latent potential to create one by force, which matters far more
+/// here than with pieces on the board, since nothing but the king can ever
+/// stop the pawn that eventually breaks through.
+const CANDIDATE_MAJORITY_BONUS: i32 = 15;
+const WINGS: [std::ops::Range<u8>; 2] = [0..4, 4..8];
+
+fn wing_majority_score_for(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> i32 {
+    let mut score = 0;
+    for wing in WINGS {
+        let own_count = pawns.filter(|sq| wing.contains(&sq.file())).count();
+        let enemy_count = enemy_pawns.filter(|sq| wing.contains(&sq.file())).count();
+        if own_count <= enemy_count {
+            continue;
+        }
+        let already_passed = pawns
+            .filter(|sq| wing.contains(&sq.file()))
+            .any(|sq| is_passed_pawn(sq, color, enemy_pawns));
+        if !already_passed {
+            score += CANDIDATE_MAJORITY_BONUS;
+        }
+    }
+    score
+}
+
+fn pawn_majority_score(board: &Board) -> i32 {
+    let white_pawns = board.pieces_of(Color::White, PieceType::Pawn);
+    let black_pawns = board.pieces_of(Color::Black, PieceType::Pawn);
+    wing_majority_score_for(white_pawns, black_pawns, Color::White) - wing_majority_score_for(black_pawns, white_pawns, Color::Black)
+}
+
+fn pawn_endgame_score(board: &Board) -> i32 {
+    if game_phase(board) != 0 {
+        return 0;
+    }
+    let total_pawns =
+        board.pieces_of(Color::White, PieceType::Pawn).count() + board.pieces_of(Color::Black, PieceType::Pawn).count();
+    if total_pawns < 2 {
+        return 0; // 0 and 1 pawn are handled elsewhere (trivial draw / exact KPK oracle)
+    }
+    pawn_race_score(board) + passer_quality_score(board) + key_square_and_opposition_score(board) + pawn_majority_score(board)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +1059,80 @@ mod tests {
         let challenged = Board::from_fen("4k3/8/5p2/4N3/3P4/8/8/4K3 w - - 0 1").unwrap();
         assert!(knight_outpost_score(&outpost) > knight_outpost_score(&challenged));
         assert_eq!(knight_outpost_score(&challenged), 0);
+    }
+
+    #[test]
+    fn evaluate_returns_a_flat_draw_for_a_proven_kpk_draw() {
+        // White Ka1, Pe4 (undefended); Black Ke5 to move captures it: a
+        // textbook draw by insufficient material, and `evaluate` should say
+        // so plainly (see `kpk_exact_score`), not hedge with a small score.
+        let board = Board::from_fen("8/8/8/4k3/4P3/8/8/K7 b - - 0 1").unwrap();
+        assert_eq!(evaluate(&board), 0);
+    }
+
+    #[test]
+    fn evaluate_returns_a_decisive_bonus_for_a_proven_kpk_win() {
+        // White Ke2, Pe7, Black Ka1 to move: nothing can stop the pawn, and
+        // `evaluate` should say so with a score nowhere near an ordinary
+        // positional or material swing.
+        let board = Board::from_fen("8/4P3/8/8/8/8/4K3/k7 w - - 0 1").unwrap();
+        assert!(evaluate(&board) >= KPK_DECISIVE_BONUS);
+    }
+
+    #[test]
+    fn pawn_race_score_rewards_an_unstoppable_passer_with_no_reply() {
+        let board = Board::from_fen("7k/8/8/8/P7/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(pawn_race_score(&board), RACE_WIN_BONUS);
+    }
+
+    #[test]
+    fn pawn_race_score_is_silent_when_neither_pawn_is_a_free_runner() {
+        let board = Board::from_fen("k7/8/8/4p3/4P3/8/8/K7 w - - 0 1").unwrap();
+        assert_eq!(pawn_race_score(&board), 0);
+    }
+
+    #[test]
+    fn passer_quality_score_rewards_a_protected_passed_pawn() {
+        let protected = Board::from_fen("k7/8/8/4P3/3P4/8/8/4K3 w - - 0 1").unwrap();
+        let unprotected = Board::from_fen("k7/8/8/4P3/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(passer_quality_score(&protected), PROTECTED_PASSER_BONUS);
+        assert_eq!(passer_quality_score(&unprotected), 0);
+    }
+
+    #[test]
+    fn outside_passer_bonus_grows_with_distance_from_the_rest_of_the_pawns() {
+        let cluster = Bitboard::from_square(Square::new(4, 3)); // e4
+        let far = outside_passer_bonus(Square::new(0, 4), cluster); // a5, 4 files away
+        let near = outside_passer_bonus(Square::new(3, 4), cluster); // d4, 1 file away
+        assert!(far > near);
+        assert_eq!(near, 0);
+    }
+
+    #[test]
+    fn key_square_control_score_favors_whichever_king_occupies_it() {
+        let pawn = Square::new(4, 3); // e4; key squares are d6/e6/f6
+        let attacker_on_key_square = key_square_control_score(pawn, Color::White, Square::new(3, 5), Square::new(0, 0));
+        let defender_on_key_square = key_square_control_score(pawn, Color::White, Square::new(0, 0), Square::new(3, 5));
+        assert!(attacker_on_key_square > 0);
+        assert_eq!(attacker_on_key_square, -defender_on_key_square);
+    }
+
+    #[test]
+    fn opposition_score_favors_the_side_not_to_move() {
+        let white_king = Square::new(4, 3); // e4
+        let black_king = Square::new(4, 5); // e6: direct opposition, two files apart
+        assert_eq!(opposition_score(white_king, black_king, Color::Black), OPPOSITION_BONUS);
+        assert_eq!(opposition_score(white_king, black_king, Color::White), -OPPOSITION_BONUS);
+    }
+
+    #[test]
+    fn pawn_majority_score_rewards_a_clean_wing_majority() {
+        // White has 2 vs 1 on the queenside with neither pawn passed yet
+        // (both blocked by the a7 pawn on/adjacent to their files): a
+        // candidate passer, worth a bonus purely from the pure-pawn-ending
+        // heuristics, on top of anything `pawn_structure_score` already
+        // gives the individual pawns.
+        let board = Board::from_fen("4k3/p7/8/8/8/8/PP6/4K3 w - - 0 1").unwrap();
+        assert_eq!(pawn_majority_score(&board), CANDIDATE_MAJORITY_BONUS);
     }
 }

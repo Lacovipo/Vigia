@@ -9,7 +9,7 @@ use crate::board::Board;
 use crate::movegen;
 use crate::search;
 
-const ENGINE_NAME: &str = "Vigia 0.18.0";
+const ENGINE_NAME: &str = "Vigia 0.19.0";
 const ENGINE_AUTHOR: &str = "Vigia Team";
 
 pub struct Engine {
