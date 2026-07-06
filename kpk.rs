@@ -81,7 +81,7 @@ fn pawn_attacks(pawn: Square) -> [Option<Square>; 2] {
     let rank = pawn.rank() as i32 + 1;
     let mut out = [None, None];
     if rank < 8 {
-        if file - 1 >= 0 {
+        if file > 0 {
             out[0] = Some(Square::new((file - 1) as u8, rank as u8));
         }
         if file + 1 < 8 {

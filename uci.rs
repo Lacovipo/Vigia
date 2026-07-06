@@ -9,8 +9,20 @@ use crate::board::Board;
 use crate::movegen;
 use crate::search;
 
-const ENGINE_NAME: &str = "Vigia 0.19.0";
+const ENGINE_NAME: &str = "Vigia 0.20.0";
 const ENGINE_AUTHOR: &str = "Vigia Team";
+const MIN_HASH_MB: usize = 1;
+/// Kept well below the multi-GB ceilings engines built for supercomputer
+/// analysis use: this is a single-threaded engine with no need for a huge
+/// table to see the benefit, and a `setoption` requesting a multi-GB table
+/// is a real crash risk, not just an academic one — a request for 4096 MB
+/// (this constant's previous value) reliably failed to allocate during
+/// testing despite the machine having double-digit GB of free RAM, most
+/// likely from contiguous-address-space fragmentation rather than a true
+/// lack of memory. 1 GB is comfortably clear of that failure mode while
+/// still being far more than this engine's search meaningfully benefits
+/// from.
+const MAX_HASH_MB: usize = 1024;
 
 pub struct Engine {
     debug: bool,
@@ -91,6 +103,17 @@ fn handle_command(line: &str, engine: &mut Engine, out: &mut impl Write) -> bool
 fn cmd_uci(out: &mut impl Write) {
     let _ = writeln!(out, "id name {ENGINE_NAME}");
     let _ = writeln!(out, "id author {ENGINE_AUTHOR}");
+    let _ = writeln!(
+        out,
+        "option name Hash type spin default {} min {MIN_HASH_MB} max {MAX_HASH_MB}",
+        search::DEFAULT_TT_SIZE_MB
+    );
+    let _ = writeln!(out, "option name Clear Hash type button");
+    // Only one search thread actually runs today (see `spawn_search`); the
+    // option is still declared, fixed at 1, so GUIs that always send
+    // `Threads` don't have to special-case an engine that lacks it, and so
+    // this doesn't need to change again once real parallelism lands.
+    let _ = writeln!(out, "option name Threads type spin default 1 min 1 max 1");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
@@ -108,8 +131,36 @@ fn cmd_debug(engine: &mut Engine, mut tokens: SplitWhitespace) {
     }
 }
 
-fn cmd_setoption(_engine: &mut Engine, _tokens: SplitWhitespace) {
-    // No options exposed yet.
+/// `setoption name <id> [value <x>]`: both `<id>` and `<x>` may contain
+/// spaces (e.g. `Clear Hash`), so this can't just match on the second
+/// token — it has to find the literal `value` keyword (if any) and join
+/// everything on either side of it back into words.
+fn cmd_setoption(engine: &mut Engine, tokens: SplitWhitespace) {
+    let tokens: Vec<&str> = tokens.collect();
+    if tokens.first() != Some(&"name") {
+        return;
+    }
+    let value_idx = tokens.iter().position(|&t| t == "value");
+    let name = tokens[1..value_idx.unwrap_or(tokens.len())].join(" ");
+    let value = value_idx.map(|i| tokens[i + 1..].join(" "));
+
+    match name.as_str() {
+        "Hash" => {
+            if let Some(mb) = value.and_then(|v| v.parse::<usize>().ok()) {
+                join_search_thread(engine);
+                engine.tt = Arc::new(search::Tt::new(mb.clamp(MIN_HASH_MB, MAX_HASH_MB)));
+            }
+        }
+        "Clear Hash" => {
+            join_search_thread(engine);
+            engine.tt.clear();
+        }
+        // Threads is declared (fixed at 1, see `cmd_uci`) purely so GUIs
+        // that always send it don't get an "unknown option" surprise;
+        // there is nothing to actually configure yet.
+        "Threads" => {}
+        _ => {}
+    }
 }
 
 fn cmd_ucinewgame(engine: &mut Engine) {
@@ -194,6 +245,10 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
                 limits.black_inc_ms = tokens.get(i + 1).and_then(|s| s.parse().ok());
                 i += 2;
             }
+            "movestogo" => {
+                limits.moves_to_go = tokens.get(i + 1).and_then(|s| s.parse().ok());
+                i += 2;
+            }
             "nodes" => {
                 limits.max_nodes = tokens.get(i + 1).and_then(|s| s.parse().ok());
                 i += 2;
@@ -214,7 +269,7 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
                 }
                 limits.search_moves = Some(restrict);
             }
-            // movestogo, mate, ponder: not supported yet, skip safely.
+            // mate, ponder: not supported yet, skip safely.
             _ => i += 1,
         }
     }
@@ -322,6 +377,61 @@ mod tests {
         let (out, keep_going) = run_command("uci");
         assert!(out.contains("id name"));
         assert!(out.contains("uciok"));
+        assert!(keep_going);
+    }
+
+    #[test]
+    fn uci_advertises_hash_clear_hash_and_threads_options() {
+        let (out, _) = run_command("uci");
+        assert!(out.contains("option name Hash type spin default 64 min 1 max 1024"));
+        assert!(out.contains("option name Clear Hash type button"));
+        assert!(out.contains("option name Threads type spin default 1 min 1 max 1"));
+    }
+
+    #[test]
+    fn setoption_hash_resizes_the_transposition_table() {
+        let mut engine = Engine::new();
+        let default_capacity = engine.tt.capacity();
+        let mut out = Vec::new();
+        handle_command("setoption name Hash value 1", &mut engine, &mut out);
+        // 1 MB is smaller than the 64 MB default, so the slot count must
+        // shrink; the exact number depends on entry layout, so this checks
+        // the resize actually happened rather than pinning a magic number.
+        assert!(engine.tt.capacity() < default_capacity);
+    }
+
+    #[test]
+    fn setoption_hash_clamps_an_out_of_range_value() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        // Requesting far more than MAX_HASH_MB must not panic or allocate
+        // an unbounded table; it should clamp instead. Compared against the
+        // pure `search::slot_count_for` math rather than a second real
+        // `Tt::new(MAX_HASH_MB)`, so this test needs only the one real
+        // allocation `cmd_setoption` itself makes, not two.
+        handle_command("setoption name Hash value 999999999", &mut engine, &mut out);
+        assert_eq!(engine.tt.capacity(), search::slot_count_for(MAX_HASH_MB));
+    }
+
+    #[test]
+    fn setoption_clear_hash_does_not_crash() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        let keep_going = handle_command("setoption name Clear Hash", &mut engine, &mut out);
+        assert!(keep_going);
+    }
+
+    #[test]
+    fn setoption_threads_is_accepted_without_crashing() {
+        let (out, keep_going) = run_command("setoption name Threads value 4");
+        assert_eq!(out, "");
+        assert!(keep_going);
+    }
+
+    #[test]
+    fn setoption_unknown_name_is_ignored_without_crashing() {
+        let (out, keep_going) = run_command("setoption name MultiPV value 4");
+        assert_eq!(out, "");
         assert!(keep_going);
     }
 
@@ -437,6 +547,14 @@ mod tests {
         let board = Board::start_pos();
         let limits = parse_go_limits("nodes 12345".split_whitespace(), &board);
         assert_eq!(limits.max_nodes, Some(12345));
+    }
+
+    #[test]
+    fn go_movestogo_is_parsed_into_moves_to_go() {
+        let board = Board::start_pos();
+        let limits = parse_go_limits("wtime 60000 movestogo 20".split_whitespace(), &board);
+        assert_eq!(limits.white_time_ms, Some(60_000));
+        assert_eq!(limits.moves_to_go, Some(20));
     }
 
     #[derive(Clone, Default)]

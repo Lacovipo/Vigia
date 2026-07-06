@@ -159,7 +159,12 @@ fn tapered_king_score(board: &Board, color: Color, phase: i32) -> i32 {
 /// instead of through the generic heuristics below, since that specific
 /// case is a fully solved endgame, not a judgment call.
 pub fn evaluate(board: &Board) -> i32 {
-    if game_phase(board) == 0 {
+    // Computed once and threaded through, rather than letting each term
+    // below recompute it independently (it used to be recomputed 5 times
+    // per call: here, plus once each inside mop_up/king_safety/piece_square
+    // /pawn_endgame's own scoring functions).
+    let phase = game_phase(board);
+    if phase == 0 {
         let total_pawns =
             board.pieces_of(Color::White, PieceType::Pawn).count() + board.pieces_of(Color::Black, PieceType::Pawn).count();
         if total_pawns == 1 {
@@ -167,15 +172,15 @@ pub fn evaluate(board: &Board) -> i32 {
         }
     }
     material_score(board)
-        + piece_square_score(board)
+        + piece_square_score_with_phase(board, phase)
         + mobility_score(board)
         + pawn_structure_score(board)
         + bishop_pair_score(board)
-        + king_safety_score(board)
-        + mop_up_score(board)
+        + king_safety_score_with_phase(board, phase)
+        + mop_up_score_with_phase(board, phase)
         + rook_file_score(board)
         + knight_outpost_score(board)
-        + pawn_endgame_score(board)
+        + pawn_endgame_score(board, phase)
 }
 
 /// Decisive bonus for a King+Pawn vs King ending that `kpk::probe` has
@@ -250,7 +255,11 @@ fn chebyshev_distance(a: Square, b: Square) -> i32 {
 }
 
 pub fn mop_up_score(board: &Board) -> i32 {
-    if game_phase(board) > MOPUP_MAX_PHASE {
+    mop_up_score_with_phase(board, game_phase(board))
+}
+
+fn mop_up_score_with_phase(board: &Board, phase: i32) -> i32 {
+    if phase > MOPUP_MAX_PHASE {
         return 0;
     }
     let material = material_score(board);
@@ -315,7 +324,10 @@ fn king_safety_penalty(board: &Board, color: Color, phase: i32) -> i32 {
 }
 
 pub fn king_safety_score(board: &Board) -> i32 {
-    let phase = game_phase(board);
+    king_safety_score_with_phase(board, game_phase(board))
+}
+
+fn king_safety_score_with_phase(board: &Board, phase: i32) -> i32 {
     king_safety_penalty(board, Color::Black, phase) - king_safety_penalty(board, Color::White, phase)
 }
 
@@ -404,6 +416,10 @@ pub fn pawn_structure_score(board: &Board) -> i32 {
 /// is scored separately from the other piece types since its table is
 /// tapered by game phase instead of being a single fixed table.
 pub fn piece_square_score(board: &Board) -> i32 {
+    piece_square_score_with_phase(board, game_phase(board))
+}
+
+fn piece_square_score_with_phase(board: &Board, phase: i32) -> i32 {
     let mut score = 0;
     for kind in PieceType::ALL {
         if kind == PieceType::King {
@@ -416,7 +432,6 @@ pub fn piece_square_score(board: &Board) -> i32 {
             score -= pst_value(kind, Color::Black, sq);
         }
     }
-    let phase = game_phase(board);
     score += tapered_king_score(board, Color::White, phase) - tapered_king_score(board, Color::Black, phase);
     score
 }
@@ -851,8 +866,8 @@ fn pawn_majority_score(board: &Board) -> i32 {
     wing_majority_score_for(white_pawns, black_pawns, Color::White) - wing_majority_score_for(black_pawns, white_pawns, Color::Black)
 }
 
-fn pawn_endgame_score(board: &Board) -> i32 {
-    if game_phase(board) != 0 {
+fn pawn_endgame_score(board: &Board, phase: i32) -> i32 {
+    if phase != 0 {
         return 0;
     }
     let total_pawns =

@@ -12,7 +12,11 @@ pub const MATE_SCORE: i32 = 30_000;
 const MATE_THRESHOLD: i32 = MATE_SCORE - 1_000;
 const INF: i32 = 1_000_000;
 const MAX_PLY: u32 = 128;
-const DEFAULT_TT_SIZE_MB: usize = 64;
+pub(crate) const DEFAULT_TT_SIZE_MB: usize = 64;
+/// Assumed number of moves remaining, used to divide up the clock when
+/// `go` gives a time budget without `movestogo` (sudden death, where there
+/// is no real number to use instead).
+const DEFAULT_MOVES_DIVISOR: u64 = 20;
 /// Depth reduction applied to the verification search after a null move.
 const NULL_MOVE_REDUCTION: u32 = 2;
 /// Null-move pruning only pays off once there's enough depth left to still
@@ -92,6 +96,11 @@ pub struct SearchLimits {
     pub black_time_ms: Option<u64>,
     pub white_inc_ms: Option<u64>,
     pub black_inc_ms: Option<u64>,
+    /// UCI `go movestogo`: how many moves remain before the game clock
+    /// resets (classical tournament-style time controls, e.g. "40 moves in
+    /// 90 minutes"). `None` means sudden death — no known reset point, so
+    /// `compute_time_budget` falls back to a fixed assumed move count.
+    pub moves_to_go: Option<u32>,
     pub infinite: bool,
     /// Hard node-count budget (UCI `go nodes`): checked at the same
     /// granularity as the `stop` flag/deadline, so it's an approximate
@@ -133,27 +142,74 @@ struct TtEntry {
     score: i32,
     flag: TtFlag,
     best_move: Option<Move>,
+    /// Which search "generation" (see `TranspositionTable::generation`)
+    /// stored this entry, so a new search can tell a deep-but-stale entry
+    /// left over from several moves ago apart from a deep entry from its
+    /// own, current search.
+    generation: u8,
 }
 
 /// Fixed-size hash table of positions seen during search, keyed by the
-/// incrementally-maintained Zobrist hash. Shallower entries are overwritten
-/// by deeper ones; a same-key entry is always refreshed.
+/// incrementally-maintained Zobrist hash. Within the same search, shallower
+/// entries are overwritten by deeper ones; across searches, `generation`
+/// lets a new search's entries win regardless of depth (see `store`).
 struct TranspositionTable {
     entries: Vec<Option<TtEntry>>,
     mask: u64,
+    /// Bumped once per `search()` call (i.e. once per UCI `go`), not once
+    /// per node — see `store`. Wraps around after 256 searches, which only
+    /// costs a slightly worse replacement choice for that one collision,
+    /// never a correctness problem: `probe` always re-validates the full
+    /// 64-bit key regardless of generation.
+    generation: u8,
+}
+
+/// Largest power of two `<= n`, or 1 if `n == 0`.
+fn floor_power_of_two(n: usize) -> usize {
+    if n == 0 {
+        1
+    } else {
+        1usize << (usize::BITS - 1 - n.leading_zeros())
+    }
+}
+
+/// How many `Option<TtEntry>` slots `TranspositionTable::new(size_mb)`
+/// would allocate, without actually allocating them. Exists as its own
+/// function so tests can check the size math at large requested sizes
+/// (including `MAX_HASH_MB`) without the multi-hundred-MB-or-more real
+/// allocation that would otherwise imply — `TranspositionTable::new` itself
+/// just calls this.
+pub(crate) fn slot_count_for(size_mb: usize) -> usize {
+    let entry_size = std::mem::size_of::<Option<TtEntry>>();
+    let raw_count = (size_mb * 1024 * 1024) / entry_size;
+    // The `& mask` indexing in `probe`/`store` needs an exact power of two,
+    // but rounding *up* to one (as `next_power_of_two` would) can nearly
+    // double the actual memory used right above almost every power-of-two
+    // boundary — e.g. requesting 4096 MB used to allocate 6 GB. Rounding
+    // *down* instead means the table never uses more than the requested
+    // budget, only occasionally somewhat less.
+    floor_power_of_two(raw_count).max(1)
 }
 
 impl TranspositionTable {
     fn new(size_mb: usize) -> Self {
-        let entry_size = std::mem::size_of::<Option<TtEntry>>();
-        let count = ((size_mb * 1024 * 1024) / entry_size)
-            .next_power_of_two()
-            .max(1);
-        TranspositionTable { entries: vec![None; count], mask: (count - 1) as u64 }
+        let count = slot_count_for(size_mb);
+        TranspositionTable { entries: vec![None; count], mask: (count - 1) as u64, generation: 0 }
     }
 
     fn clear(&mut self) {
         self.entries.fill(None);
+        self.generation = 0;
+    }
+
+    /// Marks the start of a new search: without this, a deep entry stored
+    /// several moves ago (the table is kept alive for the whole game, see
+    /// `Tt`) would keep winning the depth-preferred comparison in `store`
+    /// forever, permanently blocking that slot from ever reflecting the
+    /// current position even though the old entry is no longer relevant to
+    /// where the game actually is now.
+    fn new_search(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
     }
 
     fn probe(&self, key: u64) -> Option<TtEntry> {
@@ -161,13 +217,14 @@ impl TranspositionTable {
     }
 
     fn store(&mut self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>) {
+        let generation = self.generation;
         let slot = &mut self.entries[(key & self.mask) as usize];
         let should_replace = match slot {
-            Some(existing) => existing.key != key || existing.depth <= depth,
+            Some(existing) => existing.key != key || existing.generation != generation || existing.depth <= depth,
             None => true,
         };
         if should_replace {
-            *slot = Some(TtEntry { key, depth, score, flag, best_move });
+            *slot = Some(TtEntry { key, depth, score, flag, best_move, generation });
         }
     }
 }
@@ -187,7 +244,7 @@ fn extract_pv(tt: &TranspositionTable, board: &Board, max_len: u32) -> Vec<Move>
         let Some(mv) = tt.probe(current.hash).and_then(|e| e.best_move) else {
             break;
         };
-        if !movegen::generate_legal_moves(&current).contains(&mv) {
+        if !movegen::legal_moves_scratch(&mut current).contains(&mv) {
             break;
         }
         current.make_move(mv);
@@ -210,6 +267,14 @@ impl Tt {
 
     pub fn clear(&self) {
         self.0.lock().unwrap().clear();
+    }
+
+    /// Number of slots in the table (a power of two derived from the size
+    /// in MB `Tt::new` was given). Exists so callers — chiefly the UCI
+    /// `setoption name Hash` handler and its tests — can confirm a resize
+    /// actually took effect, without exposing the table's internal layout.
+    pub fn capacity(&self) -> usize {
+        self.0.lock().unwrap().entries.len()
     }
 }
 
@@ -312,7 +377,7 @@ impl Context<'_> {
         if self.aborted {
             return true;
         }
-        if self.nodes % 2048 == 0 {
+        if self.nodes.is_multiple_of(2048) {
             if self.stop.load(Ordering::Relaxed) {
                 self.aborted = true;
                 return true;
@@ -431,8 +496,14 @@ fn compute_time_budget(limits: &SearchLimits, side: Color, start: Instant) -> Op
         Color::White => (limits.white_time_ms, limits.white_inc_ms.unwrap_or(0)),
         Color::Black => (limits.black_time_ms, limits.black_inc_ms.unwrap_or(0)),
     };
+    // With `movestogo` we know exactly how many moves are left before the
+    // clock resets, which is a much better divisor than the fixed
+    // sudden-death fallback: e.g. with 5 moves left, spending a fifth of
+    // the remaining time now is correct, whereas assuming 20 moves left
+    // would starve the search on each of those 5 moves for no reason.
+    let divisor = limits.moves_to_go.map(|m| u64::from(m.max(1))).unwrap_or(DEFAULT_MOVES_DIVISOR);
     time_left.map(|t| {
-        let raw_budget = t / 20 + inc / 2;
+        let raw_budget = t / divisor + inc / 2;
         let safe_cap = t.saturating_sub(50);
         let soft_ms = raw_budget.min(safe_cap).max(1);
         let hard_ms = (soft_ms * 3).min(safe_cap).max(soft_ms);
@@ -474,6 +545,7 @@ pub fn search(
     path.push(working.hash);
 
     let mut tt_guard = tt.0.lock().unwrap();
+    tt_guard.new_search();
     let mut ctx = Context {
         nodes: 0,
         stop,
@@ -548,7 +620,7 @@ fn search_root_with_aspiration(board: &mut Board, depth: u32, prev_score: i32, c
 }
 
 fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &mut Context) -> (i32, Option<Move>) {
-    let mut moves = movegen::generate_legal_moves(board);
+    let mut moves = movegen::legal_moves_scratch(board);
     if let Some(restrict_to) = &ctx.search_moves {
         // If none of the requested moves are actually legal here, fall
         // back to the full legal list rather than reporting a spurious
@@ -809,7 +881,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // will have a TT move by then and search at full strength.
     let depth = if tt_move.is_none() && depth >= IIR_MIN_DEPTH { depth - 1 } else { depth };
 
-    let moves = movegen::generate_legal_moves(board);
+    let moves = movegen::legal_moves_scratch(board);
     if moves.is_empty() {
         return if in_check { -MATE_SCORE + ply as i32 } else { 0 };
     }
@@ -965,6 +1037,15 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
     if ply >= MAX_PLY {
         return eval::evaluate_relative(board);
     }
+    // Quiescence only plays captures (material strictly drops each time) or,
+    // while in check, forced evasions — so a real repetition inside this
+    // recursion is essentially impossible and isn't tracked here, but the
+    // fifty-move counter and insufficient material can both still be
+    // crossed by a capture or a non-capture evasion a few plies into a
+    // check-evasion chain, exactly like in `negamax`.
+    if board.halfmove_clock >= 100 || is_insufficient_material(board) {
+        return 0;
+    }
 
     let in_check = movegen::is_in_check(board, board.side_to_move);
 
@@ -989,7 +1070,7 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
     let mut moves: Vec<Move> = if in_check {
         // In check: every legal reply is a candidate, not just captures —
         // a quiet evasion can be the only way out of a mating net.
-        movegen::generate_legal_moves(board)
+        movegen::legal_moves_scratch(board)
     } else {
         // Skip captures that lose material outright (negative SEE): they
         // essentially never help resolve a tactical sequence, and reading
@@ -1127,8 +1208,14 @@ fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers
     ctx.history[mv.from.0 as usize][mv.to.0 as usize] + ctx.cont_history_score(ply, piece, mv.to)
 }
 
+/// `sort_by_cached_key`, not `sort_by_key`: the latter doesn't guarantee
+/// calling its key function only once per element (empirically, roughly
+/// twice for a slice this size), and `move_order_score_full` calls SEE
+/// for every capture — worth the temporary allocation `sort_by_cached_key`
+/// uses to actually cache each move's key instead of recomputing it during
+/// comparisons, since this runs at every node of the main search.
 fn order_moves_full(board: &Board, moves: &mut [Move], tt_move: Option<Move>, killers: [Option<Move>; 2], ctx: &Context, ply: u32) {
-    moves.sort_by_key(|&m| std::cmp::Reverse(move_order_score_full(board, m, tt_move, killers, ctx, ply)));
+    moves.sort_by_cached_key(|&m| std::cmp::Reverse(move_order_score_full(board, m, tt_move, killers, ctx, ply)));
 }
 
 #[cfg(test)]
@@ -1142,6 +1229,62 @@ mod tests {
         let tt = Tt::new(1);
         let limits = SearchLimits { max_depth: Some(depth), ..Default::default() };
         search(&board, limits, &stop, &tt, &[], |_, _| {})
+    }
+
+    #[test]
+    fn slot_count_never_exceeds_the_requested_hash_budget() {
+        // Regression test: rounding the entry count *up* to a power of two
+        // (instead of down) used to be able to nearly double the actual
+        // memory used right above a power-of-two boundary — e.g. a 4096 MB
+        // request used to allocate a real 6 GB, which crashed. Checked via
+        // the pure `slot_count_for` (no real allocation) across a spread of
+        // sizes up to `MAX_HASH_MB`-scale, since the boundary depends on
+        // `size_of::<Option<TtEntry>>()`, which changes whenever `TtEntry`'s
+        // fields do.
+        let entry_size = std::mem::size_of::<Option<TtEntry>>();
+        for size_mb in [1, 4, 16, 64, 256, 1024, 4096] {
+            let used_bytes = slot_count_for(size_mb) * entry_size;
+            assert!(
+                used_bytes <= size_mb * 1024 * 1024,
+                "Hash={size_mb}MB used {used_bytes} bytes, over budget"
+            );
+        }
+    }
+
+    #[test]
+    fn new_actually_allocates_the_slot_count_that_slot_count_for_computes() {
+        // A real (but small) allocation, to confirm `TranspositionTable::new`
+        // is actually wired to `slot_count_for` and not just that the math
+        // function alone is correct.
+        let table = TranspositionTable::new(4);
+        assert_eq!(table.entries.len(), slot_count_for(4));
+    }
+
+    #[test]
+    fn store_keeps_a_deeper_entry_over_a_shallower_one_within_the_same_generation() {
+        let mut table = TranspositionTable::new(1);
+        table.store(42, 10, 100, TtFlag::Exact, None);
+        table.store(42, 1, 200, TtFlag::Exact, None); // no new_search() in between
+        let entry = table.probe(42).unwrap();
+        assert_eq!(entry.depth, 10);
+        assert_eq!(entry.score, 100);
+    }
+
+    #[test]
+    fn store_lets_a_new_generation_overwrite_a_deeper_entry_from_an_older_search() {
+        // Without aging, a deep entry stored several `go`s ago would keep
+        // winning this depth-preferred comparison forever, since the table
+        // is kept alive for the whole game (see `Tt`) — even after the
+        // game has moved well past where that entry is still relevant.
+        let mut table = TranspositionTable::new(1);
+        table.store(42, 10, 100, TtFlag::Exact, None);
+
+        table.new_search();
+        table.store(42, 1, 200, TtFlag::Exact, None);
+
+        let entry = table.probe(42).unwrap();
+        assert_eq!(entry.depth, 1);
+        assert_eq!(entry.score, 200);
     }
 
     #[test]
@@ -1213,6 +1356,29 @@ mod tests {
         let result = search(&board, limits, &stop, &tt, &[], |_, _| {});
         assert!(result.best_move.is_some());
         assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn movestogo_divides_the_clock_by_moves_left_instead_of_the_sudden_death_default() {
+        let limits = SearchLimits { white_time_ms: Some(10_000), moves_to_go: Some(5), ..Default::default() };
+        let start = Instant::now();
+        let budget = compute_time_budget(&limits, Color::White, start).unwrap();
+        // 10s / 5 moves left = 2s soft budget, vs. 10s / 20 (sudden-death
+        // default) = 500ms: movestogo must make the engine think in terms
+        // of "spend a fifth of the clock now", not "spend a twentieth".
+        let soft_ms = budget.soft.duration_since(start).as_millis();
+        assert!((1_900..=2_100).contains(&soft_ms), "soft budget was {soft_ms}ms, expected ~2000ms");
+    }
+
+    #[test]
+    fn movestogo_of_one_budgets_close_to_the_whole_remaining_clock() {
+        // The last move before the clock resets: there's no reason to save
+        // anything for "later" moves in this period, since there are none.
+        let limits = SearchLimits { white_time_ms: Some(10_000), moves_to_go: Some(1), ..Default::default() };
+        let start = Instant::now();
+        let budget = compute_time_budget(&limits, Color::White, start).unwrap();
+        let soft_ms = budget.soft.duration_since(start).as_millis();
+        assert!(soft_ms > 9_000, "soft budget was {soft_ms}ms, expected close to the full 10s");
     }
 
     #[test]
@@ -1404,6 +1570,36 @@ mod tests {
         let result = search_to_depth("6kq/5ppp/8/8/8/8/8/R5K1 w - - 0 1", 1);
         assert_eq!(result.best_move.map(|m| m.to_string()), Some("a1a8".to_string()));
         assert!(result.score >= MATE_SCORE - 10, "expected a mate score, got {}", result.score);
+    }
+
+    #[test]
+    fn quiescence_recognizes_insufficient_material_as_a_draw() {
+        // K+B vs K: without its own insufficient-material check, quiescence
+        // would fall through to a stand-pat eval favoring White by roughly
+        // a bishop's worth of material, instead of recognizing this exact
+        // position (reachable mid-capture-chain, not just at a `negamax`
+        // node) as the dead draw it actually is.
+        let mut board = Board::from_fen("4k3/8/8/8/8/8/8/3BK3 w - - 0 1").unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let mut tt_guard = tt.0.lock().unwrap();
+        let mut ctx = Context {
+            nodes: 0,
+            stop: &stop,
+            hard_deadline: None,
+            max_nodes: None,
+            search_moves: None,
+            path: vec![board.hash],
+            aborted: false,
+            tt: &mut tt_guard,
+            killers: vec![[None, None]; MAX_PLY as usize],
+            history: [[0; 64]; 64],
+            static_evals: vec![None; MAX_PLY as usize],
+            moves_played: vec![None; (MAX_PLY + 1) as usize],
+            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
+            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
+        };
+        assert_eq!(quiescence(&mut board, -INF, INF, 0, &mut ctx), 0);
     }
 
     #[test]

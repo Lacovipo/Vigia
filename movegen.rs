@@ -421,14 +421,29 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 /// Generates only fully legal moves: pseudo-legal moves that do not leave
 /// the mover's own king in check. Castling moves are already fully vetted
 /// by `generate_castling`, so this filter is redundant-but-harmless there.
+///
+/// Clones `board` into a scratch copy to make/unmake moves on while testing
+/// legality. Called once per search node, so that clone is a real cost;
+/// `legal_moves_scratch` below exists for the hot path, which already has a
+/// `&mut Board` on hand and can reuse it directly instead.
 pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
-    let color = board.side_to_move;
     let mut working = board.clone();
-    generate_pseudo_legal_moves(&working)
+    legal_moves_scratch(&mut working)
+}
+
+/// Same as `generate_legal_moves`, but does its make/unmake legality
+/// testing directly on the caller's own board instead of an internal
+/// clone. `working` is restored to its original position before returning
+/// (every generated move is made and then unmade), so this is transparent
+/// to the caller — it just avoids a clone per call in `negamax`/
+/// `quiescence`/`search_root`, which already hold a `&mut Board` anyway.
+pub(crate) fn legal_moves_scratch(working: &mut Board) -> Vec<Move> {
+    let color = working.side_to_move;
+    generate_pseudo_legal_moves(working)
         .into_iter()
         .filter(|&mv| {
             let undo = working.make_move(mv);
-            let legal = !is_in_check(&working, color);
+            let legal = !is_in_check(working, color);
             working.unmake_move(mv, undo);
             legal
         })
@@ -546,7 +561,7 @@ pub fn perft(board: &mut Board, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
-    let moves = generate_legal_moves(board);
+    let moves = legal_moves_scratch(board);
     if depth == 1 {
         return moves.len() as u64;
     }
