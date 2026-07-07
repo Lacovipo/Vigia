@@ -110,6 +110,13 @@ pub struct SearchLimits {
     /// searchmoves`), in the order the GUI listed them. `None` means every
     /// legal root move is considered, as usual.
     pub search_moves: Option<Vec<Move>>,
+    /// UCI `go ponder`: parsed here purely so all of `go`'s flags live in
+    /// one place, but unused by `search`/`search_inner` themselves — the
+    /// time budget is computed identically whether or not this is set (see
+    /// `Engine::pondering` in `uci.rs` for why that's correct), and
+    /// `bestmove` timing is an orchestration concern the search algorithm
+    /// itself doesn't need to know about.
+    pub ponder: bool,
 }
 
 #[derive(Clone, Default)]
@@ -236,7 +243,7 @@ impl TranspositionTable {
 /// stops the walk if it ever revisits a hash, so a corrupted or
 /// transposition-heavy table can only shorten the PV, never loop forever
 /// or fabricate an illegal line.
-fn extract_pv(tt: &TranspositionTable, board: &Board, max_len: u32) -> Vec<Move> {
+fn extract_pv(tt: &Tt, board: &Board, max_len: u32) -> Vec<Move> {
     let mut pv = Vec::new();
     let mut current = board.clone();
     let mut seen_hashes = std::collections::HashSet::new();
@@ -275,6 +282,34 @@ impl Tt {
     /// actually took effect, without exposing the table's internal layout.
     pub fn capacity(&self) -> usize {
         self.0.lock().unwrap().entries.len()
+    }
+
+    /// Locks just long enough to bump the generation counter — see
+    /// `TranspositionTable::new_search`. Must be called exactly once per
+    /// real `go`, not once per search thread (Fase 4): the generation marks
+    /// "a new search started", and bumping it once per helper thread would
+    /// make sibling threads' own fresh entries look mutually stale and
+    /// evict each other instead of reinforcing one another through the
+    /// shared table.
+    fn new_search(&self) {
+        self.0.lock().unwrap().new_search();
+    }
+
+    /// Locks just long enough to read one slot. Deliberately *not* held for
+    /// the whole search (unlike before Fase 4, when the caller kept a
+    /// `MutexGuard` for the entire iterative-deepening loop): with several
+    /// search threads sharing one `Tt`, a lock held that long would
+    /// serialize them completely, leaving Lazy SMP no faster than a single
+    /// thread.
+    fn probe(&self, key: u64) -> Option<TtEntry> {
+        self.0.lock().unwrap().probe(key)
+    }
+
+    /// Locks just long enough to write one slot — see `probe` above for why
+    /// per-call locking (not one lock for the whole search) matters once
+    /// more than one thread shares this table.
+    fn store(&self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>) {
+        self.0.lock().unwrap().store(key, depth, score, flag, best_move);
     }
 }
 
@@ -324,7 +359,11 @@ struct Context<'a> {
     search_moves: Option<Vec<Move>>,
     path: Vec<u64>,
     aborted: bool,
-    tt: &'a mut TranspositionTable,
+    /// Shared, not exclusively borrowed: with Lazy SMP (Fase 4), several
+    /// threads each hold their own `Context` but the same `Tt`, locking it
+    /// only for the duration of each individual `probe`/`store` call rather
+    /// than for a whole search.
+    tt: &'a Tt,
     /// Up to two killer (non-capture, beta-cutoff-causing) moves per ply.
     killers: Vec<[Option<Move>; 2]>,
     /// History heuristic score per [from][to], boosted on quiet cutoffs.
@@ -530,6 +569,47 @@ pub fn search(
     stop: &AtomicBool,
     tt: &Tt,
     game_history: &[u64],
+    on_iteration: impl FnMut(&SearchResult, Duration),
+) -> SearchResult {
+    search_inner(board, limits, stop, tt, game_history, SearchRole::MAIN, on_iteration)
+}
+
+/// Distinguishes the "main" search thread from a Lazy SMP helper thread
+/// (Fase 4) within `search_inner` — see `uci.rs`'s `spawn_search`, the only
+/// place that ever constructs one directly rather than via `SearchRole::MAIN`.
+pub(crate) struct SearchRole {
+    /// Staggers a helper thread's first iteration (classic Lazy SMP "helper
+    /// threads with small depth perturbations") so that, at any wall-clock
+    /// instant, different threads tend to be exploring different depths.
+    /// `search_inner` clamps this to `max_depth`, so a helper still runs its
+    /// loop body at least once even if `go depth` asked for less than its
+    /// stagger.
+    pub start_depth: u32,
+    /// Must be `true` for exactly one thread per real `go`: the TT
+    /// generation (see `TranspositionTable::new_search`) marks "a new
+    /// search started", not "a new thread started". Bumping it once per
+    /// helper would make sibling threads' own fresh entries look mutually
+    /// stale and evict each other instead of reinforcing one another
+    /// through the shared table.
+    pub bump_generation: bool,
+}
+
+impl SearchRole {
+    pub(crate) const MAIN: SearchRole = SearchRole { start_depth: 1, bump_generation: true };
+}
+
+/// The actual iterative-deepening loop `search` wraps. Exposed separately
+/// (`pub(crate)`, not `pub`) so the Lazy SMP orchestration in `uci.rs` can
+/// run several of these concurrently against one shared `tt` — see
+/// `SearchRole` for what distinguishes a helper thread's call from the
+/// main thread's.
+pub(crate) fn search_inner(
+    board: &Board,
+    limits: SearchLimits,
+    stop: &AtomicBool,
+    tt: &Tt,
+    game_history: &[u64],
+    role: SearchRole,
     mut on_iteration: impl FnMut(&SearchResult, Duration),
 ) -> SearchResult {
     let start = Instant::now();
@@ -539,13 +619,15 @@ pub fn search(
         .max_depth
         .unwrap_or(if limits.infinite || budget.is_some() { MAX_PLY } else { 6 })
         .clamp(1, MAX_PLY);
+    let start_depth = role.start_depth.min(max_depth);
 
     let mut path = Vec::with_capacity(game_history.len() + 1);
     path.extend_from_slice(game_history);
     path.push(working.hash);
 
-    let mut tt_guard = tt.0.lock().unwrap();
-    tt_guard.new_search();
+    if role.bump_generation {
+        tt.new_search();
+    }
     let mut ctx = Context {
         nodes: 0,
         stop,
@@ -554,7 +636,7 @@ pub fn search(
         search_moves: limits.search_moves.clone(),
         path,
         aborted: false,
-        tt: &mut tt_guard,
+        tt,
         killers: vec![[None, None]; MAX_PLY as usize],
         history: [[0; 64]; 64],
         static_evals: vec![None; MAX_PLY as usize],
@@ -565,12 +647,12 @@ pub fn search(
 
     let mut result = SearchResult::default();
 
-    for depth in 1..=max_depth {
+    for depth in start_depth..=max_depth {
         // Don't even start a deeper iteration once past the soft budget:
         // the next depth is typically several times more expensive than
         // the last, so starting late just means overshooting further
         // before the hard deadline catches it.
-        if depth > 1 {
+        if depth > start_depth {
             if let Some(b) = &budget {
                 if Instant::now() >= b.soft {
                     break;
@@ -586,7 +668,7 @@ pub fn search(
             result = SearchResult { best_move: None, score, depth, nodes: ctx.nodes, pv: Vec::new() };
             break;
         }
-        if ctx.aborted && depth > 1 {
+        if ctx.aborted && depth > start_depth {
             break; // discard the unfinished iteration, keep the previous one
         }
 
@@ -601,22 +683,37 @@ pub fn search(
     result
 }
 
-/// Searches `depth` with a narrow window centered on `prev_score` (the
-/// previous iteration's result), re-searching with the full (-INF, INF)
-/// window on the rare occasions the guess was wrong. Most iterations stay
-/// inside the narrow window, which lets alpha-beta prune far more
-/// aggressively than a wide-open window would.
+/// Searches `depth` with a window centered on `prev_score` (the previous
+/// iteration's result), widening progressively on whichever side fails
+/// instead of jumping straight to the full (-INF, INF) window: the true
+/// score is usually still close to `prev_score` even when the first guess
+/// misses, so doubling the margin on the failing side and re-searching
+/// converges in a couple of cheap retries far more often than it needs a
+/// full-width search, which throws away all of alpha-beta's pruning.
+/// `search_root` is fail-soft (returns the actual score found, not just
+/// `alpha`/`beta` clamped), so each retry re-centers on real information
+/// instead of blindly repeating the same guess.
 fn search_root_with_aspiration(board: &mut Board, depth: u32, prev_score: i32, ctx: &mut Context) -> (i32, Option<Move>) {
     if depth <= 2 {
         return search_root(board, depth, -INF, INF, ctx);
     }
-    let alpha = prev_score.saturating_sub(ASPIRATION_WINDOW).max(-INF);
-    let beta = prev_score.saturating_add(ASPIRATION_WINDOW).min(INF);
-    let (score, best_move) = search_root(board, depth, alpha, beta, ctx);
-    if !ctx.aborted && (score <= alpha || score >= beta) {
-        return search_root(board, depth, -INF, INF, ctx);
+
+    let mut delta = ASPIRATION_WINDOW;
+    let mut alpha = prev_score.saturating_sub(delta).max(-INF);
+    let mut beta = prev_score.saturating_add(delta).min(INF);
+
+    loop {
+        let (score, best_move) = search_root(board, depth, alpha, beta, ctx);
+        if ctx.aborted || (score > alpha && score < beta) {
+            return (score, best_move);
+        }
+        delta = delta.saturating_mul(2);
+        if score <= alpha {
+            alpha = score.saturating_sub(delta).max(-INF);
+        } else {
+            beta = score.saturating_add(delta).min(INF);
+        }
     }
-    (score, best_move)
 }
 
 fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &mut Context) -> (i32, Option<Move>) {
@@ -1311,6 +1408,37 @@ mod tests {
     }
 
     #[test]
+    fn aspiration_search_converges_when_the_initial_guess_is_wildly_off() {
+        // Queen vs bare king: the real score here is far above zero (easily
+        // >500cp), so seeding `prev_score` at 0 (as if the position were
+        // balanced) guarantees the first narrow window fails high and keeps
+        // failing for a couple of retries, exercising the progressive
+        // widening loop instead of a single lucky guess.
+        let mut board = Board::from_fen("7k/8/8/8/8/2K5/8/3Q4 w - - 0 1").unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let mut ctx = Context {
+            nodes: 0,
+            stop: &stop,
+            hard_deadline: None,
+            max_nodes: None,
+            search_moves: None,
+            path: vec![board.hash],
+            aborted: false,
+            tt: &tt,
+            killers: vec![[None, None]; MAX_PLY as usize],
+            history: [[0; 64]; 64],
+            static_evals: vec![None; MAX_PLY as usize],
+            moves_played: vec![None; (MAX_PLY + 1) as usize],
+            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
+            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
+        };
+        let (score, best_move) = search_root_with_aspiration(&mut board, 4, 0, &mut ctx);
+        assert!(best_move.is_some());
+        assert!(score > 500, "expected a large positive score reflecting White's material edge, got {score}");
+    }
+
+    #[test]
     fn returns_none_at_checkmated_root() {
         let result = search_to_depth("4R1k1/5ppp/8/8/8/8/8/4K3 b - - 0 1", 3);
         assert_eq!(result.best_move, None);
@@ -1582,7 +1710,6 @@ mod tests {
         let mut board = Board::from_fen("4k3/8/8/8/8/8/8/3BK3 w - - 0 1").unwrap();
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut tt_guard = tt.0.lock().unwrap();
         let mut ctx = Context {
             nodes: 0,
             stop: &stop,
@@ -1591,7 +1718,7 @@ mod tests {
             search_moves: None,
             path: vec![board.hash],
             aborted: false,
-            tt: &mut tt_guard,
+            tt: &tt,
             killers: vec![[None, None]; MAX_PLY as usize],
             history: [[0; 64]; 64],
             static_evals: vec![None; MAX_PLY as usize],
@@ -1606,7 +1733,6 @@ mod tests {
     fn decay_history_halves_bumped_entries() {
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut tt_guard = tt.0.lock().unwrap();
         let mut ctx = Context {
             nodes: 0,
             stop: &stop,
@@ -1615,7 +1741,7 @@ mod tests {
             search_moves: None,
             path: vec![0],
             aborted: false,
-            tt: &mut tt_guard,
+            tt: &tt,
             killers: vec![[None, None]; MAX_PLY as usize],
             history: [[0; 64]; 64],
             static_evals: vec![None; MAX_PLY as usize],
@@ -1673,7 +1799,6 @@ mod tests {
 
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut tt_guard = tt.0.lock().unwrap();
         // This is exactly what `search()` builds from `game_history` plus
         // the current position: `earlier_hash` reappearing here represents
         // a repetition that happened before this `go`, not one discovered
@@ -1686,7 +1811,7 @@ mod tests {
             search_moves: None,
             path: vec![earlier_hash],
             aborted: false,
-            tt: &mut tt_guard,
+            tt: &tt,
             killers: vec![[None, None]; MAX_PLY as usize],
             history: [[0; 64]; 64],
             static_evals: vec![None; MAX_PLY as usize],

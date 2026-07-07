@@ -3,13 +3,13 @@ use std::str::SplitWhitespace;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::board::Board;
 use crate::movegen;
 use crate::search;
 
-const ENGINE_NAME: &str = "Vigia 0.20.0";
+const ENGINE_NAME: &str = "Vigia 0.21.0";
 const ENGINE_AUTHOR: &str = "Vigia Team";
 const MIN_HASH_MB: usize = 1;
 /// Kept well below the multi-GB ceilings engines built for supercomputer
@@ -23,6 +23,14 @@ const MIN_HASH_MB: usize = 1;
 /// still being far more than this engine's search meaningfully benefits
 /// from.
 const MAX_HASH_MB: usize = 1024;
+const MIN_THREADS: usize = 1;
+/// A cap, not a recommendation: Lazy SMP here shares one `Tt` behind a
+/// single `Mutex` (see `search::Tt`), not a lock-free table, so contention
+/// on that lock — not core count — is what eventually limits how much
+/// more searching more threads actually buys. 16 is comfortably inside
+/// where that tradeoff still pays off on typical consumer hardware; a
+/// lock-free table would be the natural next step before raising it.
+const MAX_THREADS: usize = 16;
 
 pub struct Engine {
     debug: bool,
@@ -40,6 +48,19 @@ pub struct Engine {
     /// transpositions found while thinking about one move are still there
     /// on the next. Cleared explicitly on `ucinewgame`.
     tt: Arc<search::Tt>,
+    /// Number of Lazy SMP search threads `go` spawns (see `spawn_search`).
+    /// 1 by default, matching the engine's behavior before Fase 4.
+    threads: usize,
+    /// Set for the duration of a `go ponder` search (cleared by `ponderhit`,
+    /// or implicitly by the next `go`). The search itself runs exactly as
+    /// it would for a real move — the time budget computed from `wtime`/
+    /// `btime` is already correct for pondering, since our own clock isn't
+    /// ticking while the opponent thinks regardless of how long that takes
+    /// — this flag only gates *when `bestmove` is announced*: `spawn_search`
+    /// withholds it until this becomes `false` (via `ponderhit`) or
+    /// `stop_flag` becomes `true` (the opponent played something else),
+    /// even if the search itself already finished on its own.
+    pondering: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -52,6 +73,8 @@ impl Engine {
             stop_flag: Arc::new(AtomicBool::new(false)),
             search_thread: None,
             tt: Arc::new(search::Tt::default()),
+            threads: MIN_THREADS,
+            pondering: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -109,11 +132,11 @@ fn cmd_uci(out: &mut impl Write) {
         search::DEFAULT_TT_SIZE_MB
     );
     let _ = writeln!(out, "option name Clear Hash type button");
-    // Only one search thread actually runs today (see `spawn_search`); the
-    // option is still declared, fixed at 1, so GUIs that always send
-    // `Threads` don't have to special-case an engine that lacks it, and so
-    // this doesn't need to change again once real parallelism lands.
-    let _ = writeln!(out, "option name Threads type spin default 1 min 1 max 1");
+    let _ = writeln!(
+        out,
+        "option name Threads type spin default {MIN_THREADS} min {MIN_THREADS} max {MAX_THREADS}"
+    );
+    let _ = writeln!(out, "option name Ponder type check default false");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
@@ -155,10 +178,11 @@ fn cmd_setoption(engine: &mut Engine, tokens: SplitWhitespace) {
             join_search_thread(engine);
             engine.tt.clear();
         }
-        // Threads is declared (fixed at 1, see `cmd_uci`) purely so GUIs
-        // that always send it don't get an "unknown option" surprise;
-        // there is nothing to actually configure yet.
-        "Threads" => {}
+        "Threads" => {
+            if let Some(n) = value.and_then(|v| v.parse::<usize>().ok()) {
+                engine.threads = n.clamp(MIN_THREADS, MAX_THREADS);
+            }
+        }
         _ => {}
     }
 }
@@ -257,6 +281,10 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
                 limits.infinite = true;
                 i += 1;
             }
+            "ponder" => {
+                limits.ponder = true;
+                i += 1;
+            }
             "searchmoves" => {
                 let legal = movegen::generate_legal_moves(board);
                 i += 1;
@@ -269,7 +297,7 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
                 }
                 limits.search_moves = Some(restrict);
             }
-            // mate, ponder: not supported yet, skip safely.
+            // mate: not supported yet, skip safely.
             _ => i += 1,
         }
     }
@@ -281,35 +309,107 @@ fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
 
     let limits = parse_go_limits(tokens, &engine.board);
     engine.stop_flag.store(false, Ordering::Relaxed);
-    let stop_flag = Arc::clone(&engine.stop_flag);
+    // Reset for this `go`, not just set on a ponder one: an ordinary `go`
+    // right after a ponder search must not leave a stale `true` behind.
+    engine.pondering.store(limits.ponder, Ordering::Relaxed);
+    let signals = SearchSignals { stop: Arc::clone(&engine.stop_flag), pondering: Arc::clone(&engine.pondering) };
     let tt = Arc::clone(&engine.tt);
     let board = engine.board.clone();
     // Everything before the current position; `search` appends the
     // current position's own hash to this as the start of its path.
     let game_history = engine.history[..engine.history.len().saturating_sub(1)].to_vec();
 
-    engine.search_thread = Some(spawn_search(board, limits, stop_flag, tt, game_history, io::stdout()));
+    engine.search_thread = Some(spawn_search(board, limits, signals, tt, game_history, engine.threads, io::stdout()));
 }
 
-/// Runs the search on a background thread so the main UCI loop stays free
+/// How often `spawn_search` polls `pondering`/`stop` while withholding
+/// `bestmove` during a finished ponder search (see `spawn_search`'s doc
+/// comment). Human/GUI-timescale event, so a few milliseconds of extra
+/// latency between `ponderhit` and `bestmove` is unnoticeable; a plain
+/// sleep loop is simplest and avoids adding a condvar just for this.
+const PONDER_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+/// The two flags a running search watches, bundled together purely to keep
+/// `spawn_search`'s argument count down — every caller that needs one needs
+/// the other. `stop`: abort immediately (`cmd_stop`, or `join_search_thread`
+/// reclaiming the thread for the next command). `pondering`: see
+/// `Engine::pondering` and `spawn_search`.
+#[derive(Clone)]
+struct SearchSignals {
+    stop: Arc<AtomicBool>,
+    pondering: Arc<AtomicBool>,
+}
+
+/// Runs the search on background thread(s) so the main UCI loop stays free
 /// to read `stop`/`isready` while the engine "thinks", and writes `info`
 /// lines plus the final `bestmove` to `output` as they become available.
+///
+/// With `threads > 1` this is Lazy SMP: every thread searches the same
+/// position independently, sharing only `tt` (so a discovery any one of
+/// them makes can cut off the others' work too), while each keeps its own
+/// killers/history/continuation-history tables — sharing those as well
+/// would need its own synchronization for comparatively little benefit
+/// over the shared `tt` alone, and is not attempted here. Helper threads
+/// (every thread but the first) stagger their starting depth and stay
+/// silent (no `info` lines — interleaving several depth streams into one
+/// UCI output would confuse a GUI); the final `bestmove` comes from
+/// whichever thread reached the deepest completed iteration once every
+/// thread has stopped, with the main thread winning ties.
+///
+/// If `pondering` is set (UCI `go ponder`), the search itself runs exactly
+/// as normal — its time budget is already correct for pondering without
+/// any changes (see `Engine::pondering`) — but `bestmove` is withheld
+/// until `pondering` clears (`ponderhit`) or `stop_flag` is set (the
+/// opponent played something else), even if the search already finished
+/// on its own while still waiting on one of those.
 fn spawn_search(
     board: Board,
     limits: search::SearchLimits,
-    stop_flag: Arc<AtomicBool>,
+    signals: SearchSignals,
     tt: Arc<search::Tt>,
     game_history: Vec<u64>,
+    threads: usize,
     mut output: impl Write + Send + 'static,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let result = search::search(&board, limits, &stop_flag, &tt, &game_history, |res, elapsed| {
+        let start = Instant::now();
+        let helpers: Vec<thread::JoinHandle<search::SearchResult>> = (1..threads)
+            .map(|i| {
+                let board = board.clone();
+                let limits = limits.clone();
+                let stop_flag = Arc::clone(&signals.stop);
+                let tt = Arc::clone(&tt);
+                let game_history = game_history.clone();
+                let role = search::SearchRole { start_depth: 1 + (i as u32 % 2), bump_generation: false };
+                thread::spawn(move || search::search_inner(&board, limits, &stop_flag, &tt, &game_history, role, |_, _| {}))
+            })
+            .collect();
+
+        let main_result = search::search(&board, limits, &signals.stop, &tt, &game_history, |res, elapsed| {
             print_info(&mut output, res, elapsed);
         });
-        let mv = result
-            .best_move
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| "0000".to_string());
+
+        let mut best = main_result.clone();
+        for handle in helpers {
+            if let Ok(result) = handle.join() {
+                if result.depth > best.depth {
+                    best = result;
+                }
+            }
+        }
+        // A helper thread only ever wins by reaching a deeper completed
+        // iteration than the main thread's own last reported `info` line;
+        // print one more so the GUI's last-seen depth/score/pv matches the
+        // move actually played, instead of trailing behind it.
+        if best.depth > main_result.depth {
+            print_info(&mut output, &best, start.elapsed());
+        }
+
+        while signals.pondering.load(Ordering::Relaxed) && !signals.stop.load(Ordering::Relaxed) {
+            thread::sleep(PONDER_POLL_INTERVAL);
+        }
+
+        let mv = best.best_move.map(|m| m.to_string()).unwrap_or_else(|| "0000".to_string());
         let _ = writeln!(output, "bestmove {mv}");
         let _ = output.flush();
     })
@@ -358,7 +458,12 @@ fn cmd_stop(engine: &mut Engine) {
     engine.stop_flag.store(true, Ordering::Relaxed);
 }
 
-fn cmd_ponderhit(_engine: &mut Engine) {}
+/// The opponent played the move we were pondering on: let the (already
+/// correctly time-budgeted, see `Engine::pondering`) search announce
+/// `bestmove` whenever it's ready instead of withholding it forever.
+fn cmd_ponderhit(engine: &mut Engine) {
+    engine.pondering.store(false, Ordering::Relaxed);
+}
 
 #[cfg(test)]
 mod tests {
@@ -385,7 +490,7 @@ mod tests {
         let (out, _) = run_command("uci");
         assert!(out.contains("option name Hash type spin default 64 min 1 max 1024"));
         assert!(out.contains("option name Clear Hash type button"));
-        assert!(out.contains("option name Threads type spin default 1 min 1 max 1"));
+        assert!(out.contains("option name Threads type spin default 1 min 1 max 16"));
     }
 
     #[test]
@@ -422,10 +527,23 @@ mod tests {
     }
 
     #[test]
-    fn setoption_threads_is_accepted_without_crashing() {
-        let (out, keep_going) = run_command("setoption name Threads value 4");
-        assert_eq!(out, "");
+    fn setoption_threads_sets_the_thread_count() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        assert_eq!(engine.threads, 1);
+        let keep_going = handle_command("setoption name Threads value 4", &mut engine, &mut out);
+        assert_eq!(engine.threads, 4);
         assert!(keep_going);
+    }
+
+    #[test]
+    fn setoption_threads_clamps_an_out_of_range_value() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("setoption name Threads value 999", &mut engine, &mut out);
+        assert_eq!(engine.threads, MAX_THREADS);
+        handle_command("setoption name Threads value 0", &mut engine, &mut out);
+        assert_eq!(engine.threads, MIN_THREADS);
     }
 
     #[test]
@@ -557,6 +675,20 @@ mod tests {
         assert_eq!(limits.moves_to_go, Some(20));
     }
 
+    #[test]
+    fn go_ponder_is_parsed_into_the_ponder_flag_alongside_other_limits() {
+        let board = Board::start_pos();
+        let limits = parse_go_limits("ponder wtime 60000 btime 60000".split_whitespace(), &board);
+        assert!(limits.ponder);
+        assert_eq!(limits.white_time_ms, Some(60_000));
+    }
+
+    #[test]
+    fn uci_advertises_the_ponder_option() {
+        let (out, _) = run_command("uci");
+        assert!(out.contains("option name Ponder type check default false"));
+    }
+
     #[derive(Clone, Default)]
     struct SharedBuf(Arc<Mutex<Vec<u8>>>);
 
@@ -578,9 +710,10 @@ mod tests {
         let handle = spawn_search(
             board,
             search::SearchLimits { max_depth: Some(1), ..Default::default() },
-            Arc::new(AtomicBool::new(false)),
+            SearchSignals { stop: Arc::new(AtomicBool::new(false)), pondering: Arc::new(AtomicBool::new(false)) },
             Arc::new(search::Tt::new(1)),
             Vec::new(),
+            1,
             buf.clone(),
         );
         handle.join().unwrap();
@@ -599,9 +732,10 @@ mod tests {
         let handle = spawn_search(
             board,
             search::SearchLimits { max_depth: Some(3), ..Default::default() },
-            Arc::new(AtomicBool::new(false)),
+            SearchSignals { stop: Arc::new(AtomicBool::new(false)), pondering: Arc::new(AtomicBool::new(false)) },
             Arc::new(search::Tt::new(1)),
             Vec::new(),
+            1,
             buf.clone(),
         );
         handle.join().unwrap();
@@ -618,5 +752,118 @@ mod tests {
         handle_command("stop", &mut engine, &mut out);
         handle_command("quit", &mut engine, &mut out);
         assert!(engine.search_thread.is_none());
+    }
+
+    #[test]
+    fn go_with_several_threads_still_returns_a_legal_move() {
+        let board = Board::start_pos();
+        let legal = movegen::generate_legal_moves(&board);
+        let buf = SharedBuf::default();
+        let handle = spawn_search(
+            board,
+            search::SearchLimits { max_depth: Some(4), ..Default::default() },
+            SearchSignals { stop: Arc::new(AtomicBool::new(false)), pondering: Arc::new(AtomicBool::new(false)) },
+            Arc::new(search::Tt::new(1)),
+            Vec::new(),
+            4,
+            buf.clone(),
+        );
+        handle.join().unwrap();
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let played = out
+            .lines()
+            .find_map(|l| l.strip_prefix("bestmove "))
+            .expect("se esperaba una línea bestmove");
+        assert!(legal.iter().any(|m| m.to_string() == played));
+    }
+
+    #[test]
+    fn stop_then_quit_joins_a_multi_threaded_search_without_hanging() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("setoption name Threads value 4", &mut engine, &mut out);
+        handle_command("go infinite", &mut engine, &mut out);
+        assert!(engine.search_thread.is_some());
+        handle_command("stop", &mut engine, &mut out);
+        handle_command("quit", &mut engine, &mut out);
+        assert!(engine.search_thread.is_none());
+    }
+
+    #[test]
+    fn ponder_search_withholds_bestmove_until_ponderhit_arrives() {
+        // A depth-2 search finishes almost instantly, but while `pondering`
+        // stays true `bestmove` must be withheld regardless — that's the
+        // whole point of pondering: the search may well finish long before
+        // the opponent actually moves.
+        let board = Board::start_pos();
+        let buf = SharedBuf::default();
+        let pondering = Arc::new(AtomicBool::new(true));
+        let handle = spawn_search(
+            board,
+            search::SearchLimits { max_depth: Some(2), ..Default::default() },
+            SearchSignals { stop: Arc::new(AtomicBool::new(false)), pondering: Arc::clone(&pondering) },
+            Arc::new(search::Tt::new(1)),
+            Vec::new(),
+            1,
+            buf.clone(),
+        );
+        thread::sleep(Duration::from_millis(150));
+        assert!(!String::from_utf8(buf.0.lock().unwrap().clone()).unwrap().contains("bestmove"));
+
+        pondering.store(false, Ordering::Relaxed);
+        handle.join().unwrap();
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(out.contains("bestmove"));
+    }
+
+    #[test]
+    fn stop_also_releases_a_withheld_ponder_bestmove() {
+        // The opponent played something other than the pondered move: the
+        // GUI sends `stop`, not `ponderhit`, and the withheld bestmove
+        // (now irrelevant, but still owed to the protocol) must still come
+        // through rather than hanging forever waiting for a `ponderhit`
+        // that will never arrive.
+        let board = Board::start_pos();
+        let buf = SharedBuf::default();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let handle = spawn_search(
+            board,
+            search::SearchLimits { max_depth: Some(2), ..Default::default() },
+            SearchSignals { stop: Arc::clone(&stop_flag), pondering: Arc::new(AtomicBool::new(true)) },
+            Arc::new(search::Tt::new(1)),
+            Vec::new(),
+            1,
+            buf.clone(),
+        );
+        thread::sleep(Duration::from_millis(150));
+        assert!(!String::from_utf8(buf.0.lock().unwrap().clone()).unwrap().contains("bestmove"));
+
+        stop_flag.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(out.contains("bestmove"));
+    }
+
+    #[test]
+    fn cmd_ponderhit_clears_the_pondering_flag() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("go ponder wtime 60000 btime 60000", &mut engine, &mut out);
+        assert!(engine.pondering.load(Ordering::Relaxed));
+        handle_command("ponderhit", &mut engine, &mut out);
+        assert!(!engine.pondering.load(Ordering::Relaxed));
+        handle_command("quit", &mut engine, &mut out);
+    }
+
+    #[test]
+    fn a_plain_go_after_a_ponder_search_does_not_leave_pondering_set() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("go ponder wtime 60000 btime 60000", &mut engine, &mut out);
+        assert!(engine.pondering.load(Ordering::Relaxed));
+        handle_command("stop", &mut engine, &mut out);
+        handle_command("go depth 1", &mut engine, &mut out);
+        assert!(!engine.pondering.load(Ordering::Relaxed));
+        handle_command("quit", &mut engine, &mut out);
     }
 }
