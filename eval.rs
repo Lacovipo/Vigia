@@ -171,16 +171,43 @@ pub fn evaluate(board: &Board) -> i32 {
             return kpk_exact_score(board);
         }
     }
-    material_score(board)
+    // Shared by king_safety_score/threats_score below, computed once: both
+    // need "which squares does each color's pawns/minors/rooks/queens
+    // attack", just aggregated differently (see `AttackInfo`'s own docs).
+    let occ = board.occupied();
+    let white_attacks = attack_info_for(board, Color::White, occ);
+    let black_attacks = attack_info_for(board, Color::Black, occ);
+
+    let raw = material_score(board)
         + piece_square_score_with_phase(board, phase)
         + mobility_score(board)
-        + pawn_structure_score(board)
+        + pawn_structure_score_with_phase(board, phase)
         + bishop_pair_score(board)
-        + king_safety_score_with_phase(board, phase)
+        + bishop_pawns_score(board)
+        + king_safety_score_with(board, phase, &white_attacks, &black_attacks)
         + mop_up_score_with_phase(board, phase)
         + rook_file_score(board)
+        + rook_on_seventh_score(board)
         + knight_outpost_score(board)
         + pawn_endgame_score(board, phase)
+        + tempo_score(board)
+        + threats_score_with_attacks(board, &white_attacks, &black_attacks);
+    (raw * endgame_scale_factor(board)) / SCALE_FACTOR_NORMAL
+}
+
+/// Small, non-tapered bonus for whoever's turn it is: having the move is
+/// worth something in almost any position. Every reference engine's HCE
+/// checked for this eval pass includes some form of it (Crafty and Ethereal
+/// have it explicit; Fruit's is implicit in its endgame-specific code, but
+/// the concept still applies generally).
+const TEMPO_BONUS: i32 = 12;
+
+fn tempo_score(board: &Board) -> i32 {
+    if board.side_to_move == Color::White {
+        TEMPO_BONUS
+    } else {
+        -TEMPO_BONUS
+    }
 }
 
 /// Decisive bonus for a King+Pawn vs King ending that `kpk::probe` has
@@ -288,18 +315,110 @@ fn mop_up_score_with_phase(board: &Board, phase: i32) -> i32 {
     }
 }
 
-/// Penalty for each file among the king's own file and its two
-/// neighbors that has no pawn of the king's color on it: a fully open
-/// file (no pawns of either color) is the most dangerous since a rook or
-/// queen can walk straight down it, a semi-open one (only enemy pawns)
-/// still lets enemy rooks pressure it without their own pawn in the way.
-const KING_OPEN_FILE_PENALTY: i32 = 25;
-const KING_SEMI_OPEN_FILE_PENALTY: i32 = 15;
+/// Ranks between the king and the nearest pawn in `pawns` on `file` that
+/// still lies ahead of the king from `king_color`'s point of view (i.e.
+/// could plausibly shield it, or is still advancing toward it) — `None` if
+/// there's no such pawn on that file at all. Shared by the shelter and
+/// storm terms below: shelter passes the king's own pawns, storm passes
+/// the enemy's; only the direction (`king_color`) matters, not whose
+/// pawns they are.
+fn nearest_pawn_distance_ahead(pawns: Bitboard, file: i32, king_rank: i32, king_color: Color) -> Option<i32> {
+    pawns
+        .into_iter()
+        .filter(|sq| sq.file() as i32 == file)
+        .filter_map(|sq| {
+            let d = match king_color {
+                Color::White => sq.rank() as i32 - king_rank,
+                Color::Black => king_rank - sq.rank() as i32,
+            };
+            (d > 0).then_some(d)
+        })
+        .min()
+}
+
+/// Missing entirely, or too far away to help, is worse than a real
+/// distance ever gets scored as (`(5*5*4).min(36) == 36`, same as the cap):
+/// this sentinel just lets "no shelter pawn on this file at all" fall
+/// straight through the same quadratic formula as a real distance would.
+const NO_SHELTER_PAWN_DISTANCE: i32 = 5;
+const SHELTER_PENALTY_FACTOR: i32 = 4;
+const SHELTER_PENALTY_CAP: i32 = 36;
+
+/// Penalty for how far the king's own nearest pawn on `file` is (bigger,
+/// and non-linearly so, the further away or entirely missing): a pawn
+/// still on its start square shelters the king almost perfectly, one
+/// that's already advanced (or was traded off) leaves real gaps for an
+/// enemy piece to walk into.
+fn shelter_penalty(own_pawns: Bitboard, file: i32, king_rank: i32, color: Color) -> i32 {
+    let distance = nearest_pawn_distance_ahead(own_pawns, file, king_rank, color).unwrap_or(NO_SHELTER_PAWN_DISTANCE);
+    (distance * distance * SHELTER_PENALTY_FACTOR).min(SHELTER_PENALTY_CAP)
+}
+
+/// Penalty for an enemy pawn advancing toward the king on `file`, indexed
+/// by how many ranks away it still is: a pawn already knocking on the
+/// king's door is far more dangerous than one that's merely left its own
+/// side of the board, and one that hasn't advanced at all yet (or doesn't
+/// exist) isn't a storm at all.
+#[rustfmt::skip]
+const STORM_PENALTY_BY_DISTANCE: [i32; 8] = [40, 40, 24, 12, 4, 0, 0, 0];
+
+fn storm_penalty(enemy_pawns: Bitboard, file: i32, king_rank: i32, color: Color) -> i32 {
+    match nearest_pawn_distance_ahead(enemy_pawns, file, king_rank, color) {
+        Some(d) => STORM_PENALTY_BY_DISTANCE[(d as usize).min(STORM_PENALTY_BY_DISTANCE.len() - 1)],
+        None => 0,
+    }
+}
+
+/// The king's own square plus its 8 neighbors: the immediate zone an
+/// attacking piece needs to bear on to actually threaten the king, as
+/// opposed to merely being active somewhere else on the board.
+fn king_ring(king_sq: Square) -> Bitboard {
+    let file = king_sq.file() as i32;
+    let rank = king_sq.rank() as i32;
+    let mut ring = Bitboard::EMPTY;
+    for df in -1..=1 {
+        for dr in -1..=1 {
+            let f = file + df;
+            let r = rank + dr;
+            if (0..8).contains(&f) && (0..8).contains(&r) {
+                ring.set(Square::new(f as u8, r as u8));
+            }
+        }
+    }
+    ring
+}
+
+/// Weight per attacking piece type for the king-ring danger count below,
+/// matching the classic (Fruit-style) split: minor pieces count once,
+/// rooks twice, queens four times — a queen bearing on the king ring is
+/// far more ominous than a knight doing the same.
+const KING_ATTACK_WEIGHT_MINOR: i32 = 1;
+const KING_ATTACK_WEIGHT_ROOK: i32 = 2;
+const KING_ATTACK_WEIGHT_QUEEN: i32 = 4;
+/// Squares the king-ring danger penalty (`units² * scale`, capped) is
+/// scaled and capped: growing with the *square* of the weighted attacker
+/// count, not linearly, is the one piece of consensus every reference
+/// engine's HCE checked this session agreed on — a lone attacker near the
+/// king is normal, several at once is when a real attack starts, and the
+/// danger compounds faster than one-at-a-time addition would suggest.
+const KING_DANGER_SCALE: i32 = 2;
+const KING_DANGER_CAP: i32 = 150;
+
+fn king_danger_penalty(ring: Bitboard, enemy_attacks: &AttackInfo) -> i32 {
+    let units = (enemy_attacks.minors & ring).count() as i32 * KING_ATTACK_WEIGHT_MINOR
+        + (enemy_attacks.rooks & ring).count() as i32 * KING_ATTACK_WEIGHT_ROOK
+        + (enemy_attacks.queens & ring).count() as i32 * KING_ATTACK_WEIGHT_QUEEN;
+    (units * units * KING_DANGER_SCALE).min(KING_DANGER_CAP)
+}
 
 /// How exposed `color`'s king is (always >= 0; higher means more
-/// dangerous), tapered by `phase` since an open file next to the king
-/// mostly matters while queens/rooks are still around to exploit it.
-fn king_safety_penalty(board: &Board, color: Color, phase: i32) -> i32 {
+/// dangerous), tapered by `phase` since exposure mostly matters while
+/// enough attacking material remains on the board. Three independent
+/// signals added together, the first two keyed to the king's own file and
+/// its two neighbors: pawn shelter, enemy pawn storm, and a non-linearly
+/// scaled count of enemy pieces (`enemy_attacks`, the same `AttackInfo`
+/// `threats_score` uses) bearing on the immediate king ring.
+fn king_safety_penalty(board: &Board, color: Color, phase: i32, enemy_attacks: &AttackInfo) -> i32 {
     let king_sq = match board.pieces_of(color, PieceType::King).lsb() {
         Some(sq) => sq,
         None => return 0, // only reachable mid-test with a kingless FEN
@@ -307,28 +426,30 @@ fn king_safety_penalty(board: &Board, color: Color, phase: i32) -> i32 {
     let own_pawns = board.pieces_of(color, PieceType::Pawn);
     let enemy_pawns = board.pieces_of(color.opposite(), PieceType::Pawn);
     let king_file = king_sq.file() as i32;
+    let king_rank = king_sq.rank() as i32;
 
     let mut penalty = 0;
     for file in (king_file - 1)..=(king_file + 1) {
         if !(0..8).contains(&file) {
             continue;
         }
-        let own_on_file = own_pawns.into_iter().any(|sq| sq.file() as i32 == file);
-        if own_on_file {
-            continue;
-        }
-        let enemy_on_file = enemy_pawns.into_iter().any(|sq| sq.file() as i32 == file);
-        penalty += if enemy_on_file { KING_SEMI_OPEN_FILE_PENALTY } else { KING_OPEN_FILE_PENALTY };
+        penalty += shelter_penalty(own_pawns, file, king_rank, color);
+        penalty += storm_penalty(enemy_pawns, file, king_rank, color);
     }
+    penalty += king_danger_penalty(king_ring(king_sq), enemy_attacks);
+
     (penalty * phase) / MAX_GAME_PHASE
 }
 
 pub fn king_safety_score(board: &Board) -> i32 {
-    king_safety_score_with_phase(board, game_phase(board))
+    let occ = board.occupied();
+    let white_attacks = attack_info_for(board, Color::White, occ);
+    let black_attacks = attack_info_for(board, Color::Black, occ);
+    king_safety_score_with(board, game_phase(board), &white_attacks, &black_attacks)
 }
 
-fn king_safety_score_with_phase(board: &Board, phase: i32) -> i32 {
-    king_safety_penalty(board, Color::Black, phase) - king_safety_penalty(board, Color::White, phase)
+fn king_safety_score_with(board: &Board, phase: i32, white_attacks: &AttackInfo, black_attacks: &AttackInfo) -> i32 {
+    king_safety_penalty(board, Color::Black, phase, white_attacks) - king_safety_penalty(board, Color::White, phase, black_attacks)
 }
 
 /// Two bishops covering both square colors between them are worth more
@@ -348,6 +469,135 @@ pub fn bishop_pair_score(board: &Board) -> i32 {
     score
 }
 
+fn square_is_light(sq: Square) -> bool {
+    (sq.file() + sq.rank()) % 2 == 1
+}
+
+/// A "bad bishop": own pawns sitting on the same square color as a lone
+/// bishop get in its own diagonals' way. Doubled if the pawn is "rammed"
+/// (blocked head-on by an enemy pawn directly in front, so it can't ever
+/// move aside on its own) rather than just sitting there. Only applies
+/// with exactly one bishop of that color — with the pair, the other
+/// bishop already covers the opposite color complex, so this penalty
+/// isn't the right lens (that's what `bishop_pair_score` rewards instead).
+const BAD_BISHOP_PAWN_PENALTY: i32 = 3;
+const BAD_BISHOP_RAMMED_PAWN_PENALTY: i32 = 6;
+
+fn bishop_pawns_score_for(board: &Board, color: Color) -> i32 {
+    let bishops = board.pieces_of(color, PieceType::Bishop);
+    if bishops.count() != 1 {
+        return 0;
+    }
+    let bishop_is_light = square_is_light(bishops.lsb().expect("count() == 1 above guarantees a bishop"));
+    let enemy_pawns = board.pieces_of(color.opposite(), PieceType::Pawn);
+
+    let mut score = 0;
+    for sq in board.pieces_of(color, PieceType::Pawn) {
+        if square_is_light(sq) != bishop_is_light {
+            continue;
+        }
+        let ahead_rank = match color {
+            Color::White => sq.rank() as i32 + 1,
+            Color::Black => sq.rank() as i32 - 1,
+        };
+        let rammed =
+            (0..8).contains(&ahead_rank) && enemy_pawns.contains(Square::new(sq.file(), ahead_rank as u8));
+        score -= if rammed { BAD_BISHOP_RAMMED_PAWN_PENALTY } else { BAD_BISHOP_PAWN_PENALTY };
+    }
+    score
+}
+
+pub fn bishop_pawns_score(board: &Board) -> i32 {
+    bishop_pawns_score_for(board, Color::White) - bishop_pawns_score_for(board, Color::Black)
+}
+
+// ---------------------------------------------------------------------
+// Endgame scale factor: some material balances are "technically" an
+// advantage by raw material/positional count but are known, specific
+// patterns that are far more drawish in practice than the plain sum of
+// the terms above would suggest. Rather than inventing more additive
+// bonuses/penalties to fight that (which would fight the *other* terms
+// too, in positions where this pattern doesn't apply), this scales the
+// whole evaluation down directly — the same technique Stockfish/Ethereal
+// use for exactly this purpose. `kpk_exact_score` is unaffected (it
+// returns before this is ever computed): that path is already exact, not
+// a judgment call that could be systematically too confident.
+// ---------------------------------------------------------------------
+
+/// Denominator for `endgame_scale_factor`: `SCALE_FACTOR_NORMAL` itself
+/// means "don't scale at all".
+const SCALE_FACTOR_NORMAL: i32 = 64;
+
+/// Classic opposite-colored-bishops ending: each side has exactly one
+/// bishop, on opposite square colors, and nothing else but kings and
+/// pawns. Notoriously drawish even a pawn or two down, since the
+/// defending side's bishop can permanently blockade one color complex
+/// that the attacker's bishop can never contest — confirmed empirically
+/// against Stockfish/Obsidian/Berserk on a hand-built test position (see
+/// `compare_eval.sh` in this session's notes) where Vigia gave +87 and the
+/// reference engines gave roughly 0. Deliberately a flat scale regardless
+/// of how many extra pawns the "better" side has: real engines accept
+/// this same simplification (more pawns genuinely do help convert in
+/// practice, but modeling that precisely needs more than a hand-picked
+/// constant can responsibly capture).
+const OPPOSITE_COLORED_BISHOPS_SCALE: i32 = 12;
+
+fn is_pure_opposite_colored_bishops_ending(board: &Board) -> bool {
+    for color in [Color::White, Color::Black] {
+        if board.pieces_of(color, PieceType::Knight).count() > 0
+            || board.pieces_of(color, PieceType::Rook).count() > 0
+            || board.pieces_of(color, PieceType::Queen).count() > 0
+            || board.pieces_of(color, PieceType::Bishop).count() != 1
+        {
+            return false;
+        }
+    }
+    let white_bishop = board
+        .pieces_of(Color::White, PieceType::Bishop)
+        .lsb()
+        .expect("checked count() == 1 above");
+    let black_bishop = board
+        .pieces_of(Color::Black, PieceType::Bishop)
+        .lsb()
+        .expect("checked count() == 1 above");
+    square_is_light(white_bishop) != square_is_light(black_bishop)
+}
+
+/// Mirrors `search::is_insufficient_material`'s conservative definition
+/// (no pawns/rooks/queens for either side, at most one minor piece on the
+/// whole board): that check already makes the search itself score these
+/// positions as an exact draw wherever they actually appear in the tree,
+/// so this is a belt-and-suspenders match for `evaluate()`/`cmd_eval`
+/// being asked about such a position directly, not a case this needs to
+/// (or safely could) handle any more precisely — a second minor piece on
+/// the stronger side (two bishops, or bishop and knight) can in fact force
+/// mate, so this must not overreach into that territory.
+fn is_drawn_by_insufficient_material(board: &Board) -> bool {
+    for color in [Color::White, Color::Black] {
+        if !board.pieces_of(color, PieceType::Pawn).is_empty()
+            || !board.pieces_of(color, PieceType::Rook).is_empty()
+            || !board.pieces_of(color, PieceType::Queen).is_empty()
+        {
+            return false;
+        }
+    }
+    let minors = board.pieces_of(Color::White, PieceType::Knight).count()
+        + board.pieces_of(Color::White, PieceType::Bishop).count()
+        + board.pieces_of(Color::Black, PieceType::Knight).count()
+        + board.pieces_of(Color::Black, PieceType::Bishop).count();
+    minors <= 1
+}
+
+fn endgame_scale_factor(board: &Board) -> i32 {
+    if is_drawn_by_insufficient_material(board) {
+        0
+    } else if is_pure_opposite_colored_bishops_ending(board) {
+        OPPOSITE_COLORED_BISHOPS_SCALE
+    } else {
+        SCALE_FACTOR_NORMAL
+    }
+}
+
 /// Bonus for a passed pawn (no enemy pawn on its file or an adjacent file
 /// can ever stop or capture it), indexed by how many ranks it has already
 /// advanced past its own second rank. Grows sharply near promotion.
@@ -355,6 +605,25 @@ pub fn bishop_pair_score(board: &Board) -> i32 {
 const PASSED_PAWN_BONUS_BY_ADVANCE: [i32; 8] = [0, 5, 10, 20, 35, 60, 100, 0];
 const DOUBLED_PAWN_PENALTY: i32 = 15;
 const ISOLATED_PAWN_PENALTY: i32 = 15;
+const BACKWARD_PAWN_PENALTY: i32 = 10;
+/// Bonus for a pawn defended by another pawn (diagonally behind) or
+/// standing shoulder-to-shoulder with one on the same rank (a "phalanx"):
+/// both count as the same "connected" concept here rather than as two
+/// separate terms, which several reference engines' own HCE treat as
+/// close enough in value to not be worth telling apart. Indexed by advance
+/// like the passed-pawn table, but flatter: connectedness matters most as
+/// a passed pawn nears promotion, which the passed-pawn bonus above
+/// already captures on its own.
+#[rustfmt::skip]
+const PAWN_CONNECTED_BONUS_BY_ADVANCE: [i32; 8] = [0, 3, 4, 6, 12, 20, 30, 0];
+/// Weighting for the two kings' distance to a passed pawn, generalized
+/// from the pure-KPK-ending case (`pawn_endgame_score`, gated to
+/// `game_phase == 0`) to any sufficiently simplified position: escorting
+/// the pawn home with your own king matters more than the enemy king
+/// merely being far away, so the own-king weight is deliberately larger.
+const PASSED_PAWN_OWN_KING_WEIGHT: i32 = 4;
+const PASSED_PAWN_ENEMY_KING_WEIGHT: i32 = 2;
+const PASSED_PAWN_KING_DISTANCE_MAX_PHASE: i32 = 12;
 
 fn is_passed_pawn(sq: Square, color: Color, enemy_pawns: Bitboard) -> bool {
     let file = sq.file() as i32;
@@ -373,11 +642,63 @@ fn is_passed_pawn(sq: Square, color: Color, enemy_pawns: Bitboard) -> bool {
     true
 }
 
-/// Doubled/isolated penalties plus passed-pawn bonuses for `pawns`, from
-/// `color`'s own perspective (always non-negative-biased upward, i.e. a
-/// good structure scores higher regardless of which color is being asked
-/// about; the caller subtracts Black's from White's).
-fn pawn_structure_score_for(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> i32 {
+/// A pawn with no neighbor-file pawn at its own rank or behind it (so
+/// nothing can ever come up to shield/support it from behind) whose stop
+/// square is already controlled by an enemy pawn (so advancing loses it
+/// outright). Deliberately simpler than the full textbook definition (no
+/// check for whether the file is semi-open toward a rook/queen, which
+/// would need piece bitboards this function doesn't receive) — a
+/// reasonable simplification for a heuristic term, not the exact KPK
+/// oracle. Callers must already know the pawn isn't isolated (has some
+/// neighbor-file pawn, just not one positioned to help) before calling
+/// this, since an isolated pawn would otherwise also match "no supporter"
+/// and get double-penalized under both terms.
+fn is_backward_pawn(sq: Square, color: Color, own_pawns: Bitboard, enemy_pawns: Bitboard) -> bool {
+    let file = sq.file() as i32;
+    let rank = sq.rank() as i32;
+    let has_supporter_or_future_supporter = own_pawns.into_iter().any(|other| {
+        (other.file() as i32 - file).abs() == 1
+            && match color {
+                Color::White => other.rank() as i32 <= rank,
+                Color::Black => other.rank() as i32 >= rank,
+            }
+    });
+    if has_supporter_or_future_supporter {
+        return false;
+    }
+    let stop_rank = match color {
+        Color::White => rank + 1,
+        Color::Black => rank - 1,
+    };
+    if !(0..8).contains(&stop_rank) {
+        return false; // already on the back rank: not reachable in practice, but never crash
+    }
+    let stop_square = Square::new(sq.file(), stop_rank as u8);
+    pawn_attack_set(enemy_pawns, color.opposite()).contains(stop_square)
+}
+
+fn has_phalanx_partner(sq: Square, own_pawns: Bitboard) -> bool {
+    let file = sq.file() as i32;
+    [file - 1, file + 1]
+        .into_iter()
+        .any(|f| (0..8).contains(&f) && own_pawns.contains(Square::new(f as u8, sq.rank())))
+}
+
+/// Doubled/isolated/backward penalties plus passed-pawn and connected-pawn
+/// bonuses for `pawns`, from `color`'s own perspective (always
+/// non-negative-biased upward, i.e. a good structure scores higher
+/// regardless of which color is being asked about; the caller subtracts
+/// Black's from White's). `own_king`/`enemy_king`/`phase` only feed the
+/// passed-pawn king-distance term below `PASSED_PAWN_KING_DISTANCE_MAX_PHASE`.
+#[allow(clippy::too_many_arguments)]
+fn pawn_structure_score_for(
+    pawns: Bitboard,
+    enemy_pawns: Bitboard,
+    color: Color,
+    own_king: Square,
+    enemy_king: Square,
+    phase: i32,
+) -> i32 {
     let mut file_counts = [0i32; 8];
     for sq in pawns {
         file_counts[sq.file() as usize] += 1;
@@ -393,23 +714,43 @@ fn pawn_structure_score_for(pawns: Bitboard, enemy_pawns: Bitboard, color: Color
             (file > 0 && file_counts[file - 1] > 0) || (file < 7 && file_counts[file + 1] > 0);
         if !has_neighbor_file {
             score -= ISOLATED_PAWN_PENALTY;
+        } else if is_backward_pawn(sq, color, pawns, enemy_pawns) {
+            score -= BACKWARD_PAWN_PENALTY;
+        }
+
+        let advance = match color {
+            Color::White => sq.rank(),
+            Color::Black => 7 - sq.rank(),
+        };
+        if is_defended_by_pawn(sq, color, pawns) || has_phalanx_partner(sq, pawns) {
+            score += PAWN_CONNECTED_BONUS_BY_ADVANCE[advance as usize];
         }
         if is_passed_pawn(sq, color, enemy_pawns) {
-            let advance = match color {
-                Color::White => sq.rank(),
-                Color::Black => 7 - sq.rank(),
-            };
             score += PASSED_PAWN_BONUS_BY_ADVANCE[advance as usize];
+            if phase <= PASSED_PAWN_KING_DISTANCE_MAX_PHASE {
+                score += chebyshev_distance(enemy_king, sq) * PASSED_PAWN_ENEMY_KING_WEIGHT
+                    - chebyshev_distance(own_king, sq) * PASSED_PAWN_OWN_KING_WEIGHT;
+            }
         }
     }
     score
 }
 
 pub fn pawn_structure_score(board: &Board) -> i32 {
+    pawn_structure_score_with_phase(board, game_phase(board))
+}
+
+fn pawn_structure_score_with_phase(board: &Board, phase: i32) -> i32 {
     let white_pawns = board.pieces_of(Color::White, PieceType::Pawn);
     let black_pawns = board.pieces_of(Color::Black, PieceType::Pawn);
-    pawn_structure_score_for(white_pawns, black_pawns, Color::White)
-        - pawn_structure_score_for(black_pawns, white_pawns, Color::Black)
+    let (Some(white_king), Some(black_king)) = (
+        board.pieces_of(Color::White, PieceType::King).lsb(),
+        board.pieces_of(Color::Black, PieceType::King).lsb(),
+    ) else {
+        return 0; // only reachable mid-test with a kingless FEN
+    };
+    pawn_structure_score_for(white_pawns, black_pawns, Color::White, white_king, black_king, phase)
+        - pawn_structure_score_for(black_pawns, white_pawns, Color::Black, black_king, white_king, phase)
 }
 
 /// Sum of piece-square bonuses, White pieces minus Black pieces. The king
@@ -524,6 +865,115 @@ fn piece_mobility_for(board: &Board, color: Color, occ: Bitboard, enemy_pawn_att
     score
 }
 
+// ---------------------------------------------------------------------
+// Threats: is a piece sitting where a cheaper enemy piece attacks it? A
+// hand-crafted eval has no idea otherwise — confirmed empirically this
+// session (see the session notes / `compare_eval.sh`): a knight hanging to
+// an undefended pawn scored -247 for the side about to lose it for free,
+// when Stockfish/Obsidian/Berserk/Caissa all saw the position as roughly
+// even. Deliberately scoped to the classic "cheaper piece attacks more
+// valuable one" patterns only, not full SEE-based hanging-piece detection
+// (which would need every piece's own defenders, not just attackers) —
+// that's a further refinement to consider later, not required to close
+// the gap that was actually measured.
+//
+// Not built from `piece_mobility_for`'s per-piece attack sets above: those
+// are summed per piece (so two pieces attacking the same square each get
+// separate mobility credit), which is the wrong shape for "is this square
+// attacked at all" — a union bitboard is what threats need instead, and
+// re-deriving it here is cheap (a handful of array lookups) next to the
+// risk of subtly changing mobility's already-tested behavior to share it.
+// ---------------------------------------------------------------------
+
+/// One color's attacked squares, aggregated by attacker type (not counted
+/// per piece, just unioned) — exactly what `threats_score` needs to ask
+/// "is this square attacked by a pawn/minor/rook/queen at all?".
+struct AttackInfo {
+    pawns: Bitboard,
+    minors: Bitboard,
+    rooks: Bitboard,
+    queens: Bitboard,
+}
+
+fn attack_info_for(board: &Board, color: Color, occ: Bitboard) -> AttackInfo {
+    let mut minors = Bitboard::EMPTY;
+    for sq in board.pieces_of(color, PieceType::Knight) {
+        minors = minors | movegen::knight_attacks(sq);
+    }
+    for sq in board.pieces_of(color, PieceType::Bishop) {
+        minors = minors | movegen::bishop_attacks(sq, occ);
+    }
+    let mut rooks = Bitboard::EMPTY;
+    for sq in board.pieces_of(color, PieceType::Rook) {
+        rooks = rooks | movegen::rook_attacks(sq, occ);
+    }
+    let mut queens = Bitboard::EMPTY;
+    for sq in board.pieces_of(color, PieceType::Queen) {
+        queens = queens | movegen::queen_attacks(sq, occ);
+    }
+    AttackInfo {
+        pawns: pawn_attack_set(board.pieces_of(color, PieceType::Pawn), color),
+        minors,
+        rooks,
+        queens,
+    }
+}
+
+const MINOR_ATTACKED_BY_PAWN_PENALTY: i32 = 45;
+const ROOK_ATTACKED_BY_LESSER_PENALTY: i32 = 35;
+const QUEEN_ATTACKED_BY_LESSER_PENALTY: i32 = 40;
+const WEAK_PAWN_PENALTY: i32 = 12;
+
+/// Non-negative: how much trouble `victim_color`'s own pieces are in
+/// against `attackers` (the *other* color's `AttackInfo`). The caller
+/// combines both directions with the right sign.
+fn threat_penalty_for(board: &Board, victim_color: Color, attackers: &AttackInfo) -> i32 {
+    let own_pawn_defense = pawn_attack_set(board.pieces_of(victim_color, PieceType::Pawn), victim_color);
+    let mut penalty = 0;
+
+    let minors = board.pieces_of(victim_color, PieceType::Knight) | board.pieces_of(victim_color, PieceType::Bishop);
+    for sq in minors {
+        if attackers.pawns.contains(sq) && !own_pawn_defense.contains(sq) {
+            penalty += MINOR_ATTACKED_BY_PAWN_PENALTY;
+        }
+    }
+
+    for sq in board.pieces_of(victim_color, PieceType::Rook) {
+        if attackers.pawns.contains(sq) || attackers.minors.contains(sq) {
+            penalty += ROOK_ATTACKED_BY_LESSER_PENALTY;
+        }
+    }
+
+    for sq in board.pieces_of(victim_color, PieceType::Queen) {
+        if attackers.pawns.contains(sq) || attackers.minors.contains(sq) || attackers.rooks.contains(sq) {
+            penalty += QUEEN_ATTACKED_BY_LESSER_PENALTY;
+        }
+    }
+
+    for sq in board.pieces_of(victim_color, PieceType::Pawn) {
+        let attacked = attackers.pawns.contains(sq)
+            || attackers.minors.contains(sq)
+            || attackers.rooks.contains(sq)
+            || attackers.queens.contains(sq);
+        if attacked && !own_pawn_defense.contains(sq) {
+            penalty += WEAK_PAWN_PENALTY;
+        }
+    }
+
+    penalty
+}
+
+pub fn threats_score(board: &Board) -> i32 {
+    let occ = board.occupied();
+    let white_attacks = attack_info_for(board, Color::White, occ);
+    let black_attacks = attack_info_for(board, Color::Black, occ);
+    threats_score_with_attacks(board, &white_attacks, &black_attacks)
+}
+
+fn threats_score_with_attacks(board: &Board, white_attacks: &AttackInfo, black_attacks: &AttackInfo) -> i32 {
+    threat_penalty_for(board, Color::Black, white_attacks) - threat_penalty_for(board, Color::White, black_attacks)
+}
+
 /// Bonus for a rook on a file with no pawn of its own color on it: an open
 /// file (no pawns of either color) lets it contest the file from turn
 /// one, a semi-open one (only enemy pawns) still gives it a target and a
@@ -548,6 +998,42 @@ fn rook_file_score_for(board: &Board, color: Color) -> i32 {
 
 pub fn rook_file_score(board: &Board) -> i32 {
     rook_file_score_for(board, Color::White) - rook_file_score_for(board, Color::Black)
+}
+
+/// Bonus for a rook on the 7th rank (2nd from its own perspective) that's
+/// actually threatening something: the enemy king cut off on the back
+/// rank, or an enemy pawn sitting there to be picked off. A 7th-rank rook
+/// with neither condition isn't the classical "pig on the 7th", just a
+/// rook that happens to be far advanced — already rewarded by its PST and
+/// mobility on their own, no extra bonus needed here.
+const ROOK_ON_SEVENTH_BONUS: i32 = 20;
+
+fn rook_on_seventh_score_for(board: &Board, color: Color) -> i32 {
+    let (seventh_rank, back_rank) = match color {
+        Color::White => (6, 7),
+        Color::Black => (1, 0),
+    };
+    let enemy_king_on_back_rank = board
+        .pieces_of(color.opposite(), PieceType::King)
+        .lsb()
+        .is_some_and(|k| k.rank() == back_rank);
+    let enemy_pawn_on_seventh = board
+        .pieces_of(color.opposite(), PieceType::Pawn)
+        .into_iter()
+        .any(|s| s.rank() == seventh_rank);
+    if !enemy_king_on_back_rank && !enemy_pawn_on_seventh {
+        return 0;
+    }
+    let rooks_on_seventh = board
+        .pieces_of(color, PieceType::Rook)
+        .into_iter()
+        .filter(|r| r.rank() == seventh_rank)
+        .count();
+    rooks_on_seventh as i32 * ROOK_ON_SEVENTH_BONUS
+}
+
+pub fn rook_on_seventh_score(board: &Board) -> i32 {
+    rook_on_seventh_score_for(board, Color::White) - rook_on_seventh_score_for(board, Color::Black)
 }
 
 /// A knight that's both defended by one of its own pawns and can never be
@@ -888,7 +1374,8 @@ mod tests {
         assert_eq!(material_score(&board), 0);
         assert_eq!(piece_square_score(&board), 0);
         assert_eq!(mobility_score(&board), 0);
-        assert_eq!(evaluate(&board), 0);
+        // Not 0: White is to move, and `tempo_score` credits that.
+        assert_eq!(evaluate(&board), TEMPO_BONUS);
     }
 
     #[test]
@@ -1010,7 +1497,8 @@ mod tests {
         let king_sq = Square::new(6, 0); // g1
         let board = Board::from_fen("4k3/8/8/8/8/8/8/6K1 w - - 0 1").unwrap();
         assert_eq!(board.pieces_of(Color::White, PieceType::King).lsb(), Some(king_sq));
-        assert_eq!(king_safety_penalty(&board, Color::White, 0), 0);
+        let black_attacks = attack_info_for(&board, Color::Black, board.occupied());
+        assert_eq!(king_safety_penalty(&board, Color::White, 0, &black_attacks), 0);
     }
 
     #[test]
@@ -1149,5 +1637,206 @@ mod tests {
         // gives the individual pawns.
         let board = Board::from_fen("4k3/p7/8/8/8/8/PP6/4K3 w - - 0 1").unwrap();
         assert_eq!(pawn_majority_score(&board), CANDIDATE_MAJORITY_BONUS);
+    }
+
+    #[test]
+    fn tempo_score_favors_the_side_to_move() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let mirrored = Board::from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1").unwrap();
+        assert_eq!(tempo_score(&board), TEMPO_BONUS);
+        assert_eq!(tempo_score(&mirrored), -TEMPO_BONUS);
+    }
+
+    #[test]
+    fn is_backward_pawn_detects_a_pawn_with_no_supporter_and_a_controlled_stop_square() {
+        // White d2, with c3/e3 already advanced past it (neither can ever
+        // come back to defend it) and a black pawn on e4 controlling d3.
+        let own = Bitboard::from_square(Square::new(3, 1)) // d2
+            | Bitboard::from_square(Square::new(2, 2)) // c3
+            | Bitboard::from_square(Square::new(4, 2)); // e3
+        let enemy = Bitboard::from_square(Square::new(4, 3)); // e4
+        assert!(is_backward_pawn(Square::new(3, 1), Color::White, own, enemy));
+    }
+
+    #[test]
+    fn is_backward_pawn_is_false_with_a_same_rank_supporter() {
+        // Same stop-square control from e4, but c2/e2 (same rank as d2,
+        // not already advanced past it) could still come up and defend it.
+        let own = Bitboard::from_square(Square::new(3, 1)) // d2
+            | Bitboard::from_square(Square::new(2, 1)) // c2
+            | Bitboard::from_square(Square::new(4, 1)); // e2
+        let enemy = Bitboard::from_square(Square::new(4, 3)); // e4
+        assert!(!is_backward_pawn(Square::new(3, 1), Color::White, own, enemy));
+    }
+
+    #[test]
+    fn has_phalanx_partner_detects_an_adjacent_pawn_on_the_same_rank() {
+        let side_by_side = Bitboard::from_square(Square::new(3, 3)) | Bitboard::from_square(Square::new(4, 3));
+        assert!(has_phalanx_partner(Square::new(3, 3), side_by_side));
+        let alone = Bitboard::from_square(Square::new(3, 3));
+        assert!(!has_phalanx_partner(Square::new(3, 3), alone));
+    }
+
+    #[test]
+    fn bishop_pawns_score_penalizes_own_pawns_on_the_bishops_color() {
+        // Dark-squared bishop on c1; b2/d2 are also dark squares.
+        let bad = Board::from_fen("4k3/8/8/8/8/8/1P1P4/2B1K3 w - - 0 1").unwrap();
+        // Same bishop, but the pawns are on c2/e2 (light squares) instead.
+        let good = Board::from_fen("4k3/8/8/8/8/8/2P1P3/2B1K3 w - - 0 1").unwrap();
+        assert_eq!(bishop_pawns_score(&bad), -2 * BAD_BISHOP_PAWN_PENALTY);
+        assert_eq!(bishop_pawns_score(&good), 0);
+    }
+
+    #[test]
+    fn bishop_pawns_score_penalizes_a_rammed_pawn_more() {
+        // Same "bad" position as above, plus a black pawn on d3 directly
+        // blocking the white d2 pawn head-on.
+        let board = Board::from_fen("4k3/8/8/8/8/3p4/1P1P4/2B1K3 w - - 0 1").unwrap();
+        assert_eq!(bishop_pawns_score(&board), -BAD_BISHOP_PAWN_PENALTY - BAD_BISHOP_RAMMED_PAWN_PENALTY);
+    }
+
+    #[test]
+    fn rook_on_seventh_score_requires_a_real_target() {
+        let threatening = Board::from_fen("4k3/R7/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(rook_on_seventh_score(&threatening), ROOK_ON_SEVENTH_BONUS);
+        // Same rook on the 7th, but the black king isn't on the back rank
+        // and there's no black pawn on the 7th either: no real target.
+        let empty_seventh = Board::from_fen("8/R7/4k3/8/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(rook_on_seventh_score(&empty_seventh), 0);
+    }
+
+    #[test]
+    fn passed_pawn_king_distance_favors_the_closer_escorting_king() {
+        // Same passed pawn (a5) and same distant black king (e8) in both;
+        // only the white king's distance to the pawn changes.
+        let king_close = Board::from_fen("4k3/8/8/P7/8/K7/8/8 w - - 0 1").unwrap();
+        let king_far = Board::from_fen("4k3/8/8/P7/8/8/8/7K w - - 0 1").unwrap();
+        assert!(pawn_structure_score(&king_close) > pawn_structure_score(&king_far));
+    }
+
+    #[test]
+    fn opposite_colored_bishops_ending_gets_scaled_down() {
+        // White up a pawn with opposite-colored bishops: the exact pattern
+        // this session's live comparison against Stockfish/Obsidian/Berserk
+        // flagged as overconfident (Vigia gave +87, the reference engines
+        // gave roughly 0).
+        let board = Board::from_fen("8/5k2/8/3b4/8/3P4/2K2B2/8 w - - 0 1").unwrap();
+        let score = evaluate(&board);
+        assert!(score.abs() <= 30, "expected a heavily scaled-down score, got {score}");
+    }
+
+    #[test]
+    fn endgame_scale_factor_leaves_a_same_colored_bishop_ending_unscaled() {
+        // Same idea, but both bishops are on dark squares: no opposite-
+        // colored-bishops drawishness, so no scaling should apply.
+        let same_color = Board::from_fen("8/5k2/3b4/8/8/3P4/2K2B2/8 w - - 0 1").unwrap();
+        assert_eq!(endgame_scale_factor(&same_color), SCALE_FACTOR_NORMAL);
+    }
+
+    #[test]
+    fn endgame_scale_factor_ignores_opposite_bishops_if_other_pieces_remain() {
+        // Same opposite-colored bishops, but White also has a rook: not a
+        // "pure" OCB ending anymore, so no scaling.
+        let board = Board::from_fen("8/5k2/8/3b4/8/3P4/2K2B2/4R3 w - - 0 1").unwrap();
+        assert_eq!(endgame_scale_factor(&board), SCALE_FACTOR_NORMAL);
+    }
+
+    #[test]
+    fn evaluate_flattens_bare_kings_and_a_lone_minor_via_the_scale_factor() {
+        // Mirrors `search::is_insufficient_material`: these positions are
+        // an exact draw regardless of what material_score/piece_square_score
+        // alone would suggest.
+        let bare_kings = Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(evaluate(&bare_kings), 0);
+        let lone_knight = Board::from_fen("4k3/8/8/8/8/8/8/3NK3 w - - 0 1").unwrap();
+        assert_eq!(evaluate(&lone_knight), 0);
+    }
+
+    #[test]
+    fn threats_score_penalizes_an_undefended_minor_attacked_by_a_pawn() {
+        // Black knight d5 hanging to the white pawn on e4, with no black
+        // pawn defending it. This is the exact pattern that scored -247
+        // for the side about to lose the piece before this term existed.
+        let hanging = Board::from_fen("4k3/8/8/3n4/4P3/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(threats_score(&hanging), MINOR_ATTACKED_BY_PAWN_PENALTY);
+
+        // Same attack, but a black pawn on c6 now defends d5: no penalty.
+        let defended = Board::from_fen("4k3/8/2p5/3n4/4P3/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(threats_score(&defended), 0);
+    }
+
+    #[test]
+    fn threats_score_penalizes_a_rook_attacked_by_a_cheaper_piece() {
+        let board = Board::from_fen("4k3/8/8/1n6/3R4/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(threats_score(&board), -ROOK_ATTACKED_BY_LESSER_PENALTY);
+    }
+
+    #[test]
+    fn threats_score_penalizes_an_undefended_pawn_under_attack() {
+        let board = Board::from_fen("4k3/8/8/2n5/4P3/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(threats_score(&board), -WEAK_PAWN_PENALTY);
+    }
+
+    #[test]
+    fn evaluate_partially_corrects_for_a_hanging_knight() {
+        // Before `threats_score` existed, this position (white pawn about
+        // to win a free knight next move) evaluated around -247/-239:
+        // `evaluate` thought Black was clearly better by *more* than the
+        // raw material gap alone would suggest. A static term can only
+        // ever partially close a "piece is just gone" gap like this one —
+        // actually resolving it is what quiescence search's real capture
+        // is for, not a static eval pretending to already know the
+        // outcome — so this checks the correction is real and in the
+        // right direction, not that it fully matches the reference
+        // engines' near-even NNUE judgment.
+        let board = Board::from_fen("4k3/8/8/3n4/4P3/8/8/4K3 w - - 0 1").unwrap();
+        let score = evaluate(&board);
+        assert!(
+            score > material_score(&board),
+            "expected threats_score to improve on raw material alone, got {score}"
+        );
+    }
+
+    #[test]
+    fn shelter_penalty_grows_with_distance_to_the_nearest_pawn() {
+        let close = Bitboard::from_square(Square::new(4, 1)); // e2, one rank from a rank-0 king
+        let far = Bitboard::from_square(Square::new(4, 3)); // e4, three ranks away
+        assert!(shelter_penalty(close, 4, 0, Color::White) < shelter_penalty(far, 4, 0, Color::White));
+        assert_eq!(shelter_penalty(Bitboard::EMPTY, 4, 0, Color::White), SHELTER_PENALTY_CAP);
+    }
+
+    #[test]
+    fn storm_penalty_grows_as_the_enemy_pawn_gets_closer() {
+        let close = Bitboard::from_square(Square::new(4, 1)); // e2: one step from a rank-0 king
+        let far = Bitboard::from_square(Square::new(4, 5)); // e6: still far off
+        assert!(storm_penalty(close, 4, 0, Color::White) > storm_penalty(far, 4, 0, Color::White));
+        assert_eq!(storm_penalty(Bitboard::EMPTY, 4, 0, Color::White), 0);
+    }
+
+    #[test]
+    fn king_danger_penalty_grows_faster_than_linearly_with_attacker_count() {
+        let ring = king_ring(Square::new(4, 0)); // e1
+        let empty_info = || AttackInfo { pawns: Bitboard::EMPTY, minors: Bitboard::EMPTY, rooks: Bitboard::EMPTY, queens: Bitboard::EMPTY };
+        let one_ring_square_attacked =
+            AttackInfo { rooks: Bitboard::from_square(Square::new(4, 1)), ..empty_info() }; // e2, in the ring
+        let two_ring_squares_attacked = AttackInfo {
+            rooks: Bitboard::from_square(Square::new(4, 1)) | Bitboard::from_square(Square::new(3, 1)), // e2, d2
+            ..empty_info()
+        };
+        let one = king_danger_penalty(ring, &one_ring_square_attacked);
+        let two = king_danger_penalty(ring, &two_ring_squares_attacked);
+        assert!(two > one * 2, "expected super-linear growth: one={one}, two={two}");
+    }
+
+    #[test]
+    fn king_safety_score_penalizes_real_attackers_bearing_on_the_king_ring() {
+        // Same material and same king positions in both: a black queen and
+        // rook already lined up on White's king in one, the queen moved
+        // off to a harmless square in the other (the rook alone still
+        // bears on the file, so this isolates the queen's contribution
+        // without an all-or-nothing comparison).
+        let exposed = Board::from_fen("1k4r1/8/8/8/7q/8/8/7K w - - 0 1").unwrap();
+        let safer = Board::from_fen("1k4r1/8/8/8/q7/8/8/7K w - - 0 1").unwrap();
+        assert!(king_safety_score(&exposed) < king_safety_score(&safer));
     }
 }

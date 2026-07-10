@@ -33,6 +33,33 @@ fn sanitize_castling_rights(rights: CastlingRights, mailbox: &[Option<Piece>; 64
     rights
 }
 
+/// Is a pawn of `capturing_color` actually sitting beside the pawn that
+/// just double-pushed, in position to capture en passant on `ep` right
+/// now? `ep` is the passed-over square (the FEN-visible en passant
+/// target); the pawn that could capture it sits on the same rank as the
+/// just-moved pawn (one rank further from `ep` than the mover's own
+/// color, since it belongs to the *other* side).
+fn is_en_passant_capturable(mailbox: &[Option<Piece>; 64], ep: Square, capturing_color: Color) -> bool {
+    // i32 (not the rank's native u8) so a nonsensical en passant square from
+    // a hand-edited FEN (e.g. one on rank 1) can't underflow instead of
+    // just failing the range check below.
+    let pawn_rank = match capturing_color {
+        Color::Black => ep.rank() as i32 + 1, // White just double-pushed.
+        Color::White => ep.rank() as i32 - 1, // Black just double-pushed.
+    };
+    if !(0..8).contains(&pawn_rank) {
+        return false;
+    }
+    let file = ep.file() as i32;
+    [file - 1, file + 1].into_iter().any(|f| {
+        (0..8).contains(&f)
+            && matches!(
+                mailbox[Square::new(f as u8, pawn_rank as u8).0 as usize],
+                Some(p) if p.color == capturing_color && p.kind == PieceType::Pawn
+            )
+    })
+}
+
 #[derive(Clone)]
 pub struct Board {
     pieces: [[Bitboard; 6]; 2],
@@ -40,6 +67,19 @@ pub struct Board {
     pub side_to_move: Color,
     pub castling: CastlingRights,
     pub en_passant: Option<Square>,
+    /// The subset of `en_passant` that actually feeds the Zobrist hash:
+    /// `None` unless a pawn was truly in position to capture en passant at
+    /// the moment `en_passant` was set. Kept as its own field instead of
+    /// being re-derived from `en_passant` + the current board whenever the
+    /// hash needs to un-toggle it, because by then the board may have
+    /// changed in ways that would silently change the answer (e.g. the
+    /// capturing pawn moved away) — the incremental XOR toggle needs the
+    /// exact same value both times, not a fresh recomputation. `en_passant`
+    /// itself is unaffected and keeps recording the real FEN-visible
+    /// square, since that part of the FEN format and move generation
+    /// (which only ever offers the capture to a pawn that's actually
+    /// there) don't need this distinction.
+    en_passant_hash_square: Option<Square>,
     pub halfmove_clock: u16,
     pub fullmove_number: u16,
     /// Zobrist hash of the position, maintained incrementally. Two boards
@@ -55,6 +95,7 @@ pub struct Undo {
     capture_square: Square,
     prev_castling: CastlingRights,
     prev_en_passant: Option<Square>,
+    prev_en_passant_hash_square: Option<Square>,
     prev_halfmove_clock: u16,
     prev_hash: u64,
 }
@@ -63,6 +104,7 @@ pub struct Undo {
 #[derive(Clone, Copy)]
 pub struct NullUndo {
     prev_en_passant: Option<Square>,
+    prev_en_passant_hash_square: Option<Square>,
     prev_hash: u64,
 }
 
@@ -139,12 +181,16 @@ impl Board {
         let halfmove_clock = fields.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
         let fullmove_number = fields.get(5).and_then(|s| s.parse().ok()).unwrap_or(1);
 
+        let en_passant_hash_square =
+            en_passant.filter(|&ep| is_en_passant_capturable(&mailbox, ep, side_to_move));
+
         let mut board = Board {
             pieces,
             mailbox,
             side_to_move,
             castling,
             en_passant,
+            en_passant_hash_square,
             halfmove_clock,
             fullmove_number,
             hash: 0,
@@ -167,7 +213,7 @@ impl Board {
             hash ^= zobrist::side_to_move_key();
         }
         hash ^= zobrist::castling_key(self.castling);
-        hash ^= zobrist::en_passant_key(self.en_passant);
+        hash ^= zobrist::en_passant_key(self.en_passant_hash_square);
         hash
     }
 
@@ -280,10 +326,18 @@ impl Board {
         self.hash ^= zobrist::castling_key(before) ^ zobrist::castling_key(self.castling);
     }
 
+    /// Called before `self.side_to_move` flips to the opponent, both from
+    /// `make_move` and `make_null_move`, so the side about to reply (and
+    /// thus the only side that could ever play the en passant capture) is
+    /// always `self.side_to_move.opposite()` at this point.
     fn set_en_passant(&mut self, new_en_passant: Option<Square>) {
-        self.hash ^= zobrist::en_passant_key(self.en_passant);
+        let capturing_color = self.side_to_move.opposite();
+        let new_hash_square =
+            new_en_passant.filter(|&ep| is_en_passant_capturable(&self.mailbox, ep, capturing_color));
+        self.hash ^= zobrist::en_passant_key(self.en_passant_hash_square);
         self.en_passant = new_en_passant;
-        self.hash ^= zobrist::en_passant_key(self.en_passant);
+        self.en_passant_hash_square = new_hash_square;
+        self.hash ^= zobrist::en_passant_key(self.en_passant_hash_square);
     }
 
     /// Mechanically applies `mv`, assumed to be at least pseudo-legal for the
@@ -297,6 +351,7 @@ impl Board {
 
         let prev_castling = self.castling;
         let prev_en_passant = self.en_passant;
+        let prev_en_passant_hash_square = self.en_passant_hash_square;
         let prev_halfmove_clock = self.halfmove_clock;
         let prev_hash = self.hash;
 
@@ -354,6 +409,7 @@ impl Board {
             capture_square,
             prev_castling,
             prev_en_passant,
+            prev_en_passant_hash_square,
             prev_halfmove_clock,
             prev_hash,
         }
@@ -389,6 +445,7 @@ impl Board {
 
         self.castling = undo.prev_castling;
         self.en_passant = undo.prev_en_passant;
+        self.en_passant_hash_square = undo.prev_en_passant_hash_square;
         self.halfmove_clock = undo.prev_halfmove_clock;
         if color == Color::Black {
             self.fullmove_number -= 1;
@@ -400,16 +457,18 @@ impl Board {
     /// static mobility evaluation and, later, null-move search pruning.
     pub fn make_null_move(&mut self) -> NullUndo {
         let prev_en_passant = self.en_passant;
+        let prev_en_passant_hash_square = self.en_passant_hash_square;
         let prev_hash = self.hash;
         self.set_en_passant(None);
         self.side_to_move = self.side_to_move.opposite();
         self.hash ^= zobrist::side_to_move_key();
-        NullUndo { prev_en_passant, prev_hash }
+        NullUndo { prev_en_passant, prev_en_passant_hash_square, prev_hash }
     }
 
     pub fn unmake_null_move(&mut self, undo: NullUndo) {
         self.side_to_move = self.side_to_move.opposite();
         self.en_passant = undo.prev_en_passant;
+        self.en_passant_hash_square = undo.prev_en_passant_hash_square;
         self.hash = undo.prev_hash;
     }
 }
@@ -511,6 +570,28 @@ mod tests {
             board.to_fen(),
             "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3"
         );
+    }
+
+    #[test]
+    fn uncapturable_en_passant_square_does_not_affect_the_hash() {
+        // e3 is claimed as the en passant target (as a real FEN from a game
+        // would show right after 1.e4), but there's no black pawn on d4 or
+        // f4 to ever play the capture — so for hashing purposes (TT,
+        // repetition) this must be the exact same position as one with no
+        // en passant square at all.
+        let with_dead_ep = Board::from_fen("4k3/8/8/8/4P3/8/8/4K3 b - e3 0 1").unwrap();
+        let without_ep = Board::from_fen("4k3/8/8/8/4P3/8/8/4K3 b - - 0 1").unwrap();
+        assert_eq!(with_dead_ep.hash, without_ep.hash);
+    }
+
+    #[test]
+    fn genuinely_capturable_en_passant_square_still_affects_the_hash() {
+        // Same idea, but this time a black pawn on d4 really can capture
+        // en passant on e3 — the two positions must NOT hash the same,
+        // confirming the fix only desensitizes the *dead* case above.
+        let with_live_ep = Board::from_fen("4k3/8/8/8/3pP3/8/8/4K3 b - e3 0 1").unwrap();
+        let without_ep = Board::from_fen("4k3/8/8/8/3pP3/8/8/4K3 b - - 0 1").unwrap();
+        assert_ne!(with_live_ep.hash, without_ep.hash);
     }
 
     #[test]

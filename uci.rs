@@ -6,10 +6,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
+use crate::eval;
 use crate::movegen;
 use crate::search;
 
-const ENGINE_NAME: &str = "Vigia 0.21.0";
+const ENGINE_NAME: &str = "Vigia 0.22.0";
 const ENGINE_AUTHOR: &str = "Vigia Team";
 const MIN_HASH_MB: usize = 1;
 /// Kept well below the multi-GB ceilings engines built for supercomputer
@@ -113,6 +114,7 @@ fn handle_command(line: &str, engine: &mut Engine, out: &mut impl Write) -> bool
         "go" => cmd_go(engine, tokens),
         "stop" => cmd_stop(engine),
         "ponderhit" => cmd_ponderhit(engine),
+        "eval" => cmd_eval(engine, out),
         "quit" => {
             join_search_thread(engine);
             return false;
@@ -143,6 +145,17 @@ fn cmd_uci(out: &mut impl Write) {
 
 fn cmd_isready(out: &mut impl Write) {
     let _ = writeln!(out, "readyok");
+    let _ = out.flush();
+}
+
+/// Prints the static evaluation of the current position with no search at
+/// all — the same debugging extension (unofficial but near-universal)
+/// supported by Stockfish, Berserk, Obsidian and friends under this exact
+/// command name, which makes it trivial to compare Vigia's hand-crafted
+/// number against theirs on an identical `position`.
+fn cmd_eval(engine: &Engine, out: &mut impl Write) {
+    let cp = eval::evaluate(&engine.board);
+    let _ = writeln!(out, "Evaluation: {cp} (white side)");
     let _ = out.flush();
 }
 
@@ -410,7 +423,11 @@ fn spawn_search(
         }
 
         let mv = best.best_move.map(|m| m.to_string()).unwrap_or_else(|| "0000".to_string());
-        let _ = writeln!(output, "bestmove {mv}");
+        if let Some(ponder_mv) = best.pv.get(1) {
+            let _ = writeln!(output, "bestmove {mv} ponder {ponder_mv}");
+        } else {
+            let _ = writeln!(output, "bestmove {mv}");
+        }
         let _ = output.flush();
     })
 }
@@ -568,6 +585,15 @@ mod tests {
     }
 
     #[test]
+    fn eval_reports_the_static_score_of_the_current_position() {
+        let (out, keep_going) = run_command("eval");
+        // Not 0 at startpos: White is to move, and the eval's tempo term
+        // credits that (see `eval::TEMPO_BONUS`).
+        assert_eq!(out, "Evaluation: 12 (white side)\n");
+        assert!(keep_going);
+    }
+
+    #[test]
     fn unknown_command_is_ignored_without_crashing() {
         let (out, keep_going) = run_command("this is not a uci command");
         assert_eq!(out, "");
@@ -721,6 +747,7 @@ mod tests {
         let played = out
             .lines()
             .find_map(|l| l.strip_prefix("bestmove "))
+            .and_then(|rest| rest.split_whitespace().next())
             .expect("se esperaba una línea bestmove");
         assert!(legal.iter().any(|m| m.to_string() == played));
     }
@@ -773,6 +800,7 @@ mod tests {
         let played = out
             .lines()
             .find_map(|l| l.strip_prefix("bestmove "))
+            .and_then(|rest| rest.split_whitespace().next())
             .expect("se esperaba una línea bestmove");
         assert!(legal.iter().any(|m| m.to_string() == played));
     }
