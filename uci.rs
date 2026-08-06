@@ -1,12 +1,13 @@
 use std::io::{self, BufRead, Write};
 use std::str::SplitWhitespace;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
 use crate::eval;
+use crate::kpk;
 use crate::movegen;
 use crate::search;
 
@@ -72,6 +73,10 @@ pub struct Engine {
     /// send the releasing `ponderhit`) must not leave the engine holding
     /// its move forever.
     ponder_enabled: bool,
+    /// Persistent state behind `setoption name Variety` — see
+    /// `SearchLimits::variety`. Off by default: strongest play, and
+    /// reproducible node counts for the strength harness.
+    variety: bool,
 }
 
 impl Engine {
@@ -87,6 +92,7 @@ impl Engine {
             threads: MIN_THREADS,
             pondering: Arc::new(AtomicBool::new(false)),
             ponder_enabled: false,
+            variety: false,
         }
     }
 }
@@ -150,11 +156,20 @@ fn cmd_uci(out: &mut impl Write) {
         "option name Threads type spin default {MIN_THREADS} min {MIN_THREADS} max {MAX_THREADS}"
     );
     let _ = writeln!(out, "option name Ponder type check default false");
+    let _ = writeln!(out, "option name Variety type check default false");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
 
 fn cmd_isready(out: &mut impl Write) {
+    // The KPK bitbase is built lazily and takes a few tens of milliseconds.
+    // `OnceLock::get_or_init` cannot be interrupted by the `stop` flag or by
+    // the time budget, so paying for it inside the first search that happens
+    // to reach a pawn ending could blow a `go movetime 1` by two orders of
+    // magnitude — and, with Lazy SMP, park every helper thread on the same
+    // initialization. `isready` is the handshake the protocol provides for
+    // exactly this, and a GUI is required to wait for `readyok`.
+    kpk::init();
     let _ = writeln!(out, "readyok");
     let _ = out.flush();
 }
@@ -220,6 +235,11 @@ fn cmd_setoption(engine: &mut Engine, tokens: SplitWhitespace) {
         "Ponder" => {
             if let Some(v) = value {
                 engine.ponder_enabled = v == "true";
+            }
+        }
+        "Variety" => {
+            if let Some(v) = value {
+                engine.variety = v == "true";
             }
         }
         _ => {}
@@ -334,7 +354,14 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
                     }
                     i += 1;
                 }
-                limits.search_moves = Some(restrict);
+                // `Some(vec![])` used to reach the search, which then quietly
+                // fell back to the full legal list — a restriction that
+                // silently did nothing. A `searchmoves` naming no legal move
+                // at all is malformed; the choice here is to ignore the
+                // whole clause rather than to answer `bestmove 0000`, since
+                // one bad token from a GUI must not cost a playable move in
+                // a position that has plenty.
+                limits.search_moves = (!restrict.is_empty()).then_some(restrict);
             }
             "mate" => {
                 // `go mate 0` or a non-numeric argument is nonsense; drop it
@@ -351,7 +378,8 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
 fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
     join_search_thread(engine);
 
-    let limits = parse_go_limits(tokens, &engine.board);
+    let mut limits = parse_go_limits(tokens, &engine.board);
+    limits.variety = engine.variety;
     engine.stop_flag.store(false, Ordering::Relaxed);
     // Reset for this `go`, not just set on a ponder one: an ordinary `go`
     // right after a ponder search must not leave a stale `true` behind.
@@ -420,28 +448,60 @@ fn spawn_search(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let start = Instant::now();
+        // Bumped here, by the coordinator, before any worker exists. Doing
+        // it from inside the main search thread left a window in which a
+        // helper that got scheduled first wrote entries under the previous
+        // generation, which the bump then immediately marked stale — a race
+        // whose outcome depended on the OS scheduler.
+        tt.begin_search();
+        // One node counter for the whole `go`, so `go nodes N` means N nodes
+        // in total and not N per thread.
+        let shared_nodes = Arc::new(AtomicU64::new(0));
+        // Helper threads watch their own abort flag rather than the shared
+        // `stop`: raising `stop` once the main thread is done would also
+        // release the ponder wait below, which must only be released by
+        // `ponderhit` or by a real `stop` from the GUI.
+        let helper_stop = Arc::new(AtomicBool::new(false));
+
         let helpers: Vec<thread::JoinHandle<search::SearchResult>> = (1..threads)
             .map(|i| {
                 let board = board.clone();
                 let limits = limits.clone();
-                let stop_flag = Arc::clone(&signals.stop);
+                let stop_flag = Arc::clone(&helper_stop);
                 let tt = Arc::clone(&tt);
                 let game_history = game_history.clone();
+                let shared_nodes = Arc::clone(&shared_nodes);
                 let role = search::SearchRole { start_depth: 1 + (i as u32 % 2), bump_generation: false };
-                thread::spawn(move || search::search_inner(&board, limits, &stop_flag, &tt, &game_history, role, |_, _| {}))
+                thread::spawn(move || {
+                    let shared = search::SharedSearchState { stop: &stop_flag, tt: &tt, nodes: &shared_nodes };
+                    search::search_inner(&board, limits, &shared, &game_history, role, |_, _| {})
+                })
             })
             .collect();
 
-        let main_result = search::search(&board, limits, &signals.stop, &tt, &game_history, |res, elapsed| {
-            print_info(&mut output, res, elapsed);
+        let main_role = search::SearchRole { start_depth: 1, bump_generation: false };
+        let main_shared = search::SharedSearchState { stop: &signals.stop, tt: &tt, nodes: &shared_nodes };
+        let main_result = search::search_inner(&board, limits, &main_shared, &game_history, main_role, |res, elapsed| {
+            print_info(&mut output, res, elapsed)
         });
+
+        // The main thread is done, so nothing a helper still finds can
+        // change the move being played. Without this, `bestmove` waited for
+        // the slowest helper to exhaust its *own* budget — time off the
+        // game clock for a result that is thrown away. (Helpers also abort
+        // on a real `stop`, indirectly: it ends the main search first.)
+        helper_stop.store(true, Ordering::Relaxed);
 
         let mut best = main_result.clone();
         let mut total_nodes = main_result.nodes;
         for handle in helpers {
             if let Ok(result) = handle.join() {
                 total_nodes += result.nodes;
-                if result.depth > best.depth {
+                // `complete`: a helper whose *first* iteration was cut short
+                // still reports a depth, and it could be a deeper one than
+                // the main thread finished — but that result summarises an
+                // unfinished search, so it must not win the comparison.
+                if result.complete && result.depth > best.depth {
                     best = result;
                 }
             }

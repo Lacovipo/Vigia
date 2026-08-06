@@ -185,26 +185,12 @@ impl Drop for EngineProcess {
     }
 }
 
-/// Same conservative rule `search.rs` uses internally: no pawns, rooks or
-/// queens on the board for either side, and at most one minor piece total.
-/// Duplicated here (rather than exposed from `search`, which keeps it
-/// private) because it's ten lines and this harness has no other reason to
-/// depend on search internals.
+/// The one dead-material rule in the project, now shared with the engine's
+/// own evaluation and search instead of being a third near-identical copy
+/// (which is how the three of them came to disagree about K+B vs K+B on
+/// same-colored squares).
 fn is_insufficient_material(board: &Board) -> bool {
-    use vigia::types::PieceType;
-    for color in [Color::White, Color::Black] {
-        if !board.pieces_of(color, PieceType::Pawn).is_empty()
-            || !board.pieces_of(color, PieceType::Rook).is_empty()
-            || !board.pieces_of(color, PieceType::Queen).is_empty()
-        {
-            return false;
-        }
-    }
-    let minors = board.pieces_of(Color::White, PieceType::Knight).count()
-        + board.pieces_of(Color::White, PieceType::Bishop).count()
-        + board.pieces_of(Color::Black, PieceType::Knight).count()
-        + board.pieces_of(Color::Black, PieceType::Bishop).count();
-    minors <= 1
+    vigia::eval::is_insufficient_material(board)
 }
 
 /// Plays one game to completion. `white`/`black` are already-spawned engine

@@ -53,6 +53,73 @@ enum Transition {
     Next { wk: Square, bk: Square, pawn: Square, strong_to_move: bool },
 }
 
+/// Files/ranks a slider standing on `from` bears on, given that the only
+/// possible blocker on the board is `blocker` (after a promotion the
+/// position is exactly three pieces: both kings and the new queen/rook, and
+/// the weak king — the piece being tested against — is never its own
+/// blocker). `as_queen` adds the diagonals to the rook's lines.
+fn promoted_piece_attacks(from: Square, to: Square, blocker: Square, as_queen: bool) -> bool {
+    let df = to.file() as i32 - from.file() as i32;
+    let dr = to.rank() as i32 - from.rank() as i32;
+    if df == 0 && dr == 0 {
+        return false;
+    }
+    if !(df == 0 || dr == 0 || (as_queen && df.abs() == dr.abs())) {
+        return false;
+    }
+    let steps = df.abs().max(dr.abs());
+    let (step_f, step_r) = (df.signum(), dr.signum());
+    for i in 1..steps {
+        let between = Square::new(
+            (from.file() as i32 + step_f * i) as u8,
+            (from.rank() as i32 + step_r * i) as u8,
+        );
+        if between == blocker {
+            return false;
+        }
+    }
+    true
+}
+
+/// Is the weak king stalemated right after the pawn promoted on `promo` to a
+/// queen (`as_queen`) or a rook? Only ever asked about promotions the weak
+/// king cannot simply capture, so `promo` is never a legal destination for
+/// it. Being *in check* is not stalemate — that branch is either mate or an
+/// ordinary won position, both wins for the strong side.
+fn promotion_is_stalemate(wk: Square, bk: Square, promo: Square, as_queen: bool) -> bool {
+    let attacked = |sq: Square| {
+        chebyshev(sq, wk) <= 1 || promoted_piece_attacks(promo, sq, wk, as_queen)
+    };
+    if attacked(bk) {
+        return false;
+    }
+    king_neighbors(bk).all(|dest| dest == promo || attacked(dest))
+}
+
+/// Outcome of pushing the pawn onto its promotion square. Promoting is *not*
+/// automatically a win, which is the one thing this table used to get wrong:
+///
+/// - If the weak king stands next to the promotion square and the strong
+///   king does not defend it, the brand-new queen is captured on the spot
+///   and the game collapses to bare kings — a dead draw. This is the same
+///   condition Stockfish encodes in its own KPK bitbase.
+/// - In a handful of coordinates the promotion stalemates the weak king. The
+///   strong side chooses the promotion piece, so those are only drawn when a
+///   rook (which covers strictly fewer squares than a queen, yet still mates
+///   on its own) stalemates too.
+///
+/// Everything else is K+Q vs K or K+R vs K with the new piece safe, i.e. a
+/// forced mate, so `Win` is exact rather than optimistic.
+fn promotion_outcome(wk: Square, bk: Square, promo: Square) -> Transition {
+    if chebyshev(bk, promo) <= 1 && chebyshev(wk, promo) > 1 {
+        return Transition::Draw; // ...Kxq, king versus king
+    }
+    if promotion_is_stalemate(wk, bk, promo, true) && promotion_is_stalemate(wk, bk, promo, false) {
+        return Transition::Draw;
+    }
+    Transition::Win
+}
+
 fn chebyshev(a: Square, b: Square) -> i32 {
     let file_dist = (a.file() as i32 - b.file() as i32).abs();
     let rank_dist = (a.rank() as i32 - b.rank() as i32).abs();
@@ -135,8 +202,8 @@ fn is_valid(wk: Square, bk: Square, pawn: Square, strong_to_move: bool) -> bool 
 /// come within a chebyshev distance of 1 of the strong king by definition
 /// of a valid state), so at least one king move always survives even in a
 /// corner, regardless of what the single pawn is doing.
-fn strong_transitions(wk: Square, bk: Square, pawn: Square) -> Vec<Transition> {
-    let mut moves = Vec::with_capacity(8);
+fn strong_transitions(wk: Square, bk: Square, pawn: Square, moves: &mut Vec<Transition>) {
+    moves.clear();
     for dest in king_neighbors(wk) {
         if dest == pawn || chebyshev(dest, bk) <= 1 {
             continue;
@@ -149,7 +216,7 @@ fn strong_transitions(wk: Square, bk: Square, pawn: Square) -> Vec<Transition> {
         let single = Square::new(file, rank + 1);
         if single != wk && single != bk {
             if single.rank() == 7 {
-                moves.push(Transition::Win);
+                moves.push(promotion_outcome(wk, bk, single));
             } else {
                 moves.push(Transition::Next { wk, bk, pawn: single, strong_to_move: false });
             }
@@ -161,12 +228,11 @@ fn strong_transitions(wk: Square, bk: Square, pawn: Square) -> Vec<Transition> {
             }
         }
     }
-    moves
 }
 
 /// Candidate moves for the weak side (king only) at `(wk, bk, pawn)`.
-fn weak_transitions(wk: Square, bk: Square, pawn: Square) -> Vec<Transition> {
-    let mut moves = Vec::with_capacity(8);
+fn weak_transitions(wk: Square, bk: Square, pawn: Square, moves: &mut Vec<Transition>) {
+    moves.clear();
     for dest in king_neighbors(bk) {
         if chebyshev(dest, wk) <= 1 {
             continue;
@@ -180,7 +246,6 @@ fn weak_transitions(wk: Square, bk: Square, pawn: Square) -> Vec<Transition> {
         }
         moves.push(Transition::Next { wk, bk: dest, pawn, strong_to_move: true });
     }
-    moves
 }
 
 /// Resolves `moves` against the current `status` table. Returns
@@ -240,6 +305,11 @@ fn classify(moves: &[Transition], status: &[Status], strong_to_move: bool) -> St
 /// easier-to-verify sweep is the right trade-off here.
 fn build_table() -> Vec<bool> {
     let mut status = vec![Status::Unknown; TABLE_SIZE];
+    // One buffer reused for every state instead of a fresh `Vec` per state
+    // per sweep: the table is rebuilt once per process but the sweep visits
+    // ~200,000 states several times over, and those allocations were most of
+    // the ~100 ms the first `evaluate()` of a pawn ending used to cost.
+    let mut moves: Vec<Transition> = Vec::with_capacity(9);
 
     // Base pass: classify every weak-to-move state with zero legal moves.
     for pawn_idx in 0..PAWN_SQUARES {
@@ -251,7 +321,8 @@ fn build_table() -> Vec<bool> {
                 if !is_valid(wk, bk, pawn, false) {
                     continue;
                 }
-                if weak_transitions(wk, bk, pawn).is_empty() {
+                weak_transitions(wk, bk, pawn, &mut moves);
+                if moves.is_empty() {
                     let idx = state_index(wk, bk, pawn, false);
                     status[idx] = if pawn_attacks_contains(pawn, bk) { Status::Win } else { Status::Draw };
                 }
@@ -275,11 +346,11 @@ fn build_table() -> Vec<bool> {
                         if status[idx] != Status::Unknown {
                             continue;
                         }
-                        let moves = if strong_to_move {
-                            strong_transitions(wk, bk, pawn)
+                        if strong_to_move {
+                            strong_transitions(wk, bk, pawn, &mut moves);
                         } else {
-                            weak_transitions(wk, bk, pawn)
-                        };
+                            weak_transitions(wk, bk, pawn, &mut moves);
+                        }
                         let result = classify(&moves, &status, strong_to_move);
                         if result != Status::Unknown {
                             status[idx] = result;
@@ -301,6 +372,17 @@ static TABLE: OnceLock<Vec<bool>> = OnceLock::new();
 
 fn table() -> &'static Vec<bool> {
     TABLE.get_or_init(build_table)
+}
+
+/// Builds the table now, if it isn't built already. Exists so the engine can
+/// pay that one-off cost during `isready`/startup instead of inside the
+/// first search that happens to reach a pawn ending: `OnceLock::get_or_init`
+/// can't be interrupted by the `stop` flag or the time budget, so a cold
+/// `go movetime 1` in a K+P vs K position used to overshoot its deadline by
+/// two orders of magnitude (and, with Lazy SMP, block every helper thread on
+/// the same initialization).
+pub fn init() {
+    table();
 }
 
 /// Exact outcome of the King+Pawn vs King endgame where `pawn_color` owns
@@ -325,6 +407,14 @@ pub fn probe(pawn_color: Color, strong_king: Square, weak_king: Square, pawn: Sq
         wk = flip_h(wk);
         bk = flip_h(bk);
         pawn = flip_h(pawn);
+    }
+
+    // Defensive: every caller reaching this from a legally parsed position
+    // has a pawn on ranks 2-7 by construction (`Board::from_fen` rejects
+    // pawns on the back ranks), but a search-facing oracle must degrade to
+    // "draw" rather than index out of bounds if that ever stops holding.
+    if !(1..=6).contains(&pawn.rank()) {
+        return Outcome::Draw;
     }
 
     let strong_to_move = side_to_move == pawn_color;
@@ -374,6 +464,74 @@ mod tests {
         let white_pawn = probe(Color::White, Square::new(4, 1), Square::new(0, 0), Square::new(4, 6), Color::White);
         let black_pawn = probe(Color::Black, Square::new(4, 6), Square::new(0, 7), Square::new(4, 1), Color::Black);
         assert_eq!(white_pawn, black_pawn);
+    }
+
+    #[test]
+    fn the_queening_square_can_be_taken_back_immediately() {
+        // White Ka1, Pb5; Black Ke5 to move... no: White to move. 1.b6 Kd6
+        // 2.b7 Kc7 3.b8=Q+ Kxb8 and it is bare kings. The table used to call
+        // every promotion a win outright and scored this +2044.
+        let outcome = probe(
+            Color::White,
+            Square::new(0, 0),          // Ka1
+            Square::new(4, 4),          // Ke5
+            Square::new(1, 4),          // Pb5
+            Color::White,
+        );
+        assert_eq!(outcome, Outcome::Draw);
+    }
+
+    #[test]
+    fn the_wrong_rook_pawn_is_still_a_draw_with_the_defender_far_away() {
+        // White Ka1, Pa2; Black Kg2 to move. The black king walks to b7/a8
+        // and the rook pawn can never queen: a textbook draw the promotion
+        // bug used to score around -2050 for the defender.
+        let outcome = probe(
+            Color::White,
+            Square::new(0, 0),          // Ka1
+            Square::new(6, 1),          // Kg2
+            Square::new(0, 1),          // Pa2
+            Color::Black,
+        );
+        assert_eq!(outcome, Outcome::Draw);
+    }
+
+    #[test]
+    fn a_promotion_the_defender_cannot_reach_is_still_a_win() {
+        // Same pawn one step from queening, but the defending king is on the
+        // far side of the board: nothing stops the new queen, so the
+        // "promotion is not automatically a win" fix must not overreach.
+        let outcome = probe(
+            Color::White,
+            Square::new(4, 1),          // Ke2
+            Square::new(7, 0),          // Kh1
+            Square::new(0, 6),          // Pa7
+            Color::White,
+        );
+        assert_eq!(outcome, Outcome::Win);
+    }
+
+    #[test]
+    fn a_defended_queening_square_is_a_win_even_next_to_the_defender() {
+        // White Kb6, Pa7; Black Kb8... is adjacent to a8 but a8 is defended
+        // by the white king, so a8=Q is check and cannot be answered by
+        // Kxa8. Use Kc8 (the b8 coordinate has the kings adjacent).
+        let outcome = probe(
+            Color::White,
+            Square::new(1, 6),          // Kb7 defends a8
+            Square::new(3, 7),          // Kd8
+            Square::new(0, 6),          // Pa7
+            Color::White,
+        );
+        assert_eq!(outcome, Outcome::Win);
+    }
+
+    #[test]
+    fn probing_a_pawn_off_its_legal_ranks_degrades_to_a_draw() {
+        // Not reachable from a parsed position (the FEN parser rejects pawns
+        // on ranks 1 and 8), but the oracle must never index out of bounds.
+        let outcome = probe(Color::White, Square::new(4, 1), Square::new(0, 0), Square::new(4, 7), Color::White);
+        assert_eq!(outcome, Outcome::Draw);
     }
 
     #[test]

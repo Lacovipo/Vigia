@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -136,6 +136,20 @@ const CORRECTION_MAX: i32 = 300;
 /// weight cap out of the total), since they're more trustworthy.
 const CORRECTION_WEIGHT_SCALE: i32 = 32;
 const CORRECTION_WEIGHT_CAP: i32 = 16;
+/// How often the node budget (`go nodes`) is reconciled against the counter
+/// shared by every Lazy SMP thread. Much finer than the 2048-node poll used
+/// for the clock and the `stop` flag, because a node budget is usually a
+/// measurement tool where overshooting by thousands of nodes defeats the
+/// purpose — and because each thread used to get the *whole* budget to
+/// itself, so `go nodes N` with 4 threads really searched about `4N`.
+const NODE_BUDGET_CHECK_INTERVAL: u64 = 64;
+/// General-purpose poll interval for the clock and the `stop` flag.
+const STOP_CHECK_INTERVAL: u64 = 2048;
+/// Cap on how far a chain of check extensions may push past the nominal
+/// depth, as a multiple of the iteration's own depth. Without it a long
+/// series of forced checks can extend all the way to `MAX_PLY` with no
+/// relation at all to the depth that was asked for.
+const CHECK_EXTENSION_PLY_FACTOR: u32 = 2;
 
 #[derive(Clone, Default)]
 pub struct SearchLimits {
@@ -166,6 +180,12 @@ pub struct SearchLimits {
     /// `bestmove` timing is an orchestration concern the search algorithm
     /// itself doesn't need to know about.
     pub ponder: bool,
+    /// Break near-exact ties among root moves at random instead of always
+    /// playing the first one found (UCI option `Variety`, off by default).
+    /// Off is the stronger and the *measurable* setting: with it on, node
+    /// counts and match results stop being reproducible for the same
+    /// position and depth, which is exactly what a strength harness needs.
+    pub variety: bool,
     /// UCI `go mate N`: look for a forced mate in at most N moves. Sets the
     /// depth budget to `2*N` plies when no explicit `depth` was given —
     /// enough to see any mate in N, which takes `2*N - 1` plies with the
@@ -183,10 +203,17 @@ pub struct SearchResult {
     pub nodes: u64,
     /// The principal variation, root move first, reconstructed by walking
     /// the TT's stored best move from each position along the line. May be
-    /// shorter than `depth` (a TT slot along the line got overwritten by
-    /// an unrelated position, or a repetition/cycle was hit) but always
-    /// starts with `best_move` when `best_move` is `Some`.
+    /// shorter than `depth` (quiescence ends the line at the horizon) but
+    /// always starts with `best_move` when `best_move` is `Some`.
     pub pv: Vec<Move>,
+    /// False when the iteration that produced this was cut short. Only ever
+    /// possible for the very first iteration a thread runs — later ones are
+    /// discarded outright in favour of the previous complete result — but
+    /// that one still has to be published, because the caller needs *some*
+    /// legal move to play. Its `score`, `depth` and `pv` describe an
+    /// unfinished search and must not be compared against another thread's
+    /// completed one.
+    pub complete: bool,
 }
 
 /// Which side of the true score a stored evaluation represents, relative to
@@ -210,6 +237,31 @@ struct TtEntry {
     /// left over from several moves ago apart from a deep entry from its
     /// own, current search.
     generation: u8,
+    /// The fifty-move counter the score was computed under, saturated at
+    /// 100. The Zobrist key deliberately excludes it (two positions that
+    /// differ only in this counter *are* the same position for repetition
+    /// purposes), but the same placement is worth something quite different
+    /// at clock 0 and at clock 99, so a stored score can only be reused as
+    /// a bound when the counter cannot change the verdict — see
+    /// `tt_score_is_clock_compatible`.
+    halfmove_clock: u8,
+}
+
+/// Can the fifty-move rule fire anywhere inside a subtree of `depth` plies
+/// starting from this counter? The `2 *` allows for extensions and the
+/// constant for a quiescence tail; both are deliberately generous, since
+/// being wrong here means reusing a score that the rule invalidated.
+fn fifty_move_rule_in_reach(clock: u32, depth: u8) -> bool {
+    clock + 2 * depth as u32 + 8 >= 100
+}
+
+/// Whether `entry`'s score may be used as a bound for a position whose
+/// fifty-move counter is `board_clock`. Same counter is always fine; a
+/// different one only when the rule is out of reach for both.
+fn tt_score_is_clock_compatible(entry: &TtEntry, board_clock: u16) -> bool {
+    let now = u32::from(board_clock).min(100);
+    let stored = u32::from(entry.halfmove_clock);
+    now == stored || (!fifty_move_rule_in_reach(now, entry.depth) && !fifty_move_rule_in_reach(stored, entry.depth))
 }
 
 /// Fixed-size hash table of positions seen during search, keyed by the
@@ -279,7 +331,7 @@ impl TranspositionTable {
         self.entries[(key & self.mask) as usize].filter(|e| e.key == key)
     }
 
-    fn store(&mut self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>) {
+    fn store(&mut self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>, halfmove_clock: u8) {
         let generation = self.generation;
         let slot = &mut self.entries[(key & self.mask) as usize];
         let should_replace = match slot {
@@ -287,33 +339,9 @@ impl TranspositionTable {
             None => true,
         };
         if should_replace {
-            *slot = Some(TtEntry { key, depth, score, flag, best_move, generation });
+            *slot = Some(TtEntry { key, depth, score, flag, best_move, generation, halfmove_clock });
         }
     }
-}
-
-/// Reconstructs the principal variation by repeatedly following the TT's
-/// stored best move from `board` onward. Each step re-validates the move
-/// against the actual legal move list (a stale/colliding TT slot could
-/// otherwise hand back a move that no longer applies) and a cycle guard
-/// stops the walk if it ever revisits a hash, so a corrupted or
-/// transposition-heavy table can only shorten the PV, never loop forever
-/// or fabricate an illegal line.
-fn extract_pv(tt: &Tt, board: &Board, max_len: u32) -> Vec<Move> {
-    let mut pv = Vec::new();
-    let mut current = board.clone();
-    let mut seen_hashes = std::collections::HashSet::new();
-    while (pv.len() as u32) < max_len && seen_hashes.insert(current.hash) {
-        let Some(mv) = tt.probe(current.hash).and_then(|e| e.best_move) else {
-            break;
-        };
-        if !movegen::legal_moves_scratch(&mut current).contains(&mv) {
-            break;
-        }
-        current.make_move(mv);
-        pv.push(mv);
-    }
-    pv
 }
 
 /// Transposition table shared across an entire game, not just a single
@@ -364,9 +392,23 @@ impl Tt {
     /// Locks just long enough to write one slot — see `probe` above for why
     /// per-call locking (not one lock for the whole search) matters once
     /// more than one thread shares this table.
-    fn store(&self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>) {
-        self.0.lock().unwrap().store(key, depth, score, flag, best_move);
+    fn store(&self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>, halfmove_clock: u8) {
+        self.0.lock().unwrap().store(key, depth, score, flag, best_move, halfmove_clock);
     }
+
+    /// Marks the start of a real `go`. Public to the crate so the Lazy SMP
+    /// coordinator in `uci.rs` can bump the generation *before* launching
+    /// any worker: doing it from inside the main search thread let a helper
+    /// that started first write entries under the previous generation, which
+    /// the bump then immediately marked stale.
+    pub(crate) fn begin_search(&self) {
+        self.new_search();
+    }
+}
+
+/// The fifty-move counter as stored in a TT entry.
+fn tt_clock(board: &Board) -> u8 {
+    u16::min(board.halfmove_clock, 100) as u8
 }
 
 impl Default for Tt {
@@ -414,7 +456,24 @@ struct Context<'a> {
     /// still be searched normally.
     search_moves: Option<Vec<Move>>,
     path: Vec<u64>,
+    /// Index into `path` before which repetition detection must not look.
+    /// Raised past the current path length while searching below a null
+    /// move: the positions in that subtree are not reachable by legal play
+    /// from anything recorded earlier, so matching them against real
+    /// positions produces phantom repetitions (two consecutive null moves
+    /// reproduce the hash from two plies up exactly, which used to score a
+    /// null-move verification as an immediate draw).
+    path_start: usize,
     aborted: bool,
+    /// Node counter shared by every Lazy SMP thread, used only to enforce
+    /// `go nodes` against one global budget instead of one per thread.
+    shared_nodes: &'a AtomicU64,
+    /// How much of `nodes` has already been added to `shared_nodes`.
+    published_nodes: u64,
+    /// Depth of the iteration currently running, for the check-extension cap.
+    root_depth: u32,
+    /// UCI option `Variety` — see `SearchLimits::variety`.
+    variety: bool,
     /// Shared, not exclusively borrowed: with Lazy SMP (Fase 4), several
     /// threads each hold their own `Context` but the same `Tt`, locking it
     /// only for the duration of each individual `probe`/`store` call rather
@@ -442,6 +501,20 @@ struct Context<'a> {
     /// Learned static-eval correction per pawn-structure hash bucket. See
     /// `CORRECTION_HISTORY_SIZE` and `Context::correction_score`.
     pawn_correction: Vec<i32>,
+    /// True at plies reached by a null move, so the child can refuse to play
+    /// a second one (see `path_start`).
+    null_at_ply: Vec<bool>,
+    /// Triangular principal-variation table: the line from ply `p` onward
+    /// lives in `pv[p * MAX_PLY ..][.. pv_len[p]]`. Propagated upward as the
+    /// search runs instead of being reconstructed afterwards by walking the
+    /// TT, which could (and did) print a line that contradicted the score it
+    /// was reported with — a shared table under Lazy SMP has no obligation
+    /// to still hold the entries the finished iteration passed through.
+    pv: Vec<Move>,
+    pv_len: Vec<usize>,
+    /// Scratch buffer reused by `order_moves_full`, so ordering a node's
+    /// moves doesn't allocate once per node.
+    order_buffer: Vec<(i32, u16, Move)>,
 }
 
 /// Number of PieceType variants, used to size/index `Context::cont_history`.
@@ -451,11 +524,18 @@ fn cont_history_index(prev_piece: PieceType, prev_to: Square, piece: PieceType, 
     ((prev_piece as usize * 64 + prev_to.0 as usize) * PIECE_TYPE_COUNT + piece as usize) * 64 + to.0 as usize
 }
 
-/// Zobrist hash of just the pawn structure (both colors), used to key the
-/// correction history. Recomputed on demand from the pawn bitboards rather
-/// than maintained incrementally like `Board::hash` — cheap relative to
-/// the rest of a static eval call (at most 16 XORs), and keeps this
-/// search-only concern out of `Board`.
+/// Zobrist hash of just the pawn structure (both colors) *plus the side to
+/// move*, used to key the correction history. Recomputed on demand from the
+/// pawn bitboards rather than maintained incrementally like `Board::hash` —
+/// cheap relative to the rest of a static eval call (at most 16 XORs), and
+/// keeps this search-only concern out of `Board`.
+///
+/// The side to move belongs in the key even though it is not part of the
+/// pawn structure: corrections are learned and consumed in the perspective
+/// of whoever is to move, so a White-to-move node and a Black-to-move node
+/// with the same skeleton would otherwise share a bucket and write
+/// opposite-signed errors into it, cancelling out or actively reinforcing
+/// the error instead of correcting it.
 fn pawn_hash(board: &Board) -> u64 {
     let mut hash = 0u64;
     for sq in board.pieces_of(Color::White, PieceType::Pawn) {
@@ -463,6 +543,9 @@ fn pawn_hash(board: &Board) -> u64 {
     }
     for sq in board.pieces_of(Color::Black, PieceType::Pawn) {
         hash ^= zobrist::piece_square_key(Color::Black, PieceType::Pawn, sq);
+    }
+    if board.side_to_move == Color::Black {
+        hash ^= zobrist::side_to_move_key();
     }
     hash
 }
@@ -472,7 +555,18 @@ impl Context<'_> {
         if self.aborted {
             return true;
         }
-        if self.nodes.is_multiple_of(2048) {
+        if let Some(max_nodes) = self.max_nodes {
+            if self.nodes.is_multiple_of(NODE_BUDGET_CHECK_INTERVAL) {
+                let delta = self.nodes - self.published_nodes;
+                let total = self.shared_nodes.fetch_add(delta, Ordering::Relaxed) + delta;
+                self.published_nodes = self.nodes;
+                if total >= max_nodes {
+                    self.aborted = true;
+                    return true;
+                }
+            }
+        }
+        if self.nodes.is_multiple_of(STOP_CHECK_INTERVAL) {
             if self.stop.load(Ordering::Relaxed) {
                 self.aborted = true;
                 return true;
@@ -483,14 +577,35 @@ impl Context<'_> {
                     return true;
                 }
             }
-            if let Some(max_nodes) = self.max_nodes {
-                if self.nodes >= max_nodes {
-                    self.aborted = true;
-                    return true;
-                }
-            }
         }
         false
+    }
+
+    /// Resets the PV line recorded at `ply`. Called on entry to every node,
+    /// so a node that returns early (TT cutoff, draw, quiescence) leaves an
+    /// empty line behind rather than a stale sibling's.
+    fn clear_pv(&mut self, ply: u32) {
+        self.pv_len[ply as usize] = 0;
+    }
+
+    /// Records `mv` followed by whatever line the child at `ply + 1` found.
+    fn update_pv(&mut self, ply: u32, mv: Move) {
+        let p = ply as usize;
+        let span = MAX_PLY as usize;
+        let child_len = self.pv_len[p + 1].min(span - 1);
+        let base = p * span;
+        let child_base = (p + 1) * span;
+        self.pv[base] = mv;
+        for i in 0..child_len {
+            self.pv[base + 1 + i] = self.pv[child_base + i];
+        }
+        self.pv_len[p] = child_len + 1;
+    }
+
+    fn pv_line(&self, ply: u32) -> Vec<Move> {
+        let p = ply as usize;
+        let base = p * MAX_PLY as usize;
+        self.pv[base..base + self.pv_len[p]].to_vec()
     }
 
     /// Twofold, not threefold, *by design*: `path` already contains the
@@ -505,8 +620,34 @@ impl Context<'_> {
     /// arbitrates *finished games* with the official threefold rule — that
     /// asymmetry is intentional (heuristic inside the tree, real rule at
     /// the table), not a disagreement to be "fixed".
-    fn is_repetition(&self, hash: u64) -> bool {
-        self.path.iter().filter(|&&h| h == hash).count() >= 2
+    ///
+    /// Scans backwards two plies at a time and only as far as the fifty-move
+    /// counter allows, rather than counting occurrences across the whole
+    /// vector: a position can only repeat one where the same side was to
+    /// move (any other has a different hash anyway), and never across the
+    /// last capture or pawn move, which is exactly what that counter
+    /// measures. That bound is what makes the check affordable in quiescence
+    /// too, where the path used not to be tracked at all — leaving a
+    /// perpetual built out of check evasions invisible.
+    fn is_repetition(&self, hash: u64, halfmove_clock: u16) -> bool {
+        let end = self.path.len();
+        if end < 3 {
+            return false;
+        }
+        let lowest = self.path_start.max(end.saturating_sub(halfmove_clock as usize + 1));
+        let mut i = end - 3;
+        if i < lowest {
+            return false;
+        }
+        loop {
+            if self.path[i] == hash {
+                return true;
+            }
+            if i < lowest + 2 {
+                return false;
+            }
+            i -= 2;
+        }
     }
 
     fn store_killer(&mut self, ply: u32, mv: Move) {
@@ -529,6 +670,15 @@ impl Context<'_> {
 
     fn record_move_played(&mut self, ply: u32, piece: PieceType, to: Square) {
         self.moves_played[ply as usize] = Some((piece, to));
+        self.null_at_ply[ply as usize] = false;
+    }
+
+    /// Marks `ply` as having been reached by a null move: no move was really
+    /// played, so continuation history has no parent move to key on, and the
+    /// child must not try a second null.
+    fn record_null_played(&mut self, ply: u32) {
+        self.moves_played[ply as usize] = None;
+        self.null_at_ply[ply as usize] = true;
     }
 
     fn prev_move_at(&self, ply: u32) -> Option<(PieceType, Square)> {
@@ -625,7 +775,19 @@ pub fn search(
     game_history: &[u64],
     on_iteration: impl FnMut(&SearchResult, Duration),
 ) -> SearchResult {
-    search_inner(board, limits, stop, tt, game_history, SearchRole::MAIN, on_iteration)
+    let shared_nodes = AtomicU64::new(0);
+    let shared = SharedSearchState { stop, tt, nodes: &shared_nodes };
+    search_inner(board, limits, &shared, game_history, SearchRole::MAIN, on_iteration)
+}
+
+/// The state one `go` shares across all of its Lazy SMP threads: the abort
+/// flag they watch, the transposition table they cooperate through, and the
+/// node counter a `go nodes` budget is measured against. Bundled so
+/// `search_inner` takes a handful of arguments rather than a dozen.
+pub(crate) struct SharedSearchState<'a> {
+    pub stop: &'a AtomicBool,
+    pub tt: &'a Tt,
+    pub nodes: &'a AtomicU64,
 }
 
 /// Distinguishes the "main" search thread from a Lazy SMP helper thread
@@ -660,19 +822,23 @@ impl SearchRole {
 pub(crate) fn search_inner(
     board: &Board,
     limits: SearchLimits,
-    stop: &AtomicBool,
-    tt: &Tt,
+    shared: &SharedSearchState,
     game_history: &[u64],
     role: SearchRole,
     mut on_iteration: impl FnMut(&SearchResult, Duration),
 ) -> SearchResult {
+    let SharedSearchState { stop, tt, nodes: shared_nodes } = *shared;
     let start = Instant::now();
     let mut working = board.clone();
     let budget = compute_time_budget(&limits, working.side_to_move, start);
+    // A bare `go nodes N` is a budget just like a clock or `infinite`: it
+    // used to fall through to the six-ply default instead, so `go nodes
+    // 1000000` finished at depth 6 having searched about 4,000 nodes.
+    let unbounded = limits.infinite || budget.is_some() || limits.max_nodes.is_some();
     let max_depth = limits
         .max_depth
         .or(limits.mate_in.map(|n| 2 * n))
-        .unwrap_or(if limits.infinite || budget.is_some() { MAX_PLY } else { 6 })
+        .unwrap_or(if unbounded { MAX_PLY } else { 6 })
         .clamp(1, MAX_PLY);
     let start_depth = role.start_depth.min(max_depth);
 
@@ -690,7 +856,12 @@ pub(crate) fn search_inner(
         max_nodes: limits.max_nodes,
         search_moves: limits.search_moves.clone(),
         path,
+        path_start: 0,
         aborted: false,
+        shared_nodes,
+        published_nodes: 0,
+        root_depth: start_depth,
+        variety: limits.variety,
         tt,
         killers: vec![[None, None]; MAX_PLY as usize],
         history: [[0; 64]; 64],
@@ -698,6 +869,10 @@ pub(crate) fn search_inner(
         moves_played: vec![None; (MAX_PLY + 1) as usize],
         cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
         pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
+        null_at_ply: vec![false; (MAX_PLY + 1) as usize],
+        pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
+        pv_len: vec![0; (MAX_PLY + 2) as usize],
+        order_buffer: Vec::with_capacity(64),
     };
 
     let mut result = SearchResult::default();
@@ -715,19 +890,20 @@ pub(crate) fn search_inner(
             }
         }
 
+        ctx.root_depth = depth;
         let (score, best_move) = search_root_with_aspiration(&mut working, depth, result.score, &mut ctx);
 
         if best_move.is_none() {
             // No legal moves at the root at all: checkmate or stalemate.
-            result = SearchResult { best_move: None, score, depth, nodes: ctx.nodes, pv: Vec::new() };
+            result = SearchResult { best_move: None, score, depth, nodes: ctx.nodes, pv: Vec::new(), complete: true };
             break;
         }
         if ctx.aborted && depth > start_depth {
             break; // discard the unfinished iteration, keep the previous one
         }
 
-        let pv = extract_pv(ctx.tt, &working, depth);
-        result = SearchResult { best_move, score, depth, nodes: ctx.nodes, pv };
+        let pv = ctx.pv_line(0);
+        result = SearchResult { best_move, score, depth, nodes: ctx.nodes, pv, complete: !ctx.aborted };
         on_iteration(&result, start.elapsed());
 
         if ctx.aborted || score.abs() >= MATE_THRESHOLD {
@@ -771,11 +947,14 @@ fn search_root_with_aspiration(board: &mut Board, depth: u32, prev_score: i32, c
 }
 
 fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &mut Context) -> (i32, Option<Move>) {
+    ctx.clear_pv(0);
     let mut moves = movegen::legal_moves_scratch(board);
     if let Some(restrict_to) = &ctx.search_moves {
-        // If none of the requested moves are actually legal here, fall
-        // back to the full legal list rather than reporting a spurious
-        // checkmate/stalemate below.
+        // `parse_go_limits` only ever produces a non-empty list (a
+        // `searchmoves` naming nothing legal is dropped there rather than
+        // silently searching everything), so this filter always leaves at
+        // least the requested moves; the emptiness guard stays as a
+        // belt-and-braces against a caller building limits by hand.
         let restricted: Vec<Move> = moves.iter().copied().filter(|m| restrict_to.contains(m)).collect();
         if !restricted.is_empty() {
             moves = restricted;
@@ -828,12 +1007,15 @@ fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &
         ctx.path.pop();
         board.unmake_move(mv, undo);
 
-        if is_exact {
+        if is_exact && ctx.variety {
             exact_candidates.push((mv, score));
         }
         if score > best_score {
             best_score = score;
             best_move = mv;
+            if !ctx.aborted {
+                ctx.update_pv(0, mv);
+            }
         }
         if best_score > alpha {
             alpha = best_score;
@@ -842,15 +1024,12 @@ fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &
         if ctx.aborted {
             break;
         }
-    }
-
-    let near_best: Vec<Move> = exact_candidates
-        .into_iter()
-        .filter(|&(_, score)| best_score - score <= ROOT_TIE_EPSILON)
-        .map(|(mv, _)| mv)
-        .collect();
-    if near_best.len() > 1 {
-        best_move = near_best[random_index(near_best.len())];
+        // Fail-high against the aspiration window: the caller is going to
+        // widen and search this depth again, so reading out the remaining
+        // root moves under a window we already know is wrong is pure cost.
+        if alpha >= beta {
+            break;
+        }
     }
 
     if !ctx.aborted {
@@ -866,10 +1045,42 @@ fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &
         } else {
             TtFlag::Exact
         };
-        ctx.tt.store(board.hash, depth as u8, score_to_tt(best_score, 0), flag, Some(best_move));
+        // Stored before the variety pick below, deliberately: the table (and
+        // therefore the next iteration's move ordering, and every Lazy SMP
+        // sibling) must record the move that actually earned `best_score`,
+        // not a near-equal alternative chosen for cosmetic variety.
+        ctx.tt.store(board.hash, depth as u8, score_to_tt(best_score, 0), flag, Some(best_move), tt_clock(board));
+    }
+
+    if ctx.variety {
+        if let Some(picked) = pick_near_best(&exact_candidates, best_score) {
+            if picked != best_move {
+                best_move = picked;
+                // The propagated line belongs to the move that was actually
+                // best; report only the move being played rather than a PV
+                // that starts with a different move than `bestmove`.
+                ctx.pv_len[0] = 1;
+                ctx.pv[0] = picked;
+            }
+        }
     }
 
     (best_score, Some(best_move))
+}
+
+/// Picks at random among the root moves whose genuine (full-window) score is
+/// within `ROOT_TIE_EPSILON` of the best, or `None` when fewer than two
+/// qualify and there is nothing to choose between. Only ever called with the
+/// `Variety` option on; the default is to play the best move every time,
+/// which is both stronger and the only way node counts and match results
+/// stay reproducible.
+fn pick_near_best(candidates: &[(Move, i32)], best_score: i32) -> Option<Move> {
+    let near_best: Vec<Move> = candidates
+        .iter()
+        .filter(|&&(_, score)| best_score - score <= ROOT_TIE_EPSILON)
+        .map(|&(mv, _)| mv)
+        .collect();
+    (near_best.len() > 1).then(|| near_best[random_index(near_best.len())])
 }
 
 /// Tiny, dependency-free PRNG (seeded once from the system clock, stepped
@@ -932,16 +1143,17 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         return 0;
     }
 
-    if board.halfmove_clock >= 100 || ctx.is_repetition(board.hash) || is_insufficient_material(board) {
-        return 0;
-    }
-
     // Check extensions (below) let a single line of forced checks push ply
     // past what `depth` alone would predict; bail out to a static eval
     // rather than recurse further, which both bounds worst-case recursion
     // and keeps `ctx.killers_at(ply)` in bounds (it's sized to MAX_PLY).
     if ply >= MAX_PLY {
         return eval::evaluate_relative(board);
+    }
+    ctx.clear_pv(ply);
+
+    if let Some(score) = terminal_draw_score(board, ply, ctx) {
+        return score;
     }
 
     let alpha_orig = alpha;
@@ -950,11 +1162,19 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // — including the very move being excluded — so it can't be used as a
     // cutoff for this restricted search. `tt_move` (and the entry, for the
     // singular-extension check below) are still read normally either way.
+    let is_pv_node = beta > alpha + 1;
     let tt_entry = ctx.tt.probe(board.hash);
     let tt_move = tt_entry.and_then(|e| e.best_move);
-    if excluded.is_none() {
+    // Never cut off on a stored score inside the principal variation. The
+    // score would be right, but the line would end there: the PV is
+    // propagated as the search runs now, and a node that returns without
+    // searching a move has no line to hand its parent. (This is also the
+    // standard treatment — a PV node is worth searching out properly.)
+    if excluded.is_none() && !is_pv_node {
         if let Some(entry) = tt_entry {
-            if entry.depth as u32 >= depth {
+            // The move is always reusable for ordering; only the *score* is
+            // gated on the fifty-move counter being compatible.
+            if entry.depth as u32 >= depth && tt_score_is_clock_compatible(&entry, board.halfmove_clock) {
                 let score = score_from_tt(entry.score, ply);
                 match entry.flag {
                     TtFlag::Exact => return score,
@@ -977,7 +1197,11 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     }
 
     if depth == 0 {
-        return quiescence(board, alpha, beta, ply, ctx);
+        // `quiescence_inner`, not `quiescence`: this node has already been
+        // counted above, and going through the counting wrapper made every
+        // frontier node show up twice in `nodes`/`nps` and in the `go nodes`
+        // budget.
+        return quiescence_inner(board, alpha, beta, ply, ctx);
     }
 
     let in_check = movegen::is_in_check(board, board.side_to_move);
@@ -1027,12 +1251,15 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // Reverse futility pruning (a.k.a. static null-move pruning): if the
     // static eval already beats beta by more than a depth-scaled margin,
     // assume a real search would too and cut here without exploring any
-    // moves at all. The margin shrinks by one depth's worth when the
-    // position isn't improving, since a stagnant/worsening eval is a
-    // weaker signal that the true score is really this high.
+    // moves at all. The margin is one depth's worth *smaller* when the
+    // position is improving: a rising eval makes it likelier that a real
+    // search would confirm the cutoff, so less evidence is demanded. It
+    // used to be the other way round, which made the cut easier precisely
+    // when the signal was weakest (and, at depth 1 without improvement,
+    // demanded no margin at all).
     if let Some(se) = static_eval {
         if depth <= RFP_MAX_DEPTH && beta < MATE_THRESHOLD {
-            let margin = RFP_MARGIN_PER_DEPTH * (depth as i32 - if improving { 0 } else { 1 }).max(0);
+            let margin = RFP_MARGIN_PER_DEPTH * (depth as i32 - if improving { 1 } else { 0 }).max(0);
             if se - margin >= beta {
                 return se;
             }
@@ -1050,7 +1277,14 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // far above beta the eval sits — the flat R=2 this replaces was the
     // single most conservative pruning setting left in the engine, and the
     // dynamic form is unanimous across the reference engines surveyed.
+    // `!ctx.null_at_ply[ply]`: never two nulls in a row. Two consecutive
+    // passes reproduce the hash from two plies up exactly (the side-to-move
+    // key cancels out), so with both pushed onto `path` the verification
+    // search used to see a repetition and score itself as a draw. The tempo
+    // term breaks the antisymmetry that would otherwise make the two null
+    // conditions mutually exclusive, so this really can happen.
     if !in_check
+        && !ctx.null_at_ply[ply as usize]
         && depth >= NULL_MOVE_MIN_DEPTH
         && beta < MATE_THRESHOLD
         && static_eval.is_some_and(|se| se >= beta)
@@ -1059,9 +1293,14 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         let se = static_eval.expect("guarded by is_some_and above");
         let reduction = NULL_MOVE_REDUCTION + depth / 3 + (((se - beta) / 200) as u32).min(3);
         let undo = board.make_null_move();
-        ctx.path.push(board.hash);
+        // Nothing below a null move is reachable by legal play from the
+        // positions recorded so far, so the repetition window restarts here
+        // and the artificial position itself is never recorded at all.
+        let prev_path_start = ctx.path_start;
+        ctx.path_start = ctx.path.len();
+        ctx.record_null_played(ply + 1);
         let score = -negamax(board, depth.saturating_sub(1 + reduction), ply + 1, -beta, -beta + 1, ctx, None);
-        ctx.path.pop();
+        ctx.path_start = prev_path_start;
         board.unmake_null_move(undo);
         if !ctx.aborted && score >= beta {
             return beta;
@@ -1089,7 +1328,10 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // Check extension: a position where the side to move is in check is
     // forcing (few replies, tactics often hiding just beyond the horizon),
     // so search it one ply deeper instead of letting `depth` run out here.
-    let child_depth = depth - 1 + if in_check { 1 } else { 0 };
+    // Capped by ply so a long forced sequence of checks can't keep extending
+    // all the way to `MAX_PLY` with no relation to the depth asked for.
+    let extend_check = in_check && ply < CHECK_EXTENSION_PLY_FACTOR * ctx.root_depth;
+    let child_depth = depth - 1 + if extend_check { 1 } else { 0 };
 
     // Singular extensions: if a reduced-depth search of every move *except*
     // the TT move can't even get close to the TT move's own score, the TT
@@ -1135,6 +1377,12 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // history tables exist to unlearn. Without the malus, history scores
     // only ever grow and ordering stops distinguishing good from merely old.
     let mut tried_quiets: Vec<(Move, PieceType)> = Vec::new();
+    // Whether any move was really searched. Only ever 0 in a singular
+    // verification search, where the TT move (which move ordering puts
+    // first) is the excluded one and everything else can be pruned away —
+    // returning `-INF` from there made `score < singular_beta` trivially
+    // true and handed out the extension for free.
+    let mut moves_searched = 0u32;
 
     for (move_index, mv) in ordered.into_iter().enumerate() {
         if Some(mv) == excluded {
@@ -1142,26 +1390,27 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         }
 
         let is_quiet = !mv.is_capture() && mv.promotion().is_none();
+        // Counted over quiet moves actually searched, not over the whole
+        // ordered list: with the list led by captures, "the 3rd move" and
+        // "the 3rd quiet move" are very different things, and in a tactical
+        // position with eight plausible captures the old form pruned
+        // *every* quiet move at depth <= 2.
+        let quiets_tried = tried_quiets.len();
 
-        // Late move pruning: at shallow depth, once this many quiet moves
-        // have been tried without a cutoff, the rest are skipped outright.
-        // Never prunes while in check (every evasion matters) or near mate
-        // scores (same reasoning as futility below).
-        if is_quiet
-            && !in_check
-            && depth <= LMP_MAX_DEPTH
-            && alpha > -MATE_THRESHOLD
-            && beta < MATE_THRESHOLD
-            && move_index >= lmp_threshold(depth, improving)
-        {
-            continue;
-        }
+        // Whether this move checks the opponent, answered without playing
+        // it (see `movegen::gives_check`). LMR already refused to reduce a
+        // checking move; LMP and futility used to discard them outright,
+        // which can throw away a quiet mate sitting past the threshold.
+        let gives_check = movegen::gives_check(board, mv);
 
-        if move_index > 0 && is_quiet {
-            if let Some(se) = futility_eval {
-                if se + FUTILITY_MARGIN[depth as usize] <= alpha {
-                    continue;
-                }
+        if is_quiet && !gives_check && !in_check && alpha > -MATE_THRESHOLD && beta < MATE_THRESHOLD {
+            // Late move pruning: at shallow depth, once this many quiet
+            // moves have been searched without a cutoff, skip the rest.
+            let lmp = depth <= LMP_MAX_DEPTH && quiets_tried >= lmp_threshold(depth, improving);
+            let futile =
+                move_index > 0 && futility_eval.is_some_and(|se| se + FUTILITY_MARGIN[depth as usize] <= alpha);
+            if lmp || futile {
+                continue;
             }
         }
 
@@ -1170,6 +1419,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         let undo = board.make_move(mv);
         ctx.path.push(board.hash);
         ctx.record_move_played(ply + 1, moved_piece, mv.to);
+        moves_searched += 1;
 
         // Late move reductions: moves this far down an already-good
         // ordering, that are quiet and not a reply to/giver of check, are
@@ -1179,11 +1429,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         // `lmr_reduction`), clamped so the reduced search always keeps at
         // least 1 ply (dropping straight into quiescence would make the
         // scout blind to any quiet refutation).
-        let can_reduce = move_index >= LMR_FULL_DEPTH_MOVES
-            && depth >= LMR_MIN_DEPTH
-            && is_quiet
-            && !in_check
-            && !movegen::is_in_check(board, board.side_to_move);
+        let can_reduce = move_index >= LMR_FULL_DEPTH_MOVES && depth >= LMR_MIN_DEPTH && is_quiet && !in_check && !gives_check;
         let reduction = if can_reduce {
             lmr_reduction(depth, move_index).min(mv_child_depth.saturating_sub(1))
         } else {
@@ -1209,22 +1455,29 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         if score > best_score {
             best_score = score;
             best_move = mv;
+            if is_pv_node && score > alpha && score < beta && !ctx.aborted {
+                ctx.update_pv(ply, mv);
+            }
         }
         if best_score > alpha {
             alpha = best_score;
         }
         if alpha >= beta {
-            if !mv.is_capture() {
+            let bonus = history_bonus(depth);
+            if is_quiet {
                 ctx.store_killer(ply, mv);
-                let bonus = history_bonus(depth);
                 ctx.update_history(mv, bonus);
                 ctx.update_cont_history(ply, moved_piece, mv.to, bonus);
-                // Malus: every quiet tried before the one that actually cut
-                // off was an ordering mistake of the same magnitude.
-                for &(tried_mv, tried_piece) in &tried_quiets {
-                    ctx.update_history(tried_mv, -bonus);
-                    ctx.update_cont_history(ply, tried_piece, tried_mv.to, -bonus);
-                }
+            }
+            // Malus applies whatever cut the node off, capture or not: the
+            // quiet moves searched before it were still ordered ahead of the
+            // move that worked, and that is exactly the ordering mistake the
+            // history tables exist to unlearn. Restricting the malus to
+            // quiet cutoffs let quiet moves that keep failing in tactical
+            // positions hold on to inflated scores indefinitely.
+            for &(tried_mv, tried_piece) in &tried_quiets {
+                ctx.update_history(tried_mv, -bonus);
+                ctx.update_cont_history(ply, tried_piece, tried_mv.to, -bonus);
             }
             break;
         }
@@ -1234,6 +1487,12 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         if is_quiet {
             tried_quiets.push((mv, moved_piece));
         }
+    }
+
+    if moves_searched == 0 {
+        // Everything was excluded or pruned: report a fail-low bound rather
+        // than the `-INF` sentinel, which is not a score any caller can use.
+        return alpha;
     }
 
     // Neither the TT store nor the correction-history update below applies
@@ -1271,20 +1530,51 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
             }
         }
 
-        ctx.tt.store(board.hash, depth as u8, score_to_tt(best_score, ply), flag, Some(best_move));
+        ctx.tt.store(board.hash, depth as u8, score_to_tt(best_score, ply), flag, Some(best_move), tt_clock(board));
     }
 
     best_score
 }
 
-fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut Context) -> i32 {
+/// Draw-by-rule score for this node, or `None` if it should be searched
+/// normally. A checkmate already on the board takes precedence over every
+/// draw claim: the game ends the instant the king has no escape, whatever
+/// the fifty-move counter says. Scoring the counter first turned `Qg7#` at
+/// halfmove clock 100 into a draw, throwing away a won game in a legal
+/// position.
+///
+/// The mate test only runs on the rare path where a draw rule actually
+/// fired, so ordinary nodes still pay nothing but the three cheap checks.
+fn terminal_draw_score(board: &mut Board, ply: u32, ctx: &Context) -> Option<i32> {
+    let fifty_move = board.halfmove_clock >= 100;
+    if !fifty_move && !ctx.is_repetition(board.hash, board.halfmove_clock) && !eval::is_insufficient_material(board) {
+        return None;
+    }
+    // Insufficient material cannot be mate (there is nothing to mate with),
+    // and a repetition means this exact position had legal continuations
+    // before; only the fifty-move counter can coincide with a real mate.
+    if fifty_move && movegen::is_in_check(board, board.side_to_move) && movegen::legal_moves_scratch(board).is_empty() {
+        return Some(-MATE_SCORE + ply as i32);
+    }
+    Some(0)
+}
+
+/// Counting entry point to the quiescence search. `negamax` reaches
+/// quiescence through `quiescence_inner` instead, having already counted the
+/// frontier node itself.
+fn quiescence(board: &mut Board, alpha: i32, beta: i32, ply: u32, ctx: &mut Context) -> i32 {
     ctx.nodes += 1;
+    quiescence_inner(board, alpha, beta, ply, ctx)
+}
+
+fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut Context) -> i32 {
     if ctx.should_stop() {
         return 0;
     }
     if ply >= MAX_PLY {
         return eval::evaluate_relative(board);
     }
+    ctx.clear_pv(ply);
     // Quiescence only plays captures (material strictly drops each time) or,
     // while in check, forced evasions — so a real repetition inside this
     // recursion is essentially impossible and isn't tracked here, but the
@@ -1297,11 +1587,22 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
     // which clones the board per call — quiescence nodes are the majority
     // of any search, so that clone was the single most-executed allocation
     // in the engine (a Fase 3 oversight, fixed in this pass).
-    if board.halfmove_clock >= 100 || is_insufficient_material(board) {
-        return 0;
+    if let Some(score) = terminal_draw_score(board, ply, ctx) {
+        return score;
     }
 
     let in_check = movegen::is_in_check(board, board.side_to_move);
+
+    // The full legal list is generated first and only then filtered down to
+    // the noisy moves, so that "no captures worth reading out" and "no legal
+    // move at all" stay distinguishable. Conflating them made quiescence
+    // score a stalemate as an ordinary static evaluation: from
+    // `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1` the engine used to *choose* Kd2,
+    // stalemating Black, and announce more than ten pawns of advantage.
+    let mut moves = movegen::legal_moves_scratch(board);
+    if moves.is_empty() {
+        return if in_check { -MATE_SCORE + ply as i32 } else { 0 };
+    }
 
     // When in check there is no "stand pat": the side to move might be
     // getting mated, and refusing to at least try every evasion (not just
@@ -1312,6 +1613,7 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
     } else {
         eval::evaluate_relative(board)
     };
+    let mut best_score = stand_pat;
     if !in_check {
         if stand_pat >= beta {
             return stand_pat;
@@ -1319,29 +1621,16 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
         if stand_pat > alpha {
             alpha = stand_pat;
         }
-    }
-
-    let mut moves: Vec<Move> = if in_check {
-        // In check: every legal reply is a candidate, not just captures —
-        // a quiet evasion can be the only way out of a mating net.
-        movegen::legal_moves_scratch(board)
-    } else {
         // Skip captures that lose material outright (negative SEE): they
         // essentially never help resolve a tactical sequence, and reading
         // them out wastes a large fraction of quiescence search's node
-        // budget. Quiet promotions are included too (not just captures):
-        // a pawn one push from queening is exactly the kind of "loud" move
-        // that must not go unresolved at the horizon.
-        movegen::legal_moves_scratch(board)
-            .into_iter()
-            .filter(|m| (m.is_capture() || m.promotion().is_some()) && movegen::static_exchange_eval(board, *m) >= 0)
-            .collect()
-    };
-
-    if in_check && moves.is_empty() {
-        // No legal evasion: this is checkmate, exactly `ply` plies from the
-        // root that called into this quiescence chain.
-        return -MATE_SCORE + ply as i32;
+        // budget. Promotions are kept whatever SEE says — a pawn one push
+        // from queening is exactly the kind of move that must not go
+        // unresolved at the horizon, and SEE prices the promoted piece
+        // poorly (see the note in `static_exchange_eval`).
+        moves.retain(|m| {
+            m.promotion().is_some() || (m.is_capture() && movegen::static_exchange_eval(board, *m) >= 0)
+        });
     }
 
     order_moves_in_place(board, &mut moves);
@@ -1358,9 +1647,14 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
         }
 
         let undo = board.make_move(mv);
+        ctx.path.push(board.hash);
         let score = -quiescence(board, -beta, -alpha, ply + 1, ctx);
+        ctx.path.pop();
         board.unmake_move(mv, undo);
 
+        if score > best_score {
+            best_score = score;
+        }
         if score > alpha {
             alpha = score;
         }
@@ -1368,7 +1662,10 @@ fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut 
             break;
         }
     }
-    alpha
+    // Fail-soft, matching `negamax`: returning `alpha` instead threw away
+    // the difference between "failed low by a little" and "failed low by a
+    // queen", which is information the parent's TT entry could have used.
+    best_score
 }
 
 /// True if `color` has any piece besides pawns and the king, i.e. it is
@@ -1380,29 +1677,6 @@ fn has_non_pawn_material(board: &Board, color: Color) -> bool {
         .any(|&kind| !matches!(kind, PieceType::Pawn | PieceType::King) && !board.pieces_of(color, kind).is_empty())
 }
 
-/// A position where no sequence of legal moves, played by either side no
-/// matter how badly, could ever produce checkmate: no pawns left to
-/// promote into fresh material, and at most one minor piece on the whole
-/// board. This stays deliberately conservative — two knights, two bishops,
-/// or a bishop pair can force mate in at least some lines, so those are
-/// left for the search to work out on its own rather than risk misjudging
-/// a position that's actually still winnable as an automatic draw.
-fn is_insufficient_material(board: &Board) -> bool {
-    for color in [Color::White, Color::Black] {
-        if !board.pieces_of(color, PieceType::Pawn).is_empty()
-            || !board.pieces_of(color, PieceType::Rook).is_empty()
-            || !board.pieces_of(color, PieceType::Queen).is_empty()
-        {
-            return false;
-        }
-    }
-    let minors = board.pieces_of(Color::White, PieceType::Knight).count()
-        + board.pieces_of(Color::White, PieceType::Bishop).count()
-        + board.pieces_of(Color::Black, PieceType::Knight).count()
-        + board.pieces_of(Color::Black, PieceType::Bishop).count();
-    minors <= 1
-}
-
 fn capture_victim_value(board: &Board, mv: Move) -> i32 {
     if mv.flag == MoveFlag::EnPassant {
         eval::piece_value(crate::types::PieceType::Pawn)
@@ -1411,12 +1685,27 @@ fn capture_victim_value(board: &Board, mv: Move) -> i32 {
     }
 }
 
-/// MVV-LVA-ish move ordering: captures first (biggest victim / smallest
-/// attacker first), quiet moves after in whatever order they were generated.
-/// Used by quiescence search, which never sees killers, TT moves or history.
+/// How much material a promotion adds beyond the pawn that vacated the
+/// square. Zero for every other move.
+fn promotion_gain(mv: Move) -> i32 {
+    mv.promotion()
+        .map(|kind| eval::piece_value(kind) - eval::piece_value(PieceType::Pawn))
+        .unwrap_or(0)
+}
+
+/// MVV-LVA-ish move ordering: captures and promotions first (biggest gain /
+/// smallest attacker first), quiet moves after in whatever order they were
+/// generated. Used by quiescence search, which never sees killers, TT moves
+/// or history.
+///
+/// The promotion term matters more than it looks: the generator emits
+/// knight, bishop, rook, queen in that order, so without it a quiet
+/// promotion to a queen scored the same 0 as any other quiet move and,
+/// under a stable sort, ended up *behind* the three underpromotions.
 fn move_order_score(board: &Board, mv: Move) -> i32 {
-    if mv.is_capture() {
-        let victim = capture_victim_value(board, mv);
+    let gain = promotion_gain(mv);
+    if mv.is_capture() || gain > 0 {
+        let victim = capture_victim_value(board, mv) + gain;
         let attacker = board.piece_at(mv.from).map(|p| eval::piece_value(p.kind)).unwrap_or(0);
         10_000 + victim * 10 - attacker
     } else {
@@ -1443,10 +1732,11 @@ fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers
     if tt_move == Some(mv) {
         return 1_000_000;
     }
-    if mv.is_capture() {
+    let gain = promotion_gain(mv);
+    if mv.is_capture() || gain > 0 {
         let see = movegen::static_exchange_eval(board, mv);
         if see >= 0 {
-            let victim = capture_victim_value(board, mv);
+            let victim = capture_victim_value(board, mv) + gain;
             let attacker = board.piece_at(mv.from).map(|p| eval::piece_value(p.kind)).unwrap_or(0);
             return 100_000 + victim * 10 - attacker + see;
         }
@@ -1462,20 +1752,74 @@ fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers
     ctx.history[mv.from.0 as usize][mv.to.0 as usize] + ctx.cont_history_score(ply, piece, mv.to)
 }
 
-/// `sort_by_cached_key`, not `sort_by_key`: the latter doesn't guarantee
-/// calling its key function only once per element (empirically, roughly
-/// twice for a slice this size), and `move_order_score_full` calls SEE
-/// for every capture — worth the temporary allocation `sort_by_cached_key`
-/// uses to actually cache each move's key instead of recomputing it during
-/// comparisons, since this runs at every node of the main search.
-fn order_moves_full(board: &Board, moves: &mut [Move], tt_move: Option<Move>, killers: [Option<Move>; 2], ctx: &Context, ply: u32) {
-    moves.sort_by_cached_key(|&m| std::cmp::Reverse(move_order_score_full(board, m, tt_move, killers, ctx, ply)));
+/// Scores every move once into a scratch buffer owned by the `Context` and
+/// sorts that, instead of letting the sort call the key function repeatedly:
+/// `move_order_score_full` runs SEE for every capture, which is far too
+/// expensive to recompute during comparisons. This replaces
+/// `sort_by_cached_key`, which did cache the keys correctly but allocated a
+/// fresh table at every node of the main search; the buffer is taken out of
+/// the context and put back so the allocation survives from node to node.
+///
+/// The original index is part of the sort key, so moves with equal scores
+/// keep generation order exactly as a stable sort would — otherwise the
+/// large block of quiet moves that all score 0 early in a search would be
+/// permuted arbitrarily.
+fn order_moves_full(board: &Board, moves: &mut [Move], tt_move: Option<Move>, killers: [Option<Move>; 2], ctx: &mut Context, ply: u32) {
+    let mut buf = std::mem::take(&mut ctx.order_buffer);
+    buf.clear();
+    buf.extend(
+        moves
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| (move_order_score_full(board, m, tt_move, killers, ctx, ply), i as u16, m)),
+    );
+    buf.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (dst, src) in moves.iter_mut().zip(buf.iter()) {
+        *dst = src.2;
+    }
+    ctx.order_buffer = buf;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::board::Board;
+
+    /// A `Context` wired up the way `search_inner` builds one, for the tests
+    /// that drive `negamax`/`search_root` directly instead of going through
+    /// `search()`.
+    fn test_context<'a>(
+        stop: &'a AtomicBool,
+        tt: &'a Tt,
+        shared_nodes: &'a AtomicU64,
+        root_hash: u64,
+    ) -> Context<'a> {
+        Context {
+            nodes: 0,
+            stop,
+            hard_deadline: None,
+            max_nodes: None,
+            search_moves: None,
+            path: vec![root_hash],
+            path_start: 0,
+            aborted: false,
+            shared_nodes,
+            published_nodes: 0,
+            root_depth: 1,
+            variety: false,
+            tt,
+            killers: vec![[None, None]; MAX_PLY as usize],
+            history: [[0; 64]; 64],
+            static_evals: vec![None; MAX_PLY as usize],
+            moves_played: vec![None; (MAX_PLY + 1) as usize],
+            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
+            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
+            null_at_ply: vec![false; (MAX_PLY + 1) as usize],
+            pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
+            pv_len: vec![0; (MAX_PLY + 2) as usize],
+            order_buffer: Vec::new(),
+        }
+    }
 
     fn search_to_depth(fen: &str, depth: u32) -> SearchResult {
         let board = Board::from_fen(fen).unwrap();
@@ -1517,8 +1861,8 @@ mod tests {
     #[test]
     fn store_keeps_a_deeper_entry_over_a_shallower_one_within_the_same_generation() {
         let mut table = TranspositionTable::new(1);
-        table.store(42, 10, 100, TtFlag::Exact, None);
-        table.store(42, 1, 200, TtFlag::Exact, None); // no new_search() in between
+        table.store(42, 10, 100, TtFlag::Exact, None, 0);
+        table.store(42, 1, 200, TtFlag::Exact, None, 0); // no new_search() in between
         let entry = table.probe(42).unwrap();
         assert_eq!(entry.depth, 10);
         assert_eq!(entry.score, 100);
@@ -1531,10 +1875,10 @@ mod tests {
         // is kept alive for the whole game (see `Tt`) — even after the
         // game has moved well past where that entry is still relevant.
         let mut table = TranspositionTable::new(1);
-        table.store(42, 10, 100, TtFlag::Exact, None);
+        table.store(42, 10, 100, TtFlag::Exact, None, 0);
 
         table.new_search();
-        table.store(42, 1, 200, TtFlag::Exact, None);
+        table.store(42, 1, 200, TtFlag::Exact, None, 0);
 
         let entry = table.probe(42).unwrap();
         assert_eq!(entry.depth, 1);
@@ -1574,22 +1918,8 @@ mod tests {
         let mut board = Board::from_fen("7k/8/8/8/8/2K5/8/3Q4 w - - 0 1").unwrap();
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut ctx = Context {
-            nodes: 0,
-            stop: &stop,
-            hard_deadline: None,
-            max_nodes: None,
-            search_moves: None,
-            path: vec![board.hash],
-            aborted: false,
-            tt: &tt,
-            killers: vec![[None, None]; MAX_PLY as usize],
-            history: [[0; 64]; 64],
-            static_evals: vec![None; MAX_PLY as usize],
-            moves_played: vec![None; (MAX_PLY + 1) as usize],
-            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
-            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
-        };
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
         let (score, best_move) = search_root_with_aspiration(&mut board, 4, 0, &mut ctx);
         assert!(best_move.is_some());
         assert!(score > 500, "expected a large positive score reflecting White's material edge, got {score}");
@@ -1605,22 +1935,8 @@ mod tests {
         let mut board = Board::from_fen("7k/8/8/8/8/2K5/8/3Q4 w - - 0 1").unwrap();
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut ctx = Context {
-            nodes: 0,
-            stop: &stop,
-            hard_deadline: None,
-            max_nodes: None,
-            search_moves: None,
-            path: vec![board.hash],
-            aborted: false,
-            tt: &tt,
-            killers: vec![[None, None]; MAX_PLY as usize],
-            history: [[0; 64]; 64],
-            static_evals: vec![None; MAX_PLY as usize],
-            moves_played: vec![None; (MAX_PLY + 1) as usize],
-            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
-            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
-        };
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
         let (score, best_move) = search_root(&mut board, 3, -50, 50, &mut ctx);
         assert!(best_move.is_some());
         assert!(score >= 50, "expected a fail-high against this narrow window, got {score}");
@@ -1742,6 +2058,7 @@ mod tests {
 
     #[test]
     fn is_insufficient_material_detects_bare_kings_and_lone_minors() {
+        use crate::eval::is_insufficient_material;
         let bare_kings = Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
         assert!(is_insufficient_material(&bare_kings));
         let lone_knight = Board::from_fen("4k3/8/8/8/8/8/8/3NK3 w - - 0 1").unwrap();
@@ -1793,26 +2110,34 @@ mod tests {
     #[test]
     fn finding_the_same_position_twice_via_tt_does_not_change_the_best_move() {
         // Play the same position through the search twice (as would happen
-        // via transposition) and make sure the TT-cached result is
-        // consistent. The *score* must always match exactly (it doesn't
-        // depend on the root's random tie-break among near-equal moves,
-        // only `best_move` does — see `search_root`'s `near_best`
-        // selection), so that's the real TT-consistency invariant;
-        // `best_move` itself is only checked for legality, since a
-        // genuine near-tie at the root can legitimately resolve to a
-        // different (equally good) move on each call.
+        // via transposition) and make sure the second, TT-warm run is still
+        // coherent.
+        //
+        // Exact score equality is deliberately *not* asserted. It used to
+        // hold only because a PV node would take a stored cutoff and replay
+        // the first search's verdict move for move; now that PV nodes are
+        // searched out properly (so the propagated line can't be truncated
+        // by a cutoff), the warm run mixes in bounds proved at other depths
+        // and can legitimately land a few centipawns away. What must hold is
+        // that both runs return a legal move, that the reported line starts
+        // with it, and that neither drifts into nonsense.
         let board = Board::start_pos();
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
         let limits = SearchLimits { max_depth: Some(4), ..Default::default() };
         let first = search(&board, limits.clone(), &stop, &tt, &[], |_, _| {});
         let second = search(&board, limits, &stop, &tt, &[], |_, _| {});
-        assert_eq!(first.score, second.score);
 
         let legal = movegen::generate_legal_moves(&board);
         for result in [&first, &second] {
             let mv = result.best_move.expect("startpos siempre tiene jugadas legales");
             assert!(legal.contains(&mv));
+            assert_eq!(result.pv.first(), Some(&mv));
+            assert!(
+                result.score.abs() < 100,
+                "the opening position is close to balanced; got {}",
+                result.score
+            );
         }
     }
 
@@ -1862,20 +2187,48 @@ mod tests {
 
     #[test]
     fn near_tied_root_moves_give_the_engine_some_opening_variety() {
-        // At depth 3 from startpos, several opening moves land within
-        // ROOT_TIE_EPSILON of each other (verified empirically), so a
-        // fresh Tt each time should occasionally surface more than one of
-        // them across repeated searches instead of always the same move.
-        let board = Board::start_pos();
-        let limits = SearchLimits { max_depth: Some(3), ..Default::default() };
+        // The tie-break is unit-tested directly rather than through a whole
+        // search: whether any given position at any given depth happens to
+        // produce two root moves within ROOT_TIE_EPSILON is a property of
+        // the evaluation, not of this mechanism, and pinning it made the
+        // test fail every time a term was retuned.
+        let a = Move::new(Square::new(4, 1), Square::new(4, 3), MoveFlag::DoublePawnPush);
+        let b = Move::new(Square::new(3, 1), Square::new(3, 3), MoveFlag::DoublePawnPush);
+        let c = Move::new(Square::new(1, 0), Square::new(2, 2), MoveFlag::Quiet);
+
+        assert_eq!(pick_near_best(&[(a, 20)], 20), None, "a single candidate leaves nothing to choose");
+        assert_eq!(
+            pick_near_best(&[(a, 20), (b, 20 - ROOT_TIE_EPSILON - 1)], 20),
+            None,
+            "a candidate outside the epsilon must not become a choice"
+        );
+
+        let tied = [(a, 20), (b, 20 - ROOT_TIE_EPSILON), (c, 19)];
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..30 {
+        for _ in 0..200 {
+            let picked = pick_near_best(&tied, 20).expect("three candidates are all within the epsilon");
+            assert!([a, b, c].contains(&picked), "must only ever pick one of the tied candidates");
+            seen.insert(picked.to_string());
+        }
+        assert!(seen.len() > 1, "the tie-break never varied across 200 draws");
+    }
+
+    #[test]
+    fn the_default_configuration_plays_the_same_move_every_time() {
+        // The flip side of the test above: with `Variety` off (the default)
+        // the same position at the same depth must produce the same move
+        // *and* the same node count, or no strength measurement taken with
+        // this engine means anything.
+        let board = Board::start_pos();
+        let limits = SearchLimits { max_depth: Some(4), ..Default::default() };
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..5 {
             let stop = AtomicBool::new(false);
             let tt = Tt::new(1);
             let result = search(&board, limits.clone(), &stop, &tt, &[], |_, _| {});
-            seen.insert(result.best_move.map(|m| m.to_string()));
+            seen.insert((result.best_move.map(|m| m.to_string()), result.nodes));
         }
-        assert!(seen.len() > 1, "expected more than one distinct opening move across 30 searches, got {seen:?}");
+        assert_eq!(seen.len(), 1, "search must be deterministic with Variety off, got {seen:?}");
     }
 
     #[test]
@@ -1918,22 +2271,8 @@ mod tests {
         let mut board = Board::from_fen("4k3/8/8/8/8/8/8/3BK3 w - - 0 1").unwrap();
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        let mut ctx = Context {
-            nodes: 0,
-            stop: &stop,
-            hard_deadline: None,
-            max_nodes: None,
-            search_moves: None,
-            path: vec![board.hash],
-            aborted: false,
-            tt: &tt,
-            killers: vec![[None, None]; MAX_PLY as usize],
-            history: [[0; 64]; 64],
-            static_evals: vec![None; MAX_PLY as usize],
-            moves_played: vec![None; (MAX_PLY + 1) as usize],
-            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
-            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
-        };
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
         assert_eq!(quiescence(&mut board, -INF, INF, 0, &mut ctx), 0);
     }
 
@@ -2013,35 +2352,26 @@ mod tests {
         let m2 = Move::new(Square::new(4, 7), Square::new(5, 7), MoveFlag::Quiet); // Ke8-f8
         let m3 = Move::new(Square::new(5, 0), Square::new(4, 0), MoveFlag::Quiet); // Kf1-e1
         let m4 = Move::new(Square::new(5, 7), Square::new(4, 7), MoveFlag::Quiet); // Kf8-e8
-        board.make_move(m1);
-        board.make_move(m2);
-        board.make_move(m3);
-        board.make_move(m4);
+        // The path is built exactly as `search()` builds it from
+        // `game_history`: every position reached along the way, not only the
+        // one that repeats. `is_repetition` walks back two plies at a time
+        // (only same-side-to-move positions can match), so the intermediate
+        // positions have to really be there.
+        let mut history = vec![earlier_hash];
+        for mv in [m1, m2, m3, m4] {
+            board.make_move(mv);
+            history.push(board.hash);
+        }
         assert_eq!(board.hash, earlier_hash, "the four king shuffles should land back on the exact same position");
 
         let stop = AtomicBool::new(false);
         let tt = Tt::new(1);
-        // This is exactly what `search()` builds from `game_history` plus
-        // the current position: `earlier_hash` reappearing here represents
-        // a repetition that happened before this `go`, not one discovered
-        // within the tree currently being searched.
-        let mut ctx = Context {
-            nodes: 0,
-            stop: &stop,
-            hard_deadline: None,
-            max_nodes: None,
-            search_moves: None,
-            path: vec![earlier_hash],
-            aborted: false,
-            tt: &tt,
-            killers: vec![[None, None]; MAX_PLY as usize],
-            history: [[0; 64]; 64],
-            static_evals: vec![None; MAX_PLY as usize],
-            moves_played: vec![None; (MAX_PLY + 1) as usize],
-            cont_history: vec![0; PIECE_TYPE_COUNT * 64 * PIECE_TYPE_COUNT * 64],
-            pawn_correction: vec![0; CORRECTION_HISTORY_SIZE],
-        };
-        ctx.path.push(board.hash);
+        // `earlier_hash` reappearing here represents a repetition from
+        // before this `go`, not one discovered within the tree being
+        // searched now.
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, earlier_hash);
+        ctx.path = history;
 
         let score = negamax(&mut board, 2, 1, -INF, INF, &mut ctx, None);
         assert_eq!(score, 0, "expected the repetition to be scored as an immediate draw, got {score}");
@@ -2057,5 +2387,95 @@ mod tests {
         tt.clear();
         let after_clear = search(&board, limits, &stop, &tt, &[], |_, _| {});
         assert!(after_clear.best_move.is_some());
+    }
+
+    #[test]
+    fn a_mate_on_the_hundredth_halfmove_is_a_mate_and_not_a_draw() {
+        // `Qg7#` with the fifty-move counter at 99: the move takes it to
+        // 100, but a mate on the board ends the game whatever the counter
+        // says. The draw rules used to be checked first and returned 0,
+        // throwing away a won game in a perfectly legal position.
+        let result = search_to_depth("7k/5Q2/6K1/8/8/8/8/8 w - - 99 1", 1);
+        assert!(
+            result.score >= MATE_THRESHOLD,
+            "expected a mate score at halfmove clock 99, got {}",
+            result.score
+        );
+        assert_eq!(result.best_move.map(|m| m.to_string()), Some("f7g7".to_string()));
+
+        // One ply earlier the same mate must of course still be a mate.
+        let earlier = search_to_depth("7k/5Q2/6K1/8/8/8/8/8 w - - 98 1", 1);
+        assert!(earlier.score >= MATE_THRESHOLD);
+    }
+
+    #[test]
+    fn a_quiet_position_at_the_fifty_move_limit_is_still_a_draw() {
+        // The mate check above must not turn every fifty-move draw into a
+        // search: a queen up, but the counter has run out.
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 b - - 100 1").unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
+        let mut board = board;
+        assert_eq!(negamax(&mut board, 3, 1, -INF, INF, &mut ctx, None), 0);
+    }
+
+    #[test]
+    fn quiescence_recognizes_a_stalemate_instead_of_scoring_the_material() {
+        // `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1`: Kd2 stalemates Black. At depth 1
+        // the resulting position lands directly in quiescence, which used to
+        // see "no captures worth reading out", fall back to the static
+        // evaluation and report the queen as a full advantage — so the
+        // engine actively *chose* to stalemate its opponent.
+        let result = search_to_depth("8/8/8/8/8/8/2Q5/k2K4 w - - 0 1", 1);
+        assert_ne!(
+            result.best_move.map(|m| m.to_string()),
+            Some("d1d2".to_string()),
+            "the engine must not walk into a stalemate it can see"
+        );
+    }
+
+    #[test]
+    fn a_transposition_table_score_is_not_reused_across_incompatible_clocks() {
+        // Same placement, fifty-move counter 98 vs 0. The entry stored for
+        // the first is a draw-by-rule verdict; reusing it for the second
+        // turned a won queen ending into 0 cp.
+        let near_limit = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 w - - 98 1").unwrap();
+        let fresh = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1").unwrap();
+        assert_eq!(near_limit.hash, fresh.hash, "the two differ only in a field the hash excludes, by design");
+
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let limits = SearchLimits { max_depth: Some(3), ..Default::default() };
+        let _ = search(&near_limit, limits.clone(), &stop, &tt, &[], |_, _| {});
+        let after = search(&fresh, limits, &stop, &tt, &[], |_, _| {});
+        assert!(
+            after.score > 300,
+            "a queen up with a fresh clock must not inherit the near-limit draw score, got {}",
+            after.score
+        );
+    }
+
+    #[test]
+    fn the_reported_line_always_starts_with_the_move_being_played() {
+        // The PV used to be reconstructed after the fact by walking the
+        // shared TT, which could hand back a line that had nothing to do
+        // with the score it was printed next to.
+        for fen in [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RN2KBNR w KQkq - 4 4",
+            "8/8/8/8/8/8/2Q5/k2K4 w - - 0 1",
+        ] {
+            let result = search_to_depth(fen, 5);
+            let best = result.best_move.expect("every one of these positions has a legal move");
+            assert_eq!(result.pv.first(), Some(&best), "PV head must equal bestmove in {fen}");
+            // And every move in the line must be playable in turn.
+            let mut board = Board::from_fen(fen).unwrap();
+            for mv in &result.pv {
+                assert!(movegen::generate_legal_moves(&board).contains(mv), "illegal PV move {mv} in {fen}");
+                board.make_move(*mv);
+            }
+        }
     }
 }

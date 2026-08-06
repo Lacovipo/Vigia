@@ -175,8 +175,10 @@ pub fn evaluate(board: &Board) -> i32 {
     // need "which squares does each color's pawns/minors/rooks/queens
     // attack", just aggregated differently (see `AttackInfo`'s own docs).
     let occ = board.occupied();
-    let white_attacks = attack_info_for(board, Color::White, occ);
-    let black_attacks = attack_info_for(board, Color::Black, occ);
+    let white_ring = king_ring_of(board, Color::White);
+    let black_ring = king_ring_of(board, Color::Black);
+    let white_attacks = attack_info_for(board, Color::White, occ, black_ring);
+    let black_attacks = attack_info_for(board, Color::Black, occ, white_ring);
 
     let raw = material_score(board)
         + piece_square_score_with_phase(board, phase)
@@ -192,7 +194,7 @@ pub fn evaluate(board: &Board) -> i32 {
         + pawn_endgame_score(board, phase)
         + tempo_score(board)
         + threats_score_with_attacks(board, &white_attacks, &black_attacks);
-    (raw * endgame_scale_factor(board)) / SCALE_FACTOR_NORMAL
+    (raw * endgame_scale_factor(board, raw)) / SCALE_FACTOR_NORMAL
 }
 
 /// Per-term breakdown of `evaluate`, for the UCI `eval` command and for
@@ -212,8 +214,10 @@ pub fn evaluate_breakdown(board: &Board) -> (Vec<(&'static str, i32)>, i32) {
         }
     }
     let occ = board.occupied();
-    let white_attacks = attack_info_for(board, Color::White, occ);
-    let black_attacks = attack_info_for(board, Color::Black, occ);
+    let white_ring = king_ring_of(board, Color::White);
+    let black_ring = king_ring_of(board, Color::Black);
+    let white_attacks = attack_info_for(board, Color::White, occ, black_ring);
+    let black_attacks = attack_info_for(board, Color::Black, occ, white_ring);
     let terms = vec![
         ("material", material_score(board)),
         ("pst", piece_square_score_with_phase(board, phase)),
@@ -230,7 +234,8 @@ pub fn evaluate_breakdown(board: &Board) -> (Vec<(&'static str, i32)>, i32) {
         ("tempo", tempo_score(board)),
         ("threats", threats_score_with_attacks(board, &white_attacks, &black_attacks)),
     ];
-    (terms, endgame_scale_factor(board))
+    let raw: i32 = terms.iter().map(|&(_, v)| v).sum();
+    (terms, endgame_scale_factor(board, raw))
 }
 
 /// Small, non-tapered bonus for whoever's turn it is: having the move is
@@ -426,27 +431,50 @@ fn king_ring(king_sq: Square) -> Bitboard {
     ring
 }
 
-/// Weight per attacking piece type for the king-ring danger count below,
+/// Weight per attacking piece for the king-ring danger count below,
 /// matching the classic (Fruit-style) split: minor pieces count once,
 /// rooks twice, queens four times — a queen bearing on the king ring is
 /// far more ominous than a knight doing the same.
+///
+/// These weigh *pieces*, not squares. Until 0.25.0 the term multiplied them
+/// by `(enemy_attacks.queens & ring).count()`, i.e. by how many ring squares
+/// the queens covered between them, which is a different quantity entirely:
+/// a single queen raking three ring squares scored 12 units, squared past
+/// the cap on its own, so a second and a third attacker changed the
+/// evaluation by exactly nothing (measured: queen alone +92, queen+knight
+/// +113, queen+knight+bishop +113, queen+knight+bishop+rook +113). King
+/// safety was effectively a two-position switch.
 const KING_ATTACK_WEIGHT_MINOR: i32 = 1;
 const KING_ATTACK_WEIGHT_ROOK: i32 = 2;
 const KING_ATTACK_WEIGHT_QUEEN: i32 = 4;
-/// Squares the king-ring danger penalty (`units² * scale`, capped) is
-/// scaled and capped: growing with the *square* of the weighted attacker
-/// count, not linearly, is the one piece of consensus every reference
-/// engine's HCE checked this session agreed on — a lone attacker near the
-/// king is normal, several at once is when a real attack starts, and the
-/// danger compounds faster than one-at-a-time addition would suggest.
-const KING_DANGER_SCALE: i32 = 2;
-const KING_DANGER_CAP: i32 = 150;
+/// A lone attacker near the king is normal, not an attack: real danger only
+/// starts once a second piece joins in, so the first attacker's weight is
+/// discounted out of the count entirely.
+const KING_ATTACK_MIN_ATTACKERS: i32 = 2;
+/// Extra weight per *covered ring square* on top of the attacker count, so
+/// a queen that rakes four squares around the king is worth more than one
+/// that only touches a corner of the ring — the signal the old formula was
+/// measuring by accident, kept as a small linear term instead of as the
+/// dominant one.
+const KING_ATTACK_WEIGHT_PER_SQUARE: i32 = 1;
+/// How the danger count is turned into centipawns: growing with the *square*
+/// of the weighted attacker count, not linearly, is the one piece of
+/// consensus every reference engine's HCE checked this session agreed on.
+/// The cap is well above what two pieces can produce, so adding a third and
+/// fourth attacker keeps moving the evaluation — comparable engines let this
+/// term reach 400-600 cp before the phase taper, and with a 150 cp ceiling
+/// the engine could never justify a sacrifice for an attack.
+const KING_DANGER_SCALE: i32 = 3;
+const KING_DANGER_CAP: i32 = 500;
 
 fn king_danger_penalty(ring: Bitboard, enemy_attacks: &AttackInfo) -> i32 {
-    let units = (enemy_attacks.minors & ring).count() as i32 * KING_ATTACK_WEIGHT_MINOR
-        + (enemy_attacks.rooks & ring).count() as i32 * KING_ATTACK_WEIGHT_ROOK
-        + (enemy_attacks.queens & ring).count() as i32 * KING_ATTACK_WEIGHT_QUEEN;
-    (units * units * KING_DANGER_SCALE).min(KING_DANGER_CAP)
+    if enemy_attacks.king_attackers < KING_ATTACK_MIN_ATTACKERS {
+        return 0;
+    }
+    let covered = ((enemy_attacks.minors | enemy_attacks.rooks | enemy_attacks.queens | enemy_attacks.pawns) & ring)
+        .count() as i32;
+    let units = enemy_attacks.king_attack_weight + covered * KING_ATTACK_WEIGHT_PER_SQUARE;
+    (units * units * KING_DANGER_SCALE / 4).min(KING_DANGER_CAP)
 }
 
 /// How exposed `color`'s king is (always >= 0; higher means more
@@ -481,8 +509,10 @@ fn king_safety_penalty(board: &Board, color: Color, phase: i32, enemy_attacks: &
 
 pub fn king_safety_score(board: &Board) -> i32 {
     let occ = board.occupied();
-    let white_attacks = attack_info_for(board, Color::White, occ);
-    let black_attacks = attack_info_for(board, Color::Black, occ);
+    let white_ring = king_ring_of(board, Color::White);
+    let black_ring = king_ring_of(board, Color::Black);
+    let white_attacks = attack_info_for(board, Color::White, occ, black_ring);
+    let black_attacks = attack_info_for(board, Color::Black, occ, white_ring);
     king_safety_score_with(board, game_phase(board), &white_attacks, &black_attacks)
 }
 
@@ -601,16 +631,24 @@ fn is_pure_opposite_colored_bishops_ending(board: &Board) -> bool {
     square_is_light(white_bishop) != square_is_light(black_bishop)
 }
 
-/// Mirrors `search::is_insufficient_material`'s conservative definition
-/// (no pawns/rooks/queens for either side, at most one minor piece on the
-/// whole board): that check already makes the search itself score these
-/// positions as an exact draw wherever they actually appear in the tree,
-/// so this is a belt-and-suspenders match for `evaluate()`/`cmd_eval`
-/// being asked about such a position directly, not a case this needs to
-/// (or safely could) handle any more precisely — a second minor piece on
-/// the stronger side (two bishops, or bishop and knight) can in fact force
-/// mate, so this must not overreach into that territory.
-fn is_drawn_by_insufficient_material(board: &Board) -> bool {
+/// A position where no sequence of legal moves, played by either side no
+/// matter how badly, could ever produce checkmate: no pawns left to promote
+/// into fresh material, no rooks or queens, and either at most one minor
+/// piece on the board, or one bishop each on squares of the *same* color
+/// (neither bishop can ever attack the square the other stands on, and a
+/// lone bishop plus a king cannot mate a king that also has a bishop).
+///
+/// Deliberately stops there. Two knights, two bishops or a bishop pair can
+/// force mate in at least some lines, so those stay for the search to work
+/// out rather than risking an automatic draw in a position that is still
+/// winnable. K+N+N vs K is a practical draw but *not* a dead position under
+/// the rules (a cooperating opponent can be mated), so it does not belong
+/// here either — that is tablebase knowledge, not a material rule.
+///
+/// Single definition shared by `evaluate`'s endgame scale factor, the
+/// search's own terminal check and the selfplay harness's arbiter, which
+/// used to carry three near-identical copies.
+pub fn is_insufficient_material(board: &Board) -> bool {
     for color in [Color::White, Color::Black] {
         if !board.pieces_of(color, PieceType::Pawn).is_empty()
             || !board.pieces_of(color, PieceType::Rook).is_empty()
@@ -619,11 +657,24 @@ fn is_drawn_by_insufficient_material(board: &Board) -> bool {
             return false;
         }
     }
-    let minors = board.pieces_of(Color::White, PieceType::Knight).count()
-        + board.pieces_of(Color::White, PieceType::Bishop).count()
-        + board.pieces_of(Color::Black, PieceType::Knight).count()
-        + board.pieces_of(Color::Black, PieceType::Bishop).count();
-    minors <= 1
+    let knights =
+        board.pieces_of(Color::White, PieceType::Knight).count() + board.pieces_of(Color::Black, PieceType::Knight).count();
+    let white_bishops = board.pieces_of(Color::White, PieceType::Bishop);
+    let black_bishops = board.pieces_of(Color::Black, PieceType::Bishop);
+    let bishops = white_bishops.count() + black_bishops.count();
+    if knights + bishops <= 1 {
+        return true;
+    }
+    if knights == 0 && white_bishops.count() == 1 && black_bishops.count() == 1 {
+        let white_sq = white_bishops.lsb().expect("checked count() == 1 above");
+        let black_sq = black_bishops.lsb().expect("checked count() == 1 above");
+        return square_is_light(white_sq) == square_is_light(black_sq);
+    }
+    false
+}
+
+fn is_drawn_by_insufficient_material(board: &Board) -> bool {
+    is_insufficient_material(board)
 }
 
 /// Non-pawn material for `color`, in centipawns.
@@ -650,13 +701,41 @@ fn non_pawn_material(board: &Board, color: Color) -> i32 {
 const PAWNLESS_LONE_MINOR_SCALE: i32 = 4;
 const PAWNLESS_SMALL_EDGE_SCALE: i32 = 16;
 
-fn pawnless_drawish_scale(board: &Board) -> Option<i32> {
+/// How close to promotion an enemy pawn has to be before the "lone minor
+/// can't win" rule stops applying at all: the argument behind the rule is
+/// that the extra minor can always be given up for the last pawn, which
+/// stops being obviously true once that pawn is a push or two from queening
+/// with its king behind it.
+fn has_nearly_promoting_pawn(board: &Board, color: Color) -> bool {
+    board.pieces_of(color, PieceType::Pawn).into_iter().any(|sq| match color {
+        Color::White => sq.rank() >= 5,
+        Color::Black => sq.rank() <= 2,
+    })
+}
+
+/// `raw` is the unscaled evaluation this factor would multiply. It is needed
+/// because "this side has no pawns and at most a minor of advantage, so it
+/// cannot force a win" is a statement about *that* side's winning chances
+/// only: applied to the total it also flattens the opponent's advantage.
+/// Deciding the strong side from raw material alone made the eval score
+/// K+B vs K+3 connected pawns (material +30 for the bishop, dead lost in
+/// reality) as a level position; the search then razored and null-moved away
+/// the very lines that would have shown otherwise.
+fn pawnless_drawish_scale(board: &Board, raw: i32) -> Option<i32> {
     let material = material_score(board);
     if material == 0 {
         return None;
     }
     let strong = if material > 0 { Color::White } else { Color::Black };
     if !board.pieces_of(strong, PieceType::Pawn).is_empty() {
+        return None;
+    }
+    // Only damp an evaluation that actually favours the side that cannot win.
+    let favored = if raw >= 0 { Color::White } else { Color::Black };
+    if favored != strong {
+        return None;
+    }
+    if has_nearly_promoting_pawn(board, strong.opposite()) {
         return None;
     }
     let strong_npm = non_pawn_material(board, strong);
@@ -668,10 +747,10 @@ fn pawnless_drawish_scale(board: &Board) -> Option<i32> {
     Some(if strong_npm <= minor { PAWNLESS_LONE_MINOR_SCALE } else { PAWNLESS_SMALL_EDGE_SCALE })
 }
 
-fn endgame_scale_factor(board: &Board) -> i32 {
+fn endgame_scale_factor(board: &Board, raw: i32) -> i32 {
     if is_drawn_by_insufficient_material(board) {
         0
-    } else if let Some(scale) = pawnless_drawish_scale(board) {
+    } else if let Some(scale) = pawnless_drawish_scale(board, raw) {
         scale
     } else if is_pure_opposite_colored_bishops_ending(board) {
         OPPOSITE_COLORED_BISHOPS_SCALE
@@ -969,66 +1048,139 @@ fn piece_mobility_for(board: &Board, color: Color, occ: Bitboard, enemy_pawn_att
 
 /// One color's attacked squares, aggregated by attacker type (not counted
 /// per piece, just unioned) — exactly what `threats_score` needs to ask
-/// "is this square attacked by a pawn/minor/rook/queen at all?".
+/// "is this square attacked by a pawn/minor/rook/queen at all?" — plus the
+/// per-piece tally king safety needs (how many distinct pieces bear on the
+/// *enemy* king ring, and their combined weight), accumulated in the same
+/// pass rather than by walking every slider a second time.
 struct AttackInfo {
     pawns: Bitboard,
     minors: Bitboard,
     rooks: Bitboard,
     queens: Bitboard,
+    king_attackers: i32,
+    king_attack_weight: i32,
 }
 
-fn attack_info_for(board: &Board, color: Color, occ: Bitboard) -> AttackInfo {
+/// `target_ring` is the ring of the king this color is attacking, i.e. the
+/// *opposite* color's king ring — the same direction `king_safety_penalty`
+/// consumes it in.
+fn attack_info_for(board: &Board, color: Color, occ: Bitboard, target_ring: Bitboard) -> AttackInfo {
+    let mut king_attackers = 0;
+    let mut king_attack_weight = 0;
+    let mut tally = |attacks: Bitboard, weight: i32| {
+        if !(attacks & target_ring).is_empty() {
+            king_attackers += 1;
+            king_attack_weight += weight;
+        }
+    };
+
     let mut minors = Bitboard::EMPTY;
     for sq in board.pieces_of(color, PieceType::Knight) {
-        minors = minors | movegen::knight_attacks(sq);
+        let attacks = movegen::knight_attacks(sq);
+        tally(attacks, KING_ATTACK_WEIGHT_MINOR);
+        minors = minors | attacks;
     }
     for sq in board.pieces_of(color, PieceType::Bishop) {
-        minors = minors | movegen::bishop_attacks(sq, occ);
+        let attacks = movegen::bishop_attacks(sq, occ);
+        tally(attacks, KING_ATTACK_WEIGHT_MINOR);
+        minors = minors | attacks;
     }
     let mut rooks = Bitboard::EMPTY;
     for sq in board.pieces_of(color, PieceType::Rook) {
-        rooks = rooks | movegen::rook_attacks(sq, occ);
+        let attacks = movegen::rook_attacks(sq, occ);
+        tally(attacks, KING_ATTACK_WEIGHT_ROOK);
+        rooks = rooks | attacks;
     }
     let mut queens = Bitboard::EMPTY;
     for sq in board.pieces_of(color, PieceType::Queen) {
-        queens = queens | movegen::queen_attacks(sq, occ);
+        let attacks = movegen::queen_attacks(sq, occ);
+        tally(attacks, KING_ATTACK_WEIGHT_QUEEN);
+        queens = queens | attacks;
     }
     AttackInfo {
         pawns: pawn_attack_set(board.pieces_of(color, PieceType::Pawn), color),
         minors,
         rooks,
         queens,
+        king_attackers,
+        king_attack_weight,
     }
 }
 
+/// The king ring of `color`'s king, or an empty set if there is no such king
+/// (only reachable mid-test with a hand-built position).
+fn king_ring_of(board: &Board, color: Color) -> Bitboard {
+    board.pieces_of(color, PieceType::King).lsb().map(king_ring).unwrap_or(Bitboard::EMPTY)
+}
+
+/// Penalties for a piece attacked by a strictly cheaper one, split by
+/// whether the victim is defended at all.
+///
+/// Being defended does *not* make the threat go away, which is what the
+/// pre-0.25.0 version assumed for minor pieces (defended by a pawn ⇒ no
+/// penalty at all) while ignoring defenders entirely for rooks and queens.
+/// Both were wrong in the same way: if a pawn takes a defended knight and we
+/// recapture, we have still traded a knight for a pawn. So a defended victim
+/// keeps a reduced penalty (roughly the value gap that survives the
+/// recapture) rather than none, and an undefended one keeps the full one.
 const MINOR_ATTACKED_BY_PAWN_PENALTY: i32 = 45;
+const MINOR_ATTACKED_BY_PAWN_DEFENDED_PENALTY: i32 = 25;
 const ROOK_ATTACKED_BY_LESSER_PENALTY: i32 = 35;
+const ROOK_ATTACKED_BY_LESSER_DEFENDED_PENALTY: i32 = 18;
 const QUEEN_ATTACKED_BY_LESSER_PENALTY: i32 = 40;
+const QUEEN_ATTACKED_BY_LESSER_DEFENDED_PENALTY: i32 = 20;
 const WEAK_PAWN_PENALTY: i32 = 12;
 
+/// Every square `color` defends with anything at all, king included. Used
+/// only to tell "hanging" from "defended" in `threat_penalty_for`; a full
+/// answer would need SEE per threatened piece, which is far too expensive
+/// for a term evaluated at every node (see the module note above).
+fn defended_squares(board: &Board, color: Color, attacks: &AttackInfo) -> Bitboard {
+    let king = board
+        .pieces_of(color, PieceType::King)
+        .lsb()
+        .map(movegen::king_attacks)
+        .unwrap_or(Bitboard::EMPTY);
+    attacks.pawns | attacks.minors | attacks.rooks | attacks.queens | king
+}
+
 /// Non-negative: how much trouble `victim_color`'s own pieces are in
-/// against `attackers` (the *other* color's `AttackInfo`). The caller
-/// combines both directions with the right sign.
-fn threat_penalty_for(board: &Board, victim_color: Color, attackers: &AttackInfo) -> i32 {
-    let own_pawn_defense = pawn_attack_set(board.pieces_of(victim_color, PieceType::Pawn), victim_color);
+/// against `attackers` (the *other* color's `AttackInfo`), given
+/// `own_attacks` (the victim color's own, for defense). The caller combines
+/// both directions with the right sign.
+fn threat_penalty_for(board: &Board, victim_color: Color, attackers: &AttackInfo, own_attacks: &AttackInfo) -> i32 {
+    let own_pawn_defense = attackers_pawn_defense(board, victim_color);
+    let defended = defended_squares(board, victim_color, own_attacks);
     let mut penalty = 0;
 
     let minors = board.pieces_of(victim_color, PieceType::Knight) | board.pieces_of(victim_color, PieceType::Bishop);
     for sq in minors {
-        if attackers.pawns.contains(sq) && !own_pawn_defense.contains(sq) {
-            penalty += MINOR_ATTACKED_BY_PAWN_PENALTY;
+        if attackers.pawns.contains(sq) {
+            penalty += if defended.contains(sq) {
+                MINOR_ATTACKED_BY_PAWN_DEFENDED_PENALTY
+            } else {
+                MINOR_ATTACKED_BY_PAWN_PENALTY
+            };
         }
     }
 
     for sq in board.pieces_of(victim_color, PieceType::Rook) {
         if attackers.pawns.contains(sq) || attackers.minors.contains(sq) {
-            penalty += ROOK_ATTACKED_BY_LESSER_PENALTY;
+            penalty += if defended.contains(sq) {
+                ROOK_ATTACKED_BY_LESSER_DEFENDED_PENALTY
+            } else {
+                ROOK_ATTACKED_BY_LESSER_PENALTY
+            };
         }
     }
 
     for sq in board.pieces_of(victim_color, PieceType::Queen) {
         if attackers.pawns.contains(sq) || attackers.minors.contains(sq) || attackers.rooks.contains(sq) {
-            penalty += QUEEN_ATTACKED_BY_LESSER_PENALTY;
+            penalty += if defended.contains(sq) {
+                QUEEN_ATTACKED_BY_LESSER_DEFENDED_PENALTY
+            } else {
+                QUEEN_ATTACKED_BY_LESSER_PENALTY
+            };
         }
     }
 
@@ -1045,15 +1197,22 @@ fn threat_penalty_for(board: &Board, victim_color: Color, attackers: &AttackInfo
     penalty
 }
 
+fn attackers_pawn_defense(board: &Board, color: Color) -> Bitboard {
+    pawn_attack_set(board.pieces_of(color, PieceType::Pawn), color)
+}
+
 pub fn threats_score(board: &Board) -> i32 {
     let occ = board.occupied();
-    let white_attacks = attack_info_for(board, Color::White, occ);
-    let black_attacks = attack_info_for(board, Color::Black, occ);
+    let white_ring = king_ring_of(board, Color::White);
+    let black_ring = king_ring_of(board, Color::Black);
+    let white_attacks = attack_info_for(board, Color::White, occ, black_ring);
+    let black_attacks = attack_info_for(board, Color::Black, occ, white_ring);
     threats_score_with_attacks(board, &white_attacks, &black_attacks)
 }
 
 fn threats_score_with_attacks(board: &Board, white_attacks: &AttackInfo, black_attacks: &AttackInfo) -> i32 {
-    threat_penalty_for(board, Color::Black, white_attacks) - threat_penalty_for(board, Color::White, black_attacks)
+    threat_penalty_for(board, Color::Black, white_attacks, black_attacks)
+        - threat_penalty_for(board, Color::White, black_attacks, white_attacks)
 }
 
 /// Bonus for a rook on a file with no pawn of its own color on it: an open
@@ -1141,10 +1300,17 @@ fn is_defended_by_pawn(sq: Square, color: Color, own_pawns: Bitboard) -> bool {
         .any(|f| own_pawns.contains(Square::new(f as u8, defender_rank as u8)))
 }
 
+/// An outpost is a square no enemy pawn can ever be driven off from. Only a
+/// pawn on an *adjacent* file can do that driving: one on the same file
+/// cannot capture the piece, it can only be blocked by it. Requiring
+/// distance exactly 1 (it used to accept 0 as well) stops a blocked enemy
+/// pawn standing directly in front of the knight from cancelling its own
+/// outpost — e.g. `4k3/4p3/8/4N3/3P4/8/8/4K3 w - - 0 1`, where Ne5 is
+/// defended, unchallengeable, and used to score 0.
 fn is_outpost_square(sq: Square, color: Color, enemy_pawns: Bitboard) -> bool {
     let file = sq.file() as i32;
     !enemy_pawns.into_iter().any(|enemy_sq| {
-        if (enemy_sq.file() as i32 - file).abs() > 1 {
+        if (enemy_sq.file() as i32 - file).abs() != 1 {
             return false;
         }
         match color {
@@ -1297,9 +1463,18 @@ fn outside_passer_bonus(passer: Square, other_pawns: Bitboard) -> i32 {
     }
     let count = other_pawns.count() as i32;
     let file_sum: i32 = other_pawns.map(|sq| sq.file() as i32).sum();
-    let avg_file = file_sum / count;
-    let distance = (passer.file() as i32 - avg_file).abs();
-    (distance - 2).clamp(0, OUTSIDE_PASSER_MAX_FILES) * OUTSIDE_PASSER_BONUS_PER_FILE
+    // Compared in units of `count` rather than by truncating `file_sum /
+    // count` first: integer division rounds toward zero, which is toward the
+    // a-file, so the truncated form scored two horizontally mirrored
+    // positions differently (`4k3/8/8/8/PP1P4/8/8/4K3` gave +8 where its own
+    // mirror gave 0). Everything below is the same formula multiplied
+    // through by `count`.
+    let distance_scaled = (passer.file() as i32 * count - file_sum).abs();
+    let excess = distance_scaled - 2 * count;
+    if excess <= 0 {
+        return 0;
+    }
+    (excess / count).min(OUTSIDE_PASSER_MAX_FILES) * OUTSIDE_PASSER_BONUS_PER_FILE
 }
 
 fn passer_quality_score_for(pawns: Bitboard, enemy_pawns: Bitboard, color: Color) -> i32 {
@@ -1457,6 +1632,14 @@ fn pawn_endgame_score(board: &Board, phase: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The unscaled term sum `evaluate` would feed to
+    /// `endgame_scale_factor`, so tests can ask for a scale factor without
+    /// duplicating the whole term list.
+    fn evaluate_raw_for_test(board: &Board) -> i32 {
+        let (terms, _) = evaluate_breakdown(board);
+        terms.iter().map(|&(_, v)| v).sum()
+    }
 
     /// Flips a FEN vertically and swaps colors: rank order reversed, piece
     /// case swapped, side to move toggled, castling rights case-swapped and
@@ -1687,7 +1870,8 @@ mod tests {
         let king_sq = Square::new(6, 0); // g1
         let board = Board::from_fen("4k3/8/8/8/8/8/8/6K1 w - - 0 1").unwrap();
         assert_eq!(board.pieces_of(Color::White, PieceType::King).lsb(), Some(king_sq));
-        let black_attacks = attack_info_for(&board, Color::Black, board.occupied());
+        let white_ring = king_ring_of(&board, Color::White);
+        let black_attacks = attack_info_for(&board, Color::Black, board.occupied(), white_ring);
         assert_eq!(king_safety_penalty(&board, Color::White, 0, &black_attacks), 0);
     }
 
@@ -1737,7 +1921,9 @@ mod tests {
     #[test]
     fn rook_on_fully_open_file_beats_one_on_a_semi_open_file() {
         let fully_open = Board::from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
-        let semi_open = Board::from_fen("p3k3/8/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
+        // Black pawn on a7, not a8: a pawn can never stand on the back
+        // rank, and `Board::from_fen` now rejects such a position outright.
+        let semi_open = Board::from_fen("4k3/p7/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
         assert!(rook_file_score(&fully_open) > rook_file_score(&semi_open));
         assert!(rook_file_score(&semi_open) > 0);
     }
@@ -1935,7 +2121,7 @@ mod tests {
         // Same idea, but both bishops are on dark squares: no opposite-
         // colored-bishops drawishness, so no scaling should apply.
         let same_color = Board::from_fen("8/5k2/3b4/8/8/3P4/2K2B2/8 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&same_color), SCALE_FACTOR_NORMAL);
+        assert_eq!(endgame_scale_factor(&same_color, evaluate_raw_for_test(&same_color)), SCALE_FACTOR_NORMAL);
     }
 
     #[test]
@@ -1943,7 +2129,7 @@ mod tests {
         // Same opposite-colored bishops, but White also has a rook: not a
         // "pure" OCB ending anymore, so no scaling.
         let board = Board::from_fen("8/5k2/8/3b4/8/3P4/2K2B2/4R3 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&board), SCALE_FACTOR_NORMAL);
+        assert_eq!(endgame_scale_factor(&board, evaluate_raw_for_test(&board)), SCALE_FACTOR_NORMAL);
     }
 
     #[test]
@@ -1963,7 +2149,7 @@ mod tests {
         // dead draw (the bishop side can never mate, even after winning the
         // pawn), but the raw material count used to score it at +330.
         let board = Board::from_fen("8/8/4K3/8/5p1k/5B2/8/8 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&board), PAWNLESS_LONE_MINOR_SCALE);
+        assert_eq!(endgame_scale_factor(&board, evaluate_raw_for_test(&board)), PAWNLESS_LONE_MINOR_SCALE);
         let score = evaluate(&board);
         assert!(score.abs() < 40, "K+B vs K+P must read as near-draw, got {score}");
     }
@@ -1971,21 +2157,21 @@ mod tests {
     #[test]
     fn rook_versus_bishop_is_drawish_but_keeps_a_residual_pull() {
         let board = Board::from_fen("4k3/8/8/8/8/8/8/R3Kb2 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&board), PAWNLESS_SMALL_EDGE_SCALE);
+        assert_eq!(endgame_scale_factor(&board, evaluate_raw_for_test(&board)), PAWNLESS_SMALL_EDGE_SCALE);
     }
 
     #[test]
     fn pawnless_scaling_leaves_real_winning_material_alone() {
         // Bishop + knight can force mate: no scaling.
         let bn = Board::from_fen("4k3/8/8/8/8/8/8/1NB1K3 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&bn), SCALE_FACTOR_NORMAL);
+        assert_eq!(endgame_scale_factor(&bn, evaluate_raw_for_test(&bn)), SCALE_FACTOR_NORMAL);
         // K+R vs K+P: the rook side genuinely wins most of these; the
         // advantage is more than a minor, so no scaling either.
         let rp = Board::from_fen("4k3/4p3/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&rp), SCALE_FACTOR_NORMAL);
+        assert_eq!(endgame_scale_factor(&rp, evaluate_raw_for_test(&rp)), SCALE_FACTOR_NORMAL);
         // And the side *with* pawns is never scaled down for winnability.
         let with_pawns = Board::from_fen("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
-        assert_eq!(endgame_scale_factor(&with_pawns), SCALE_FACTOR_NORMAL);
+        assert_eq!(endgame_scale_factor(&with_pawns, evaluate_raw_for_test(&with_pawns)), SCALE_FACTOR_NORMAL);
     }
 
     #[test]
@@ -1996,9 +2182,13 @@ mod tests {
         let hanging = Board::from_fen("4k3/8/8/3n4/4P3/8/8/4K3 w - - 0 1").unwrap();
         assert_eq!(threats_score(&hanging), MINOR_ATTACKED_BY_PAWN_PENALTY);
 
-        // Same attack, but a black pawn on c6 now defends d5: no penalty.
+        // Same attack, but a black pawn on c6 now defends d5. The threat
+        // is smaller, not gone: exd5 cxd5 still trades a pawn for a knight.
+        // Treating a defender as a full refutation is what let a hanging
+        // minor read as perfectly safe.
         let defended = Board::from_fen("4k3/8/2p5/3n4/4P3/8/8/4K3 w - - 0 1").unwrap();
-        assert_eq!(threats_score(&defended), 0);
+        assert_eq!(threats_score(&defended), MINOR_ATTACKED_BY_PAWN_DEFENDED_PENALTY);
+        const { assert!(MINOR_ATTACKED_BY_PAWN_DEFENDED_PENALTY < MINOR_ATTACKED_BY_PAWN_PENALTY) };
     }
 
     #[test]
@@ -2052,16 +2242,60 @@ mod tests {
     #[test]
     fn king_danger_penalty_grows_faster_than_linearly_with_attacker_count() {
         let ring = king_ring(Square::new(4, 0)); // e1
-        let empty_info = || AttackInfo { pawns: Bitboard::EMPTY, minors: Bitboard::EMPTY, rooks: Bitboard::EMPTY, queens: Bitboard::EMPTY };
-        let one_ring_square_attacked =
-            AttackInfo { rooks: Bitboard::from_square(Square::new(4, 1)), ..empty_info() }; // e2, in the ring
-        let two_ring_squares_attacked = AttackInfo {
-            rooks: Bitboard::from_square(Square::new(4, 1)) | Bitboard::from_square(Square::new(3, 1)), // e2, d2
+        let empty_info = || AttackInfo {
+            pawns: Bitboard::EMPTY,
+            minors: Bitboard::EMPTY,
+            rooks: Bitboard::EMPTY,
+            queens: Bitboard::EMPTY,
+            king_attackers: 0,
+            king_attack_weight: 0,
+        };
+        let ring_square = Bitboard::from_square(Square::new(4, 1)); // e2, in the ring
+        let two_attackers = AttackInfo {
+            rooks: ring_square,
+            king_attackers: 2,
+            king_attack_weight: 2 * KING_ATTACK_WEIGHT_ROOK,
             ..empty_info()
         };
-        let one = king_danger_penalty(ring, &one_ring_square_attacked);
-        let two = king_danger_penalty(ring, &two_ring_squares_attacked);
-        assert!(two > one * 2, "expected super-linear growth: one={one}, two={two}");
+        let three_attackers = AttackInfo {
+            rooks: ring_square,
+            king_attackers: 3,
+            king_attack_weight: 3 * KING_ATTACK_WEIGHT_ROOK,
+            ..empty_info()
+        };
+        let two = king_danger_penalty(ring, &two_attackers);
+        let three = king_danger_penalty(ring, &three_attackers);
+        assert!(two > 0);
+        assert!(three > two * 3 / 2, "expected super-linear growth: two={two}, three={three}");
+    }
+
+    #[test]
+    fn king_danger_ignores_a_single_attacker_and_keeps_growing_past_the_second() {
+        // One piece near the enemy king is normal activity, not an attack;
+        // and — the regression this replaces — a third and fourth attacker
+        // must still change the number. The old formula counted *ring
+        // squares* rather than attacking pieces, so a lone queen already
+        // saturated the cap and nothing added after it moved the score.
+        let ring = king_ring(Square::new(6, 7)); // g8
+        let mk = |attackers: i32, weight: i32| AttackInfo {
+            pawns: Bitboard::EMPTY,
+            minors: Bitboard::EMPTY,
+            rooks: Bitboard::EMPTY,
+            queens: Bitboard::from_square(Square::new(6, 6)), // g7, in the ring
+            king_attackers: attackers,
+            king_attack_weight: weight,
+        };
+        assert_eq!(king_danger_penalty(ring, &mk(1, KING_ATTACK_WEIGHT_QUEEN)), 0);
+        let two = king_danger_penalty(ring, &mk(2, KING_ATTACK_WEIGHT_QUEEN + KING_ATTACK_WEIGHT_MINOR));
+        let three = king_danger_penalty(
+            ring,
+            &mk(3, KING_ATTACK_WEIGHT_QUEEN + 2 * KING_ATTACK_WEIGHT_MINOR),
+        );
+        let four = king_danger_penalty(
+            ring,
+            &mk(4, KING_ATTACK_WEIGHT_QUEEN + 2 * KING_ATTACK_WEIGHT_MINOR + KING_ATTACK_WEIGHT_ROOK),
+        );
+        assert!(two < three && three < four, "adding attackers must keep raising the danger: {two} {three} {four}");
     }
 
     #[test]
@@ -2074,5 +2308,77 @@ mod tests {
         let exposed = Board::from_fen("1k4r1/8/8/8/7q/8/8/7K w - - 0 1").unwrap();
         let safer = Board::from_fen("1k4r1/8/8/8/q7/8/8/7K w - - 0 1").unwrap();
         assert!(king_safety_score(&exposed) < king_safety_score(&safer));
+    }
+
+    #[test]
+    fn the_pawnless_scale_never_flattens_the_other_sides_winning_position() {
+        // White has a lone bishop, Black three connected pawns a step from
+        // the sixth. Raw material is +30 for White, so the "a lone minor
+        // cannot win" rule used to pick White as the strong side and scale
+        // the *whole* evaluation to 4/64 — turning a position Black wins by
+        // a rook into "roughly level". The rule may only ever damp an
+        // evaluation that favours the side it is about.
+        let board = Board::from_fen("8/8/8/8/8/2ppp3/4k3/K1B5 w - - 0 1").unwrap();
+        let raw = evaluate_raw_for_test(&board);
+        assert!(raw < 0, "the raw terms already see Black better here, got {raw}");
+        assert_eq!(endgame_scale_factor(&board, raw), SCALE_FACTOR_NORMAL);
+        assert!(evaluate(&board) < -150, "expected a clearly losing score for White, got {}", evaluate(&board));
+    }
+
+    #[test]
+    fn the_pawnless_scale_steps_aside_for_a_pawn_about_to_queen() {
+        // K+B vs K+P is a drawn family *in general*, which is why the rule
+        // exists — but not when the pawn is one push from queening with its
+        // own king escorting it.
+        let board = Board::from_fen("7K/8/8/8/8/8/1pk5/7B b - - 0 1").unwrap();
+        assert_eq!(endgame_scale_factor(&board, evaluate_raw_for_test(&board)), SCALE_FACTOR_NORMAL);
+    }
+
+    #[test]
+    fn two_bishops_on_the_same_color_squares_are_a_dead_position() {
+        // Neither bishop can ever attack the square the other stands on and
+        // neither side can mate: a real dead draw, not a judgment call. The
+        // three copies of this rule (eval, search, harness) disagreed about
+        // it, which is why there is now only one.
+        let same_color = Board::from_fen("4kb2/8/8/8/8/8/8/2B1K3 w - - 0 1").unwrap();
+        assert!(is_insufficient_material(&same_color));
+        assert_eq!(evaluate(&same_color), 0);
+
+        // Opposite colors: still drawish in practice, but not dead — the
+        // bishops can attack each other's squares, so this stays for the
+        // search and the opposite-colored-bishops scale to handle.
+        let opposite_colors = Board::from_fen("4k3/5b2/8/8/8/8/8/2B1K3 w - - 0 1").unwrap();
+        assert!(!is_insufficient_material(&opposite_colors));
+    }
+
+    #[test]
+    fn the_outside_passer_bonus_is_symmetric_under_a_horizontal_mirror() {
+        // Integer division truncates toward the a-file, so the average-file
+        // comparison used to score a position and its own mirror image
+        // differently.
+        let left = Board::from_fen("4k3/8/8/8/PP1P4/8/8/4K3 w - - 0 1").unwrap();
+        let right = Board::from_fen("3k4/8/8/8/4P1PP/8/8/3K4 w - - 0 1").unwrap();
+        assert_eq!(evaluate(&left), evaluate(&right));
+    }
+
+    #[test]
+    fn a_blocked_enemy_pawn_on_the_same_file_does_not_cancel_an_outpost() {
+        // Only a pawn on an *adjacent* file can ever drive the knight off;
+        // one directly in front of it is blocked by the knight itself.
+        let board = Board::from_fen("4k3/4p3/8/4N3/3P4/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(knight_outpost_score(&board), KNIGHT_OUTPOST_BONUS);
+    }
+
+    #[test]
+    fn a_defended_rook_attacked_by_a_minor_is_still_a_threat_but_a_smaller_one() {
+        // Defenders were ignored outright for rooks and queens. They do not
+        // make the threat go away (N x R, R x N still wins the exchange),
+        // but they do make it smaller.
+        let hanging = Board::from_fen("4k3/8/8/1n6/3R4/8/8/4K3 w - - 0 1").unwrap();
+        let defended = Board::from_fen("4k3/8/8/1n6/3R4/8/8/3RK3 w - - 0 1").unwrap();
+        let (h, d) = (threats_score(&hanging), threats_score(&defended));
+        assert_eq!(h, -ROOK_ATTACKED_BY_LESSER_PENALTY);
+        assert_eq!(d, -ROOK_ATTACKED_BY_LESSER_DEFENDED_PENALTY);
+        assert!(d > h, "a defended rook should be in less trouble than a hanging one: {d} vs {h}");
     }
 }

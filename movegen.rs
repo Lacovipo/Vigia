@@ -188,6 +188,10 @@ pub fn knight_attacks(sq: Square) -> Bitboard {
     Bitboard(KNIGHT_ATTACKS[sq.0 as usize])
 }
 
+pub fn king_attacks(sq: Square) -> Bitboard {
+    Bitboard(KING_ATTACKS[sq.0 as usize])
+}
+
 // ---------------------------------------------------------------------
 // Attack detection.
 // ---------------------------------------------------------------------
@@ -222,12 +226,94 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
     false
 }
 
+/// Whether `color`'s king is under attack. A position with no such king is
+/// impossible through the public API (`Board::from_fen` requires exactly one
+/// king per side and rejects a side-to-move that could capture the other
+/// king), so this answers `false` rather than panicking: a search thread
+/// dying on a hand-built position is a worse failure mode than one extra
+/// branch on a path that never fires in a real game.
 pub fn is_in_check(board: &Board, color: Color) -> bool {
-    let king_sq = board
-        .pieces_of(color, PieceType::King)
-        .lsb()
-        .expect("is_in_check: no hay rey en el tablero");
-    is_square_attacked(board, king_sq, color.opposite())
+    match board.pieces_of(color, PieceType::King).lsb() {
+        Some(king_sq) => is_square_attacked(board, king_sq, color.opposite()),
+        None => false,
+    }
+}
+
+/// Does `mv`, played by the side to move, leave the *opponent's* king in
+/// check? Answers exactly what `make_move` + `is_in_check` + `unmake_move`
+/// would, without touching the board — which is what makes it affordable in
+/// the pruning decisions that happen before a move is played at all
+/// (`negamax` must not discard a checking move as "just another quiet move"
+/// past the late-move-pruning threshold, and paying a make/unmake per
+/// candidate to find out would defeat the point of pruning).
+///
+/// Handles the three moves that touch more squares than `from`/`to`: en
+/// passant vacates the captured pawn's square as well, castling relocates a
+/// rook that may itself deliver the check, and a promotion checks with the
+/// piece it becomes rather than with a pawn. `gives_check_matches_make_move`
+/// pins all of that against the make/unmake answer over whole move trees.
+pub fn gives_check(board: &Board, mv: Move) -> bool {
+    let us = board.side_to_move;
+    let Some(king_sq) = board.pieces_of(us.opposite(), PieceType::King).lsb() else {
+        return false;
+    };
+    let Some(moving) = board.piece_at(mv.from) else {
+        return false;
+    };
+
+    // Occupancy as it will be after the move.
+    let mut occ = board.occupied();
+    let mut vacated = Bitboard::from_square(mv.from);
+    occ.clear(mv.from);
+    occ.set(mv.to);
+    if mv.flag == MoveFlag::EnPassant {
+        occ.clear(Square::new(mv.to.file(), mv.from.rank()));
+    }
+    let mut castled_rook = None;
+    if mv.flag.is_castle() {
+        let (rook_from, rook_to) = Board::castle_rook_squares(us, mv.flag);
+        occ.clear(rook_from);
+        occ.set(rook_to);
+        vacated = vacated | Bitboard::from_square(rook_from);
+        castled_rook = Some(rook_to);
+    }
+
+    // Direct check by whatever now stands on the destination square.
+    let placed = mv.flag.promotion_piece().unwrap_or(moving.kind);
+    let direct = match placed {
+        PieceType::Pawn => {
+            let table = match us {
+                Color::White => &WHITE_PAWN_ATTACKS,
+                Color::Black => &BLACK_PAWN_ATTACKS,
+            };
+            Bitboard(table[mv.to.0 as usize]).contains(king_sq)
+        }
+        PieceType::Knight => knight_attacks(mv.to).contains(king_sq),
+        PieceType::Bishop => bishop_attacks(mv.to, occ).contains(king_sq),
+        PieceType::Rook => rook_attacks(mv.to, occ).contains(king_sq),
+        PieceType::Queen => queen_attacks(mv.to, occ).contains(king_sq),
+        PieceType::King => false, // a king can never attack the other king
+    };
+    if direct {
+        return true;
+    }
+    if let Some(rook_to) = castled_rook {
+        if rook_attacks(rook_to, occ).contains(king_sq) {
+            return true;
+        }
+    }
+
+    // Discovered check: any of our sliders that still stands where it was
+    // (hence `& !vacated`) and now sees the king through the new occupancy.
+    let diagonal = (board.pieces_of(us, PieceType::Bishop) | board.pieces_of(us, PieceType::Queen)) & !vacated;
+    if !(bishop_attacks(king_sq, occ) & diagonal).is_empty() {
+        return true;
+    }
+    let orthogonal = (board.pieces_of(us, PieceType::Rook) | board.pieces_of(us, PieceType::Queen)) & !vacated;
+    if !(rook_attacks(king_sq, occ) & orthogonal).is_empty() {
+        return true;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------
@@ -439,15 +525,17 @@ pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
 /// `quiescence`/`search_root`, which already hold a `&mut Board` anyway.
 pub(crate) fn legal_moves_scratch(working: &mut Board) -> Vec<Move> {
     let color = working.side_to_move;
-    generate_pseudo_legal_moves(working)
-        .into_iter()
-        .filter(|&mv| {
-            let undo = working.make_move(mv);
-            let legal = !is_in_check(working, color);
-            working.unmake_move(mv, undo);
-            legal
-        })
-        .collect()
+    let mut moves = generate_pseudo_legal_moves(working);
+    // `retain` in place rather than `filter().collect()`: the latter built a
+    // second `Vec` per node on top of the generator's own, and this is the
+    // single most frequently called allocation site in the engine.
+    moves.retain(|&mv| {
+        let undo = working.make_move(mv);
+        let legal = !is_in_check(working, color);
+        working.unmake_move(mv, undo);
+        legal
+    });
+    moves
 }
 
 // ---------------------------------------------------------------------
@@ -497,6 +585,26 @@ fn least_valuable_attacker(board: &Board, color: Color, attackers: Bitboard) -> 
     None
 }
 
+/// Longest exchange this can model: 32 pieces on the board is an absolute
+/// ceiling on how many captures can happen on one square, and in practice a
+/// swap sequence past a handful of plies is already vanishingly rare.
+const SEE_MAX_EXCHANGES: usize = 32;
+
+/// Value a pawn gains by reaching the last rank during the swap sequence.
+/// The recapture chain always promotes to a queen: SEE is a bound on how
+/// the exchange can go, and no defender ever benefits from assuming its
+/// opponent underpromotes.
+fn see_promotion_gain() -> i32 {
+    eval::piece_value(PieceType::Queen) - eval::piece_value(PieceType::Pawn)
+}
+
+fn is_promotion_rank(sq: Square, color: Color) -> bool {
+    match color {
+        Color::White => sq.rank() == 7,
+        Color::Black => sq.rank() == 0,
+    }
+}
+
 /// Net material change (in centipawns, from the mover's perspective) of
 /// playing capture `mv` and then letting both sides recapture on that
 /// square with their least valuable attacker, for as long as it's
@@ -532,10 +640,15 @@ pub fn static_exchange_eval(board: &Board, mv: Move) -> i32 {
         None => board.piece_at(mv.from).map(|p| eval::piece_value(p.kind)).unwrap_or(0),
     };
 
-    let mut gains = vec![captured_value + promotion_gain];
+    // Fixed-size stack array rather than a `Vec`: SEE runs for every capture
+    // during move ordering *and* again in the quiescence filter, so a heap
+    // allocation here was one malloc/free per capture per node.
+    let mut gains = [0i32; SEE_MAX_EXCHANGES];
+    gains[0] = captured_value + promotion_gain;
+    let mut gains_len = 1usize;
     let mut side = mover_color.opposite();
 
-    loop {
+    while gains_len < SEE_MAX_EXCHANGES {
         let attackers = attackers_to(board, to, occupied) & board.color_occupied(side) & occupied;
         let Some((attacker_sq, kind)) = least_valuable_attacker(board, side, attackers) else {
             break;
@@ -557,13 +670,26 @@ pub fn static_exchange_eval(board: &Board, mv: Move) -> i32 {
                 break;
             }
         }
-        gains.push(attacker_value - gains[gains.len() - 1]);
+        // A pawn recapturing onto the last rank promotes, which the swap
+        // used to ignore entirely: only the *initial* move's promotion was
+        // priced in. That made `1R2k3/P7/8/8/1r6/8/8/4K3 b - - 0 1` score
+        // ...Rxb8 as an even trade when axb8=Q answers it, roughly 800 cp
+        // the other way.
+        let mut gain = attacker_value - gains[gains_len - 1];
+        let mut next_attacker_value = eval::piece_value(kind);
+        if kind == PieceType::Pawn && is_promotion_rank(to, side) {
+            let promo = see_promotion_gain();
+            gain += promo;
+            next_attacker_value += promo;
+        }
+        gains[gains_len] = gain;
+        gains_len += 1;
         occupied.clear(attacker_sq);
-        attacker_value = eval::piece_value(kind);
+        attacker_value = next_attacker_value;
         side = side.opposite();
     }
 
-    for i in (0..gains.len() - 1).rev() {
+    for i in (0..gains_len - 1).rev() {
         gains[i] = -i32::max(-gains[i], gains[i + 1]);
     }
     gains[0]
@@ -826,5 +952,72 @@ mod tests {
         let board = Board::from_fen("3rk3/8/8/3r4/8/8/8/3RK3 w - - 0 1").unwrap();
         let mv = Move::new(Square::new(3, 0), Square::new(3, 4), MoveFlag::Capture);
         assert_eq!(static_exchange_eval(&board, mv), 0);
+    }
+
+    /// Walks every legal move of every position down to `depth` and checks
+    /// `gives_check` against the make/unmake answer it replaces.
+    fn assert_gives_check_agrees(board: &mut Board, depth: u32) {
+        for mv in legal_moves_scratch(board) {
+            let predicted = gives_check(board, mv);
+            let undo = board.make_move(mv);
+            let actual = is_in_check(board, board.side_to_move);
+            assert_eq!(
+                predicted,
+                actual,
+                "gives_check disagreed on {mv} in {}",
+                {
+                    board.unmake_move(mv, undo);
+                    board.to_fen()
+                }
+            );
+            if depth > 1 {
+                assert_gives_check_agrees(board, depth - 1);
+            }
+            board.unmake_move(mv, undo);
+        }
+    }
+
+    #[test]
+    fn gives_check_matches_make_move() {
+        // The reference positions, chosen for exactly the cases a
+        // square-arithmetic check test gets wrong: Kiwipete for castling
+        // and pins, position 3 for en passant and discovered checks along a
+        // rank, position 4 for promotions.
+        let cases = [
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 3),
+            ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 3),
+            ("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", 4),
+            ("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 3),
+            ("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", 3),
+        ];
+        for (fen, depth) in cases {
+            let mut board = Board::from_fen(fen).unwrap();
+            assert_gives_check_agrees(&mut board, depth);
+        }
+    }
+
+    #[test]
+    fn see_prices_a_promotion_that_happens_during_the_recapture_chain() {
+        // Black rook takes the rook on b8; White answers axb8=Q. The swap
+        // used to price that answering pawn as a pawn — it only ever
+        // accounted for a promotion made by the *initial* move — and
+        // reported the whole sequence as an even trade.
+        let board = Board::from_fen("1R2k3/P7/8/8/1r6/8/8/4K3 b - - 0 1").unwrap();
+        let rxb8 = Move::new(Square::new(1, 3), Square::new(1, 7), MoveFlag::Capture);
+        let see = static_exchange_eval(&board, rxb8);
+        assert!(
+            see < -700,
+            "...Rxb8 axb8=Q loses a rook for a rook plus a new queen; SEE said {see}"
+        );
+    }
+
+    #[test]
+    fn see_of_a_pawn_recapture_short_of_the_last_rank_is_unaffected() {
+        // Same shape one rank lower, where no promotion is involved: the
+        // promotion handling must not leak into ordinary recaptures.
+        let board = Board::from_fen("4k3/8/8/8/1r6/1R6/P7/4K3 b - - 0 1").unwrap();
+        let rxb3 = Move::new(Square::new(1, 3), Square::new(1, 2), MoveFlag::Capture);
+        let see = static_exchange_eval(&board, rxb3);
+        assert_eq!(see, eval::piece_value(PieceType::Rook) - eval::piece_value(PieceType::Rook));
     }
 }

@@ -135,10 +135,23 @@ impl Board {
         for (rank_from_top, rank_str) in ranks.iter().enumerate() {
             let rank = 7 - rank_from_top as u8;
             let mut file = 0u8;
+            let mut previous_was_digit = false;
             for c in rank_str.chars() {
                 if let Some(skip) = c.to_digit(10) {
+                    // A run of empty squares is written as a single digit
+                    // 1-8. Accepting '0' (a no-op), two digits in a row
+                    // ("44") or an unchecked running total was sloppy rather
+                    // than dangerous — every such spelling describes a
+                    // position that could have been written properly — but
+                    // silently normalising malformed input is how a parser
+                    // stops being a trustworthy boundary.
+                    if !(1..=8).contains(&skip) || previous_was_digit || file + skip as u8 > 8 {
+                        return Err(format!("FEN inválida: longitud de hueco inválida '{c}' en una fila"));
+                    }
                     file += skip as u8;
+                    previous_was_digit = true;
                 } else {
+                    previous_was_digit = false;
                     let piece =
                         Piece::from_char(c).ok_or_else(|| format!("carácter de pieza inválido: '{c}'"))?;
                     if file >= 8 {
@@ -168,6 +181,36 @@ impl Board {
             return Err("FEN inválida: se requiere exactamente un rey negro".to_string());
         }
 
+        // A pawn can never legally stand on rank 1 or 8 — it would have
+        // promoted. Downstream code takes that for granted: the move
+        // generator derives `from.rank() + dir` without a bounds check and
+        // the KPK oracle indexes a table with only six pawn ranks in it, so
+        // `P3k3/8/8/8/8/8/8/4K3 w - - 0 1` used to be accepted and then
+        // panic on the first evaluation.
+        let back_ranks = Bitboard(0xFF00_0000_0000_00FF);
+        for color in [Color::White, Color::Black] {
+            if !(pieces[color as usize][PieceType::Pawn as usize] & back_ranks).is_empty() {
+                return Err("FEN inválida: hay un peón en la primera u octava fila".to_string());
+            }
+        }
+
+        // Two kings cannot stand next to each other, and the side that is
+        // *not* to move cannot already be in check — that would mean its
+        // own last move left its king en prise. Either one lets the move
+        // generator produce a king capture, which removes a king from the
+        // board and leaves every later `is_in_check` query meaningless.
+        let white_king = pieces[Color::White as usize][PieceType::King as usize]
+            .lsb()
+            .expect("checked count() == 1 above");
+        let black_king = pieces[Color::Black as usize][PieceType::King as usize]
+            .lsb()
+            .expect("checked count() == 1 above");
+        let file_gap = (white_king.file() as i32 - black_king.file() as i32).abs();
+        let rank_gap = (white_king.rank() as i32 - black_king.rank() as i32).abs();
+        if file_gap.max(rank_gap) <= 1 {
+            return Err("FEN inválida: los dos reyes están en casillas adyacentes".to_string());
+        }
+
         let claimed_castling = CastlingRights::from_fen_str(fields[2])
             .ok_or_else(|| format!("token de enroque inválido: '{}'", fields[2]))?;
         let castling = sanitize_castling_rights(claimed_castling, &mailbox);
@@ -184,6 +227,18 @@ impl Board {
         // is a corrupt FEN, and downstream code — movegen offering the
         // capture, make_move deriving the captured pawn's square from it —
         // assumes this invariant rather than re-checking it per move.
+        //
+        // Rank alone is not enough, though. The whole double-push has to be
+        // consistent: the target square and the square the pawn came from
+        // must be empty, and the pawn that made the push must actually be
+        // sitting just past the target. Checking only the rank let
+        // `4k3/8/8/4P3/8/8/8/4K3 w - d6 0 1` generate exd6 with no black
+        // pawn to capture (a pawn changing file for free), and
+        // `4k3/8/3B4/3pP3/8/8/8/4K3 w - d6 0 1` — where d6 holds White's own
+        // bishop — overwrote the mailbox without clearing the bishop's
+        // bitboard, desynchronising the two board representations until
+        // `make_move` panicked. Castling rights are sanitised the same way
+        // just above, for the same reason.
         if let Some(ep) = en_passant {
             let expected_rank = match side_to_move {
                 Color::White => 5,
@@ -193,23 +248,40 @@ impl Board {
                 return Err(format!("casilla al paso imposible para el color activo: '{ep}'"));
             }
         }
+        // Right rank but no double push behind it: dropped rather than
+        // rejected, exactly like a castling right whose rook has moved.
+        let en_passant = en_passant.filter(|&ep| {
+            let (pushed_from_rank, pushed_to_rank, pawn_color) = match side_to_move {
+                Color::White => (6u8, 4u8, Color::Black),
+                Color::Black => (1u8, 3u8, Color::White),
+            };
+            let pushed_to = Square::new(ep.file(), pushed_to_rank);
+            let pushed_from = Square::new(ep.file(), pushed_from_rank);
+            mailbox[ep.0 as usize].is_none()
+                && mailbox[pushed_from.0 as usize].is_none()
+                && matches!(mailbox[pushed_to.0 as usize], Some(p) if p.color == pawn_color && p.kind == PieceType::Pawn)
+        });
 
         // Fields 5 and 6 may legitimately be *absent* (EPD-style four-field
         // positions), but when present they must parse: silently turning
         // garbage like "xx" into 0 used to falsify the fifty-move state
         // with no warning at all.
-        let halfmove_clock = match fields.get(4) {
+        let halfmove_clock: u16 = match fields.get(4) {
             Some(s) => s
                 .parse()
                 .map_err(|_| format!("contador de medias jugadas inválido: '{s}'"))?,
             None => 0,
         };
-        let fullmove_number = match fields.get(5) {
+        let fullmove_number: u16 = match fields.get(5) {
             Some(s) => s
                 .parse()
                 .map_err(|_| format!("número de jugada inválido: '{s}'"))?,
             None => 1,
         };
+        // Move 0 does not exist; games are numbered from 1.
+        if fullmove_number == 0 {
+            return Err("FEN inválida: el número de jugada empieza en 1".to_string());
+        }
 
         let en_passant_hash_square =
             en_passant.filter(|&ep| is_en_passant_capturable(&mailbox, ep, side_to_move));
@@ -226,12 +298,30 @@ impl Board {
             hash: 0,
         };
         board.hash = board.compute_hash_from_scratch();
+        // Last invariant, and the only one that needs a fully built board:
+        // the side that just moved cannot have left its own king attacked.
+        // `4k3/4Q3/8/8/8/8/8/4K3 w - - 0 1` is an impossible position that
+        // the generator happily answered with Qxe8, taking the black king
+        // off the board; every subsequent check test then had no king to
+        // ask about and the search thread died without a `bestmove`.
+        if crate::movegen::is_in_check(&board, side_to_move.opposite()) {
+            return Err("FEN inválida: el rey del bando que no mueve está en jaque".to_string());
+        }
         Ok(board)
     }
 
     /// Recomputes the Zobrist hash from the current board state in O(64).
     /// Used to seed `hash` on construction and, in tests, to check that the
     /// incremental updates in make/unmake never drift from the true value.
+    ///
+    /// The en passant component is re-derived from the *visible* state
+    /// (`en_passant` plus the board) rather than read out of the cached
+    /// `en_passant_hash_square`. Reading the cache made the incremental-hash
+    /// test tautological in exactly the place it was most worth checking:
+    /// a desynchronisation between the cache and the real position would
+    /// have shown up in both the incremental and the "from scratch" value
+    /// and cancelled out. The cache still exists and is still what
+    /// make/unmake toggle — see its own doc for why it must be.
     pub fn compute_hash_from_scratch(&self) -> u64 {
         let mut hash = 0u64;
         for sq in 0..64u8 {
@@ -243,7 +333,10 @@ impl Board {
             hash ^= zobrist::side_to_move_key();
         }
         hash ^= zobrist::castling_key(self.castling);
-        hash ^= zobrist::en_passant_key(self.en_passant_hash_square);
+        let en_passant_component = self
+            .en_passant
+            .filter(|&ep| is_en_passant_capturable(&self.mailbox, ep, self.side_to_move));
+        hash ^= zobrist::en_passant_key(en_passant_component);
         hash
     }
 
@@ -320,7 +413,7 @@ impl Board {
         self.hash ^= zobrist::piece_square_key(piece.color, piece.kind, sq);
     }
 
-    fn castle_rook_squares(color: Color, flag: MoveFlag) -> (Square, Square) {
+    pub(crate) fn castle_rook_squares(color: Color, flag: MoveFlag) -> (Square, Square) {
         match (color, flag) {
             (Color::White, MoveFlag::KingCastle) => (Square::H1, Square::new(5, 0)),
             (Color::White, MoveFlag::QueenCastle) => (Square::A1, Square::new(3, 0)),
@@ -421,14 +514,17 @@ impl Board {
         };
         self.set_en_passant(new_en_passant);
 
+        // Saturating: both counters are `u16`, and a FEN is free to claim a
+        // value near the maximum. Overflowing there panicked in a debug
+        // build and silently wrapped in a release one.
         self.halfmove_clock = if moving.kind == PieceType::Pawn || captured.is_some() {
             0
         } else {
-            self.halfmove_clock + 1
+            self.halfmove_clock.saturating_add(1)
         };
 
         if color == Color::Black {
-            self.fullmove_number += 1;
+            self.fullmove_number = self.fullmove_number.saturating_add(1);
         }
 
         self.side_to_move = color.opposite();
@@ -670,5 +766,59 @@ mod tests {
         let mv = Move::new(Square::new(6, 1), Square::H1, MoveFlag::Capture);
         board.make_move(mv);
         assert_eq!(board.castling, CastlingRights::from_fen_str("Qkq").unwrap());
+    }
+
+    #[test]
+    fn fen_rejects_a_pawn_on_the_back_ranks() {
+        // Not merely odd: the move generator computes `from.rank() + dir`
+        // with no bounds check and the KPK oracle indexes a table with six
+        // pawn ranks in it, so this used to be accepted and then panic.
+        assert!(Board::from_fen("P3k3/8/8/8/8/8/8/4K3 w - - 0 1").is_err());
+        assert!(Board::from_fen("4k3/8/8/8/8/8/8/p3K3 w - - 0 1").is_err());
+    }
+
+    #[test]
+    fn fen_rejects_adjacent_kings_and_a_king_left_en_prise() {
+        assert!(Board::from_fen("8/8/8/3kK3/8/8/8/8 w - - 0 1").is_err());
+        // Black is not to move and is already in check: an impossible
+        // position from which the generator offered Qxe8, taking a king off
+        // the board and leaving every later check test unanswerable.
+        assert!(Board::from_fen("4k3/4Q3/8/8/8/8/8/4K3 w - - 0 1").is_err());
+        // The same shape with Black to move is perfectly legal.
+        assert!(Board::from_fen("4k3/4Q3/8/8/8/8/8/4K3 b - - 0 1").is_ok());
+    }
+
+    #[test]
+    fn fen_rejects_malformed_counters_and_rank_runs() {
+        assert!(Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 0").is_err());
+        assert!(Board::from_fen("4k3/44/8/8/8/8/8/4K3 w - - 0 1").is_err());
+        assert!(Board::from_fen("4k3/08/8/8/8/8/8/4K3 w - - 0 1").is_err());
+    }
+
+    #[test]
+    fn fen_drops_an_en_passant_square_no_double_push_could_have_created() {
+        // Right rank, no black pawn on d5: sanitised away exactly like a
+        // castling right whose rook has moved. Left in place, it let the
+        // e5 pawn "capture" onto d6 and change file for free.
+        let board = Board::from_fen("4k3/8/8/4P3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(board.en_passant, None);
+
+        // Target square occupied by White's own bishop: the en passant
+        // capture overwrote the mailbox without clearing the bishop's
+        // bitboard, and `make_move` panicked a few plies later.
+        let board = Board::from_fen("4k3/8/3B4/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(board.en_passant, None);
+
+        // A genuine double push is still honoured.
+        let board = Board::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(board.en_passant, Some("d6".parse::<Square>().unwrap()));
+    }
+
+    #[test]
+    fn the_fifty_move_counter_saturates_instead_of_overflowing() {
+        let mut board = Board::from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 65535 1").unwrap();
+        let quiet = Move::new(Square::A1, Square::new(1, 0), MoveFlag::Quiet);
+        board.make_move(quiet);
+        assert_eq!(board.halfmove_clock, u16::MAX);
     }
 }
