@@ -1,0 +1,22 @@
+[package]
+name = "vigia"
+version = "0.25.0"
+edition = "2021"
+
+[lib]
+name = "vigia"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vigia"
+path = "src/main.rs"
+
+[[bin]]
+name = "selfplay"
+path = "src/bin/selfplay.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[dependencies]
