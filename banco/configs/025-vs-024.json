@@ -1,0 +1,16 @@
+{
+  "_": "Primera medición válida del banco: 0.25 de desarrollo contra la release 0.24 cerrada.",
+  "_2": "Va por movetime y no por nodos porque 0.24 NO respeta 'go nodes' (se planta en el 17 %",
+  "_3": "de lo pedido). El banco lo detecta y aborta si se intenta; ver docs/BancoPruebas.md.",
+  "_4": "La documentación de 0.25 afirmaba +77 Elo a partir de 32 partidas: esto lo contrasta.",
+  "esquema": 1,
+  "id": "025dev-vs-024",
+  "candidato": {"nombre": "Vigia 0.25-dev", "ruta": "target/release/vigia.exe", "opciones": {"Hash": 32, "Threads": 1}},
+  "base": {"nombre": "Vigia 0.24", "ruta": "../zzRelease/Vigia 0.24.exe", "opciones": {"Hash": 32, "Threads": 1}},
+  "libro": {"fichero": "banco/libros/vigia-256.epd", "semilla": 20260818, "barajar": true},
+  "busqueda": {"movetime_ms": 100},
+  "partidas": {"max_parejas": 128, "workers": 4, "max_plies": 300},
+  "adjudicacion": {"resign_cp": 900, "resign_plies": 4, "tablas_cp": 12, "tablas_plies": 8, "tablas_desde_jugada": 40},
+  "sprt": {"elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05},
+  "salida": "banco/resultados/025dev-vs-024"
+}

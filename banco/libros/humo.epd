@@ -1,0 +1,16 @@
+# libro de aperturas para el banco de pruebas de Vigía — 2026-08-18T10:08:20Z
+# generado por banco/1.0
+# origen: C:/JC/Books/gm2001.epd
+# sha256 del origen: 2fbf7f8a69fd3bde492b3abbda4e642f34f6b625c8c0e32db97aa95d67f0afdc
+# líneas del origen: 27925 — únicas por FEN4: 27925
+# filtros: |eval| <= 90 cp, jugadas 4-12, >= 26 piezas, no en jaque, no terminada
+# semilla de muestreo: 7 — posiciones: 8
+# el equilibrio se mide con la evaluación estática de Vigía; ver docs/BancoPruebas.md
+rnbqk1nr/pp3ppp/4p3/2p5/1bPP4/2N5/PP3PPP/R1BQKBNR w KQkq - 0 7
+2rqkb1r/pp1b1ppp/4pn2/n2p4/3P1B2/2NBP3/PPQ2PPP/R3K1NR w KQk - 0 11
+r1bqkb1r/pppn1ppp/3p1n2/4p3/3PP3/2N2N2/PPP2P1P/R1BQKBR1 w Qkq - 2 7
+r2q1rk1/pb1n1ppp/1p2pn2/6B1/1bBP4/2N2N2/PP2QPPP/2R2RK1 b - - 5 12
+r1bqkbnr/pppp2pp/2n5/4pp2/2P5/6P1/PP1PPPBP/RNBQK1NR w KQkq - 0 4
+r1bqk2r/p2pppbp/2p2np1/2p1P3/8/5N2/PPPP1PPP/RNBQR1K1 b kq - 0 7
+r1bq1rk1/bpp2pp1/p1np1n1p/4p3/4P3/1BPP1N2/PP3PPP/R1BQRNK1 b - - 3 10
+r1bq1rk1/pp1nbpp1/4pn1p/2pp4/2PP3B/2N1PN2/PPQ2PPP/3RKB1R b K - 1 9

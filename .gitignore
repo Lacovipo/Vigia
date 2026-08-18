@@ -1,5 +1,8 @@
 /target
 Cargo.lock
 Cargo.toml
-/src/bin
 /tools
+
+# Salidas de las tandas del banco de pruebas: pesan y se regeneran desde el
+# manifiesto. Las configuraciones y los libros SÍ se versionan.
+/banco/resultados/

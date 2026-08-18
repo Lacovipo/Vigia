@@ -15,6 +15,10 @@ path = "src/main.rs"
 name = "selfplay"
 path = "src/bin/selfplay.rs"
 
+[[bin]]
+name = "banco"
+path = "src/bin/banco/main.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -6,9 +6,11 @@ aplazado deliberadamente, priorizados según criterio del usuario
 vez de aplazadas.
 
 **Regla de oro para todo lo de aquí abajo**: no se toca sin banco de
-pruebas. Ver "El prerrequisito real: medir" al final — es el paso 0 de
-0.26 y condiciona el orden real de implementación, no la prioridad
-declarada de cada punto.
+pruebas. **El banco ya existe** (`banco`, ver `docs/BancoPruebas.md`), así
+que la regla deja de ser un bloqueo y pasa a ser un procedimiento: cada
+punto de esta lista se implementa solo y se valida solo, con `banco sprt`
+contra la release anterior. El apartado "El prerrequisito real: medir" del
+final recoge el estado y lo que el banco ya ha enseñado.
 
 ## Prioridad alta
 
@@ -24,9 +26,15 @@ declarada de cada punto.
   gastado ponderando; si el resultado es ≤ 0, se mueve de inmediato con lo
   que ya se tiene. Falta afinar detalles (qué pasa si la búsqueda infinita
   ya alcanzó profundidad máxima antes del `ponderhit`, cómo se reporta el
-  tiempo restante al hilo de búsqueda sin pararlo y relanzarlo). No es
-  medible con el harness actual, que usa `movetime` fijo y nunca pondera;
-  depende del banco de pruebas.
+  tiempo restante al hilo de búsqueda sin pararlo y relanzarlo).
+
+  **Cómo validarla**: el banco tampoco pondera todavía — arbitra con
+  `go`/`bestmove` y no emite `go ponder` ni `ponderhit`, así que la ganancia
+  real de esta mejora sigue sin ser medible de extremo a extremo. Lo que sí
+  puede medirse ya es que **no haya regresión** en juego normal (`elo0=-5,
+  elo1=0`). Para medir la ganancia hay que añadir soporte de ponder al
+  árbitro, que es trabajo del banco y no del motor; está listado como
+  pendiente al final.
 
 - **Syzygy** (Gemini 4.5, GPT 6.5). El usuario ya dispone de EGTBs hasta 6
   piezas (como la mayoría de referencias con las que se calibra). Se
@@ -49,6 +57,13 @@ declarada de cada punto.
   juego, y el propio perft/tests de consistencia existentes ya la
   verifican por construcción.
 
+  **Cómo validarla**: `banco velocidad --motor <nuevo> --contra <actual>
+  --profundidad 12`. El criterio es doble y está automatizado: los nodos por
+  posición deben salir **idénticos** (si no, el cambio no era de solo
+  velocidad y hay que pasarlo por `banco sprt`) y los nodos/segundo deben
+  subir. El ruido medido de la máquina es de ±4 %, así que una ganancia
+  menor que eso hay que repetirla antes de creérsela.
+
 ## Prioridad media — velocidad, evaluar coste/beneficio
 
 - **`MovePicker` por etapas** (Opus P4, GPT 6.2) y **legalidad por
@@ -65,9 +80,10 @@ declarada de cada punto.
   práctica: el usuario prueba siempre con 1 hilo, como mucho 2/4/8 — nadie
   prueba con más de 8. Por tanto **no es prioritario subir `MAX_THREADS`
   por encima de 16**, y el caso de uso real (pocos hilos) es precisamente
-  donde un `Mutex` único pesa menos. Se revisita solo si el banco de
-  pruebas muestra pérdida de nodos/seg medible a 4–8 hilos; si no, se deja
-  como está. La carrera de generación que GPT describía, que sí era un
+  donde un `Mutex` único pesa menos. Se revisita solo si el banco
+  muestra pérdida de nodos/seg medible a 4–8 hilos, lo que se comprueba con
+  `banco velocidad --hilos 4` y `--hilos 8` frente a `--hilos 1`; si no
+  aparece, se deja como está. La carrera de generación que GPT describía, que sí era un
   bug, ya está arreglada (§6 del documento técnico).
 
 ## Prioridad baja / exploratorio — validar una vez haya banco de pruebas
@@ -106,24 +122,77 @@ declarada de cada punto.
 - **NNUE**. El criterio del usuario: hace falta primero un motor HCE de
   3000+ CCRL antes de plantear NNUE. No se reconsidera hasta llegar ahí.
 
-## El prerrequisito real: medir
+## El prerrequisito real: medir — HECHO
 
-Los tres informes de 0.25.0 convergen en que el punto más débil del
-proyecto no es el motor sino el método de medición (Opus M8, GPT 7.3). Un
+Los tres informes de 0.25.0 convergieron en que el punto más débil del
+proyecto no era el motor sino el método de medición (Opus M8, GPT 7.3). Un
 match de 16 partidas no distingue +20 Elo del ruido, de modo que ninguna de
-las técnicas de arriba puede evaluarse hoy. El orden correcto para 0.26 es:
+las técnicas de arriba podía evaluarse.
 
-1. SPRT sobre el harness (`elo0=0, elo1=5, alpha=beta=0.05`).
-2. Paralelizar el bucle de partidas.
-3. Libro de aperturas más ancho (100–200 líneas; el polyglot ya presente
-   puede servir si se valida).
-4. Salida PGN para poder clasificar las derrotas.
+**Ese bloqueo está resuelto.** El banco de pruebas es el binario `banco`
+(`src/bin/banco/`), documentado en **`docs/BancoPruebas.md`**. Los cuatro
+puntos que se habían identificado están cubiertos:
 
-**Recursos de cómputo**: el usuario pone la máquina a disposición para las
-tandas de partidas, pero suele tener otras cosas corriendo — antes de
-lanzar cualquier batería hay que decirle explícitamente cuántas CPUs se
-necesitan para que libere sitio.
+1. ~~SPRT sobre el harness~~ → `banco sprt`, con estadística **pentanomial**
+   (la unidad es la pareja de partidas con colores invertidos, no la
+   partida) y el LLR de Fishtest resuelto sin dependencias externas.
+2. ~~Paralelizar el bucle de partidas~~ → `partidas.workers`, con la
+   decisión evaluada sobre el prefijo contiguo para que el paralelismo no
+   altere ni el resultado ni el punto de parada. Verificado: 1 y 4 workers
+   dan partidas idénticas.
+3. ~~Libro de aperturas más ancho~~ → `banco/libros/vigia-256.epd`, 256
+   posiciones equilibradas y deduplicadas, generadas con `banco libro` a
+   partir de un libro Polyglot y reproducibles desde su semilla.
+4. ~~Salida PGN~~ → `partidas.pgn` en SAN, con puntuación y profundidad por
+   jugada, para clasificar las derrotas en vez de solo contarlas.
 
-Con el banco de pruebas montado, ponder real, Syzygy, `MovePicker`, eval
-MG/EG y el resto de la lista de arriba pasan a ser cambios evaluables uno a
-uno en vez de apuestas.
+Y dos cosas que no estaban en la lista y aparecieron al construirlo:
+
+5. `banco velocidad` — para cambios de **solo velocidad** (magic bitboards,
+   `MovePicker`, legalidad por clavadas), que se validan comprobando que los
+   nodos no cambian y los nodos/segundo suben. Segundos en lugar de horas.
+6. `banco humo` — la verificación de que el propio banco no miente:
+   enfrentando un binario determinista contra sí mismo, **todas** las
+   parejas tienen que quedar en tablas exactas.
+
+### Lo que la primera medición ya ha enseñado
+
+- **La release 0.24 no respeta `go nodes`** (se planta en el 17 % de lo
+  pedido). Medida así contra un binario que sí los respeta, el banco reporta
+  +422 Elo que no significan nada. El banco lo detecta ahora y aborta; hay
+  que releer con cuidado cualquier comparación histórica hecha por nodos.
+- **La cifra de "+77 Elo" de 0.25 frente a 0.24 no se reproduce.** A
+  `movetime` 100 ms y 128 parejas: −17,7 Elo con IC 95 % de −53,7 a +18,0,
+  sin decisión. Y `banco velocidad` explica parte del porqué: 0.25-dev es un
+  ~16 % más lento en nodos/segundo que 0.24. Detalle en
+  `docs/Documentacion_tecnica.md` §8.6.
+
+### Trabajo pendiente del propio banco
+
+Por orden de utilidad para lo que viene:
+
+1. **Ampliar el libro** por encima de 256 posiciones (a 1.000–2.000). Es el
+   techo actual: con 256 parejas no se pueden decidir diferencias de +2–3
+   Elo, y varias mejoras de la lista de arriba son de ese tamaño. Se hace
+   con `banco libro --n 2000`, que ya tiene material de sobra (17.374
+   posiciones pasan los filtros).
+2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta.
+3. **Soporte de ponder en el árbitro** (`go ponder` / `ponderhit`), sin el
+   cual la mejora de ponder de prioridad alta no es medible.
+4. Recolectar una suite EPD externa (WAC, ECM…) para `banco epd`.
+
+### Recursos de cómputo
+
+Sigue vigente: el usuario pone la máquina, pero suele tener otras cosas
+corriendo. **Antes de lanzar cualquier batería hay que decirle explícitamente
+cuántas CPUs se necesitan** para que libere sitio. `partidas.workers` es el
+número de partidas simultáneas y cada una ocupa una CPU; el comando lo
+imprime al arrancar. La máquina actual tiene 12.
+
+### Cómo se usa esto a partir de ahora
+
+Ponder real, Syzygy, `MovePicker`, eval MG/EG y el resto de la lista dejan de
+ser apuestas. El procedimiento está en `docs/BancoPruebas.md` §10, y se
+resume en: **una mejora cada vez**, `banco sprt` contra la release anterior
+con `elo0=0, elo1=5`, y aceptar la respuesta que salga —incluido el
+`acepta_h0`, que significa "no llega a +5 Elo" y no "empeora".

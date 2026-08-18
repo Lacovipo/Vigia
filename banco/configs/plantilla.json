@@ -1,0 +1,62 @@
+{
+  "_": "PLANTILLA. Copiar, renombrar y editar. Las rutas son relativas al",
+  "_2": "directorio desde el que se lanza 'banco', que debe ser la raíz del",
+  "_3": "proyecto. Cualquier clave que empiece por '_' es un comentario y se",
+  "_4": "ignora; el resto se valida y una clave desconocida es un error.",
+
+  "esquema": 1,
+  "id": "cambiar-esto-por-el-nombre-del-experimento",
+
+  "_candidato": "El binario con la mejora que se quiere validar.",
+  "candidato": {
+    "nombre": "0.26-dev",
+    "ruta": "target/release/vigia.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_base": "Contra qué se compara. Normalmente la release anterior cerrada.",
+  "base": {
+    "nombre": "0.25",
+    "ruta": "../zzRelease/Vigia 0.25.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "La semilla fija el orden. Cambiarla es cambiar el experimento.",
+  "libro": {
+    "fichero": "banco/libros/vigia-256.epd",
+    "semilla": 20260818,
+    "barajar": true
+  },
+
+  "_busqueda": "Exactamente uno de: nodos, movetime_ms, profundidad, reloj.",
+  "_busqueda_2": "'nodos' es reproducible y no depende de la carga de la máquina;",
+  "_busqueda_3": "es lo que hay que usar salvo que se esté midiendo gestión de tiempo.",
+  "busqueda": { "nodos": 25000 },
+
+  "_partidas": "workers = partidas simultáneas = CPUs ocupadas. Avisar antes.",
+  "partidas": {
+    "max_parejas": 256,
+    "workers": 1,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "_adjudicacion": "Ahorra CPU en posiciones ya decididas. El abandono exige",
+  "_adjudicacion_2": "que los dos motores coincidan. Quitar el bloque entero la desactiva.",
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "elo0/elo1 son las dos hipótesis. Para aceptar una mejora:",
+  "_sprt_2": "elo0=0, elo1=5. Para comprobar que algo NO empeora: elo0=-5, elo1=0.",
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "_salida": "Directorio nuevo, o uno de una tanda anterior con la misma firma",
+  "_salida_2": "si lo que se quiere es reanudar.",
+  "salida": "banco/resultados/cambiar-esto"
+}

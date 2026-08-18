@@ -27,7 +27,7 @@ referencia, no un sustituto.
 ## 1. Estructura del proyecto
 
 ```
-Cargo.toml          # crate "vigia", lib + 2 binarios, sin dependencias
+Cargo.toml          # crate "vigia", lib + 3 binarios, sin dependencias
 src/
   lib.rs             # re-exporta todos los módulos como pub mod
   main.rs            # fn main() { vigia::uci::run(); }  — el motor real
@@ -40,17 +40,25 @@ src/
   kpk.rs               # oráculo exacto Rey+Peón vs Rey
   search.rs             # búsqueda: PVS/negamax, TT, poda, Lazy SMP
   uci.rs                # protocolo UCI + comando extra "eval"
-  bin/selfplay.rs        # harness de autojuego para medir fuerza
-tools/calibration/        # pipeline Python de calibración del eval (ver §9)
+  bin/selfplay.rs        # harness antiguo de autojuego (superado, ver §8)
+  bin/banco/              # banco de pruebas: SPRT, velocidad, EPD (ver §8)
+banco/
+  configs/                 # configuraciones de experimento (JSON)
+  libros/                   # libros de aperturas versionados
+  resultados/                # salidas de las tandas (fuera del repositorio)
+tools/calibration/            # pipeline Python de calibración del eval (ver §9)
 docs/                       # esta documentación + revisiones externas Rev_*.md
 Release/                      # binarios .exe congelados por versión (referencia)
 book/komodo.bin                 # libro polyglot para GUIs externos (sin uso en código)
 ```
 
-`lib.rs` existe para que tanto `main.rs` (el binario UCI) como
-`bin/selfplay.rs` (el arbitro de autojuego) reutilicen exactamente las
-mismas reglas de tablero/generación/búsqueda/evaluación sin duplicar
-código.
+`lib.rs` existe para que `main.rs` (el binario UCI), `bin/banco/` (el
+banco de pruebas) y `bin/selfplay.rs` (el harness antiguo) reutilicen
+exactamente las mismas reglas de tablero/generación/búsqueda/evaluación sin
+duplicar código. Que el árbitro del banco use el generador de jugadas del
+propio motor tiene una contrapartida asumida —un fallo en `movegen` lo
+tendría también el árbitro— y una ventaja demostrada: hubo tres copias
+distintas de la regla de material insuficiente y llegaron a discrepar.
 
 **Versionado:** no se usan tags de git; el histórico real de versiones
 se lleva con ejecutables numerados en `Release/`. Cada versión publicada
@@ -735,49 +743,133 @@ porque la TT usa un único `Mutex`.
 
 ---
 
-## 8. Harness de autojuego (`src/bin/selfplay.rs`)
+## 8. Banco de pruebas (`src/bin/banco/`)
 
-Binario independiente usado como herramienta propia de medición de fuerza.
-Uso:
+Cómo se valida una mejora antes de darla por buena. La referencia completa
+—metodología, formatos, procedimiento e higiene estadística— está en
+**`docs/BancoPruebas.md`**; aquí queda el resumen y el estado.
 
+### 8.1 Por qué se rehízo
+
+El harness de 0.25 (`src/bin/selfplay.rs`) jugaba 8 aperturas × 2 colores =
+16 partidas, con un error típico de ±150–200 Elo. Las cifras "+394 Elo" de
+0.24.0 y "−89 Elo" de 0.23.0 son, estadísticamente, el mismo dato. Los tres
+informes externos de 0.25.0 coincidieron en que el punto más débil del
+proyecto no era el motor sino la medición.
+
+`banco` (0.26) sustituye ese harness. Sigue sin dependencias externas y
+sigue arbitrando con las reglas del propio motor, pero mide de verdad.
+
+### 8.2 Los cuatro comandos
+
+```bash
+banco sprt      --config <fichero.json>   # fuerza de juego. Horas.
+banco velocidad --motor <exe> --contra <exe>  # solo velocidad. Segundos.
+banco epd       --fichero <suite.epd> --motor <exe>  # táctica. Minutos.
+banco humo      --motor <exe>             # verifica el propio banco. Un minuto.
 ```
-selfplay <motor_a> <motor_b> [movetime_ms] [max_plies]
-```
 
-- Lanza ambos motores como procesos UCI reales, con hilo lector dedicado.
-- Librillo fijo de 8 aperturas cortas, cada una jugada dos veces con
-  colores intercambiados.
-- El propio harness arbitra con las reglas reales del motor: jaque mate,
-  ahogado, regla de 50 jugadas, **repetición triple real** (asimetría
-  intencional respecto a la repetición doble heurística del árbol),
-  material insuficiente (ahora vía `eval::is_insufficient_material`, la
-  misma función que usa el motor), tope de 300 plies y derrota por
-  incomparecencia.
-- Imprime el marcador y una estimación de diferencia de Elo.
+Más `banco informe --run <dir>` (rehace resumen y PGN desde los datos
+crudos) y `banco libro` (construye libros de aperturas).
 
-**Limitación importante, ahora explícita**: 8 líneas × 2 colores = 16
-partidas tienen un error estándar del orden de ±150–200 Elo. Las cifras
-"+394 Elo" de 0.24.0 y "−89 Elo" de 0.23.0 son, estadísticamente, casi el
-mismo dato. El harness sirve como *smoke test* ("¿esto ha roto algo
-gordo?"), no como medición. Ver `docs/MejorasPendientes.md`: SPRT, paralelismo y un libro más
-ancho son el prerrequisito para cualquier afinado serio.
+### 8.3 Cómo decide `sprt`
 
-Medición de 0.25.0 contra `Release/Vigia 0.24.exe`, dos controles de
-tiempo, reportada tal cual y sin redondear a favor:
+- Unidad estadística: la **pareja** (una apertura jugada dos veces con los
+  colores cambiados), clasificada en cinco cajones — estadística
+  pentanomial. Cancela buena parte del ruido de la apertura y decide con
+  bastantes menos partidas que contar victorias sueltas.
+- **SPRT** con el LLR pentanomial de Fishtest (máxima verosimilitud
+  generalizada, resuelta por bisección sobre la ecuación secular). Fronteras
+  `log(β/(1−α))` y `log((1−β)/α)`. Hipótesis habituales: `elo0=0, elo1=5`.
+- Paralelismo por workers, con el LLR evaluado **solo sobre el prefijo
+  contiguo** de parejas: si no, la decisión dependería de qué worker terminó
+  antes. Verificado: 1 worker y 4 workers dan partidas byte a byte
+  idénticas.
+- Persistencia reanudable (`parejas.jsonl` como única fuente de verdad,
+  vaciada a disco tras cada pareja) y firma del experimento que impide
+  mezclar tandas de binarios o parámetros distintos.
+- Salida PGN en SAN con puntuación y profundidad por jugada, para poder
+  clasificar las derrotas en vez de solo contarlas.
 
-| movetime | Resultado (G-P-T) | Puntuación | Elo estimado |
-|---|---|---|---|
-| 300 ms | 6-5-5 | 53,1 % | +22 |
-| 800 ms | 9-3-4 | 68,8 % | +137 |
-| **agregado** | **15-8-9** (32 partidas) | **60,9 %** | **+77** |
+### 8.4 La prueba de humo A/A, y por qué es fuerte
 
-La lectura honesta: a 300 ms el resultado es indistinguible de la
-paridad, y ni siquiera el agregado de 32 partidas es una medición sólida.
-Lo que sí puede afirmarse es que **no hay regresión**, lo cual no era
-obvio con treinta y tantos cambios simultáneos, y que la tendencia es
-mejor cuanto más largo el control — consistente con la mejora medida en
-nodos por profundidad (`docs/MejorasPendientes.md`) y con que los arreglos de finales necesitan
-profundidad para notarse. Lo que *no* puede afirmarse es una cifra de Elo.
+`banco humo` enfrenta un binario contra sí mismo. Como la búsqueda es
+determinista a nodos fijos con un hilo y `Variety` apagado, y `ucinewgame`
+vacía la TT, las dos partidas de cada pareja son la misma partida con los
+papeles cambiados. Por tanto **todas** las parejas deben caer en el cajón
+central, con 0,00 Elo exacto.
+
+Resultado actual: pentanomial `[0, 0, 8, 0, 0]` sobre 8 parejas, 0 partidas
+anómalas. Cualquier desviación significaría que el banco introduce asimetría
+entre los dos bandos, y hasta arreglarlo ninguna medición suya sería fiable.
+
+### 8.5 Una trampa encontrada al construirlo
+
+El control por nodos solo es justo si **los dos** binarios respetan
+`go nodes`. **La release 0.24 no lo hace**: pedidos 25.000 nodos, anuncia la
+jugada tras unos 4.100 (17 %). Enfrentada así a un binario que sí los
+respeta, pierde el 92 % de las partidas y el banco reporta **+422 Elo** —
+cifra que no mide fuerza, mide que un bando pensó cuatro veces menos.
+
+El banco sondea ahora ambos motores antes de empezar y aborta si alguno se
+queda por debajo del 50 % de los nodos pedidos. Contra binarios antiguos hay
+que usar `movetime_ms`.
+
+Esto obliga a releer con cuidado cualquier comparación histórica del
+proyecto que se hiciera por nodos contra una release anterior a 0.25.
+
+### 8.6 Medición de 0.25 contra 0.24
+
+Dato histórico del harness antiguo, conservado tal cual se publicó (32
+partidas, `movetime` 300 y 800 ms): **+77 Elo**, con la advertencia explícita
+de que ni siquiera el agregado era una medición sólida.
+
+Primera medición del banco (`id` `025dev-vs-024`, 128 parejas = 256
+partidas, `movetime` 100 ms, libro `vigia-256.epd` semilla 20260818,
+adjudicación activada, 4 workers):
+
+| | |
+|---|---|
+| Candidato (0.25-dev) | 92 ganadas, 59 tablas, 105 perdidas |
+| Pentanomial | `[20, 23, 49, 22, 14]` |
+| Puntuación | 47,46 % |
+| **Elo** | **−17,7** (IC 95 %: −53,7 … +18,0) |
+| LOS | 16,6 % |
+| LLR | −0,3026 sobre fronteras ±2,944 → **`continuar`** |
+
+Lectura honesta, que es distinta de la cómoda:
+
+1. **La prueba no decidió.** El intervalo cruza el cero: con 128 parejas a
+   este control no se puede afirmar ni que 0.25 sea mejor ni que sea peor.
+2. **La cifra de +77 Elo no se reproduce.** No queda refutada —el intervalo
+   la excluye, pero el control de tiempo no es el mismo—, pero desde luego
+   no queda respaldada. Aquella medición eran 32 partidas y su propia
+   documentación ya avisaba de que no era una medición sólida.
+3. **El control importa, y aquí juega en contra.** `banco velocidad` mide
+   que 0.25-dev es un ~16 % **más lento** en nodos/segundo que 0.24 (más
+   términos de evaluación). A 100 ms por jugada esa lentitud pesa mucho; el
+   dato antiguo era a 300 y 800 ms, y ya entonces se observó que la
+   diferencia mejoraba cuanto más largo era el control.
+
+Lo pendiente, en ese orden: repetir a 300 ms y a 800 ms con el libro
+completo, y ampliar el libro por encima de 256 posiciones para poder decidir
+diferencias pequeñas. Hasta entonces, **el proyecto no tiene una cifra de
+Elo demostrada para 0.25 frente a 0.24**, y eso es una mejora sobre tener
+una cifra falsa.
+
+Otras tandas registradas:
+
+| `id` | qué | resultado |
+|---|---|---|
+| `humo-A-contra-A` | 0.25-dev contra sí mismo, 20.000 nodos | pentanomial `[0,0,8,0,0]`, 0,00 Elo — el banco es simétrico |
+| `025dev-vs-024` por nodos | 0.25-dev vs 0.24, 25.000 nodos | **inválido**, ver §8.5 |
+
+
+### 8.7 El harness antiguo
+
+`src/bin/selfplay.rs` sigue compilando, con sus 8 tests, y sirve como *smoke
+test* rápido. Está superado por `banco` para cualquier medición y no debe
+usarse para aprobar un cambio.
 
 ---
 
@@ -882,16 +974,23 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # suite completa (210 tests del motor, 8 del harness)
+cargo test --release              # 210 del motor + 121 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```
 
-Para comparar fuerza contra una versión anterior:
+Para comprobar que el propio banco de pruebas mide bien (ver §8.4):
 
 ```bash
 cargo build --release
-./target/release/selfplay "target/release/vigia.exe" "Release/Vigia 0.25.exe" 300
+./target/release/banco.exe humo --motor target/release/vigia.exe
+```
+
+Para comparar fuerza contra una versión anterior — leer antes
+`docs/BancoPruebas.md`, y avisar de cuántas CPUs se van a ocupar:
+
+```bash
+./target/release/banco.exe sprt --config banco/configs/mi-experimento.json
 ```
 
 Para inspeccionar el eval estático de una posición sin buscar, desde el
