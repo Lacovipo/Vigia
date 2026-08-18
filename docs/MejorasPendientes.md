@@ -14,8 +14,8 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
 ## Hecho
 
-- **Magic bitboards** (Opus P8) — **HECHO**, implementado en `src/magic.rs`
-  y documentado en §3 del documento técnico.
+- **Magic bitboards** (Opus P8) — **HECHO en 0.26.0**, implementado en
+  `src/magic.rs` y documentado en §3 del documento técnico.
 
   `banco velocidad` no genera `id` de experimento como `sprt`: no hay tanda
   de partidas que archivar, sino una medición que se repite en segundos.
@@ -28,8 +28,8 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
   **Decisión: aceptada.** Nodos idénticos en las 12 posiciones (el criterio
   duro: la búsqueda visita exactamente lo mismo, luego el cambio es de solo
-  velocidad) y +15,6 %, +12,2 % y +18,5 % de nodos/segundo en tres
-  ejecuciones seguidas, muy por encima del ruido de ±4 %. No se pasa por
+  velocidad) y entre +12,2 % y +18,5 % de nodos/segundo en cuatro
+  ejecuciones seguidas (media ≈ +16 %), muy por encima del ruido de ±4 %. No se pasa por
   `sprt` precisamente porque los nodos no se mueven: no hay diferencia de
   juego que medir.
 

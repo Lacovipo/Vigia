@@ -162,8 +162,7 @@ usados por la poda de *null move*.
 
 ## 3. Generación de jugadas (`movegen.rs`, `magic.rs`)
 
-- **Ataques deslizantes por *magic bitboards*** (`magic.rs`, posterior a
-  0.25.0): una multiplicación, un desplazamiento y una lectura de tabla, en
+- **Ataques deslizantes por *magic bitboards*** (`magic.rs`, 0.26.0): una multiplicación, un desplazamiento y una lectura de tabla, en
   lugar del recorrido de cuatro rayos buscando el primer bloqueador en cada
   uno.
   Para cada casilla solo importan las casillas *intermedias* hasta el borde
@@ -203,9 +202,10 @@ usados por la poda de *null move*.
   cuadrarían si algún ataque deslizante hubiera cambiado.
 - **Medición** (`banco velocidad --profundidad 12`, ver §8): nodos
   **idénticos** en las 12 posiciones —es decir, la búsqueda visita
-  exactamente lo mismo y el cambio es de solo velocidad— y +15,6 %, +12,2 %
-  y +18,5 % de nodos/segundo en tres ejecuciones, sobre un ruido de máquina
-  de ±4 %. El binario pasa de 589 KB a 1,45 MB por las tablas.
+  exactamente lo mismo y el cambio es de solo velocidad— y entre +12,2 % y
+  +18,5 % de nodos/segundo en cuatro ejecuciones (media ≈ +16 %), sobre un
+  ruido de máquina de ±4 %. El binario pasa de 589 KB a 1,45 MB por las
+  tablas.
 - **Pseudo-legal + filtro de legalidad**, no generación legal-only directa:
   `generate_pseudo_legal_moves` genera todo; `legal_moves_scratch` filtra
   **in place** (`retain`) por make/unmake + detección de jaque propio sobre
@@ -948,10 +948,14 @@ usarse para aprobar un cambio.
   las que el motor generaba jugadas ilegales o moría. Medición contra 0.24
   congelado: 32 partidas, 60,9 % (§8) — sin regresión, sin cifra de Elo
   defendible.
-- **En desarrollo tras 0.25.0** — primera mejora validada con el banco de
-  pruebas en vez de con una corazonada: *magic bitboards* (§3), aprobada
-  por `banco velocidad` con nodos idénticos y ~+15 % de nodos/segundo. No
-  cambia ni una decisión de la búsqueda, así que no necesitaba `sprt`.
+- **0.26.0 — magic bitboards, y nada más.** Primera versión validada con el
+  banco de pruebas en vez de con una corazonada: *magic bitboards* (§3),
+  aprobada por `banco velocidad` con nodos idénticos en las 12 posiciones y
+  ~+15 % de nodos/segundo. Que lleve **un solo cambio** es deliberado y es
+  la regla de oro del proyecto en acción: si la versión mezclase esto con
+  una mejora de evaluación y el resultado saliera raro, no habría forma de
+  saber cuál de las dos fue. Al no tocar ninguna decisión de la búsqueda no
+  necesitaba `sprt`, y por tanto no consumió ni una partida.
 
 ---
 
