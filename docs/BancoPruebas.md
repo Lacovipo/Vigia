@@ -263,6 +263,22 @@ Medido en esta máquina, el mismo binario contra sí mismo da ±4 % de
 nodos/segundo entre ejecuciones. Una mejora por debajo de ese ruido necesita
 repetir la medición varias veces antes de creérsela.
 
+### Precedente: los magic bitboards
+
+El primer cambio aprobado por este comando, y el ejemplo de cómo se lee su
+salida. Sustituir el recorrido clásico de rayos por magic bitboards dio
+nodos idénticos en las **12** posiciones —línea *"Nodos idénticos en las 12
+posiciones"*, que es la que autoriza a saltarse `sprt`— y +15,6 %, +12,2 % y
++18,5 % de nodos/segundo en tres ejecuciones seguidas. Tres ejecuciones y no
+una: la ganancia es cuatro veces el ruido, pero la dispersión entre ellas
+(seis puntos porcentuales) enseña por qué una sola cifra no se cita como si
+fuera exacta. Detalle en §3 de `docs/Documentacion_tecnica.md`.
+
+Si la línea de nodos idénticos **no** aparece, el comando lista las
+posiciones que divergen y el cambio deja de ser candidato a este comando:
+pasa a `sprt`, sin excepciones y por mucho que la explicación de la
+divergencia parezca inofensiva.
+
 ---
 
 ## 5. `banco epd` — no-regresión táctica

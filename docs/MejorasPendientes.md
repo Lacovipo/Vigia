@@ -12,6 +12,33 @@ punto de esta lista se implementa solo y se valida solo, con `banco sprt`
 contra la release anterior. El apartado "El prerrequisito real: medir" del
 final recoge el estado y lo que el banco ya ha enseñado.
 
+## Hecho
+
+- **Magic bitboards** (Opus P8) — **HECHO**, implementado en `src/magic.rs`
+  y documentado en §3 del documento técnico.
+
+  `banco velocidad` no genera `id` de experimento como `sprt`: no hay tanda
+  de partidas que archivar, sino una medición que se repite en segundos.
+  Queda aquí el comando y lo que dio, que es lo que hace falta para
+  repetirla:
+
+  ```bash
+  ./target/release/banco velocidad --motor <con-magics> --contra <con-rayos> --profundidad 12
+  ```
+
+  **Decisión: aceptada.** Nodos idénticos en las 12 posiciones (el criterio
+  duro: la búsqueda visita exactamente lo mismo, luego el cambio es de solo
+  velocidad) y +15,6 %, +12,2 % y +18,5 % de nodos/segundo en tres
+  ejecuciones seguidas, muy por encima del ruido de ±4 %. No se pasa por
+  `sprt` precisamente porque los nodos no se mueven: no hay diferencia de
+  juego que medir.
+
+  **Advertencia sobre la cifra**: la medición se hizo en un contenedor
+  remoto de 4 CPUs, no en la máquina de 12 del usuario. Que los nodos son
+  idénticos no depende de la máquina; el porcentaje de nodos/segundo sí, y
+  conviene repetir el comando en la máquina de trabajo antes de citar un
+  número concreto.
+
 ## Prioridad alta
 
 - **Ponder con presupuesto real** (GPT P1-11, Opus M6). Hoy `go ponder`
@@ -49,20 +76,6 @@ final recoge el estado y lo que el banco ya ha enseñado.
   Syzygy no dé ya. Se mantiene como *fallback* barato para cuando las
   tablas no están montadas (no todo el mundo las tiene), pero deja de ser
   el camino principal para finales simples una vez Syzygy esté integrado.
-
-- **Magic bitboards** (Opus P8). Sustituye los rayos clásicos de
-  `movegen.rs` (§3 del documento técnico). Es velocidad pura sin cambiar el
-  comportamiento del motor, por eso no compite con las mejoras de fuerza
-  que sí necesitan validarse una a una: es una optimización de motor, no de
-  juego, y el propio perft/tests de consistencia existentes ya la
-  verifican por construcción.
-
-  **Cómo validarla**: `banco velocidad --motor <nuevo> --contra <actual>
-  --profundidad 12`. El criterio es doble y está automatizado: los nodos por
-  posición deben salir **idénticos** (si no, el cambio no era de solo
-  velocidad y hay que pasarlo por `banco sprt`) y los nodos/segundo deben
-  subir. El ruido medido de la máquina es de ±4 %, así que una ganancia
-  menor que eso hay que repetirla antes de creérsela.
 
 ## Prioridad media — velocidad, evaluar coste/beneficio
 
@@ -148,9 +161,11 @@ puntos que se habían identificado están cubiertos:
 
 Y dos cosas que no estaban en la lista y aparecieron al construirlo:
 
-5. `banco velocidad` — para cambios de **solo velocidad** (magic bitboards,
-   `MovePicker`, legalidad por clavadas), que se validan comprobando que los
-   nodos no cambian y los nodos/segundo suben. Segundos en lugar de horas.
+5. `banco velocidad` — para cambios de **solo velocidad** (`MovePicker`,
+   legalidad por clavadas), que se validan comprobando que los nodos no
+   cambian y los nodos/segundo suben. Segundos en lugar de horas. Ya tiene
+   un caso real: los magic bitboards de la sección "Hecho" salieron por
+   aquí.
 6. `banco humo` — la verificación de que el propio banco no miente:
    enfrentando un binario determinista contra sí mismo, **todas** las
    parejas tienen que quedar en tablas exactas.

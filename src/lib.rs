@@ -11,6 +11,7 @@ pub mod bitboard;
 pub mod board;
 pub mod eval;
 pub mod kpk;
+mod magic;
 pub mod movegen;
 pub mod search;
 pub mod types;

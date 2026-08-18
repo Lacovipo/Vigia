@@ -36,6 +36,7 @@ src/
   board.rs           # Board, FEN, make/unmake, hash Zobrist incremental
   zobrist.rs          # claves Zobrist generadas en tiempo de compilación
   movegen.rs           # generación de jugadas, gives_check, SEE, perft
+  magic.rs             # magic bitboards: ataques deslizantes por tabla
   eval.rs              # evaluación (HCE, tapered), 2384 líneas
   kpk.rs               # oráculo exacto Rey+Peón vs Rey
   search.rs             # búsqueda: PVS/negamax, TT, poda, Lazy SMP
@@ -159,13 +160,52 @@ usados por la poda de *null move*.
 
 ---
 
-## 3. Generación de jugadas (`movegen.rs`)
+## 3. Generación de jugadas (`movegen.rs`, `magic.rs`)
 
-- **Ataques deslizantes por rayos clásicos** (no *magic bitboards*): tablas
-  de rayos en las 8 direcciones precalculadas en tiempo de compilación;
-  `positive_ray_attacks`/`negative_ray_attacks` usan el truco lsb/msb-XOR
-  para truncar un rayo en el primer bloqueador. Caballo/rey/peón usan
-  tablas de ataque precomputadas igualmente en tiempo de compilación.
+- **Ataques deslizantes por *magic bitboards*** (`magic.rs`, posterior a
+  0.25.0): una multiplicación, un desplazamiento y una lectura de tabla, en
+  lugar del recorrido de cuatro rayos buscando el primer bloqueador en cada
+  uno.
+  Para cada casilla solo importan las casillas *intermedias* hasta el borde
+  —lo que haya en el propio borde no cambia dónde se para la pieza—, así
+  que la ocupación se enmascara a 12 bits como mucho para la torre y 9 para
+  el alfil; el *magic* es un multiplicador que lleva cada una de esas
+  ocupaciones a una entrada distinta de la tabla de la casilla. Dos
+  ocupaciones pueden compartir entrada si su conjunto de ataques es el
+  mismo (colisión constructiva); lo que la búsqueda de multiplicadores
+  descarta es que dos ocupaciones con ataques *distintos* caigan en la
+  misma. Tamaños estándar: 102.400 entradas para torre y 5.248 para alfil,
+  861 KB de tablas que **se construyen con `const fn` en tiempo de
+  compilación** (no hay inicialización en arranque, ni `OnceLock` ni
+  `static mut` en el camino caliente, y el tiempo de compilación no se
+  mueve: 17,2 s antes y después). Los 128 multiplicadores están empotrados
+  como constantes y se rederivan en un test desde la semilla documentada
+  (`0x0007_2C6D_1A3B_5F91`, alfiles a1..h8 y luego torres), de modo que no
+  son números tomados de ningún sitio sino un resultado reproducible.
+  Caballo/rey/peón siguen con tablas de ataque precomputadas.
+- **Cómo se comprueba que la respuesta no ha cambiado**, que es lo único
+  que hace legítimo saltarse `sprt`. Dos tests, deliberadamente distintos:
+  - `magic.rs` recorre **de forma exhaustiva las 107.648 entradas** —cada
+    casilla contra cada subconjunto de su máscara— y exige que la tabla
+    contenga exactamente lo que devuelve `walk_attacks`, el recorrido de
+    rayos con el que se rellena. Al ser el mismo recorrido, no dice nada
+    sobre la lógica de los rayos; lo que demuestra es que el *hash* es
+    perfecto, porque una colisión destructiva habría machacado uno de los
+    dos conjuntos y la comparación fallaría.
+  - `movegen.rs` conserva la implementación clásica anterior como
+    `classical_reference`, compilada solo en pruebas: llega al conjunto de
+    ataques por otro camino (una tabla de rayo por dirección y el truco
+    lsb/msb-XOR para truncarla en el primer bloqueador), así que sí es un
+    oráculo independiente. El test las compara casilla por casilla sobre
+    ocupaciones de tres densidades distintas.
+
+  Y por debajo de las dos, perft: los mismos recuentos de siempre, que no
+  cuadrarían si algún ataque deslizante hubiera cambiado.
+- **Medición** (`banco velocidad --profundidad 12`, ver §8): nodos
+  **idénticos** en las 12 posiciones —es decir, la búsqueda visita
+  exactamente lo mismo y el cambio es de solo velocidad— y +15,6 %, +12,2 %
+  y +18,5 % de nodos/segundo en tres ejecuciones, sobre un ruido de máquina
+  de ±4 %. El binario pasa de 589 KB a 1,45 MB por las tablas.
 - **Pseudo-legal + filtro de legalidad**, no generación legal-only directa:
   `generate_pseudo_legal_moves` genera todo; `legal_moves_scratch` filtra
   **in place** (`retain`) por make/unmake + detección de jaque propio sobre
@@ -908,6 +948,10 @@ usarse para aprobar un cambio.
   las que el motor generaba jugadas ilegales o moría. Medición contra 0.24
   congelado: 32 partidas, 60,9 % (§8) — sin regresión, sin cifra de Elo
   defendible.
+- **En desarrollo tras 0.25.0** — primera mejora validada con el banco de
+  pruebas en vez de con una corazonada: *magic bitboards* (§3), aprobada
+  por `banco velocidad` con nodos idénticos y ~+15 % de nodos/segundo. No
+  cambia ni una decisión de la búsqueda, así que no necesitaba `sprt`.
 
 ---
 
@@ -955,6 +999,7 @@ Implementados, con la sección donde se explica cada uno:
 | Opus (menor) | Quiescencia fail-hard mezclada con negamax fail-soft | §6 |
 | Opus (menor) | Killers/historia para promociones tranquilas | §6 |
 | GPT P2-04 | Iteración inicial abortada publicada como completa | §6 |
+| Opus P8 | Rayos clásicos donde cabían magic bitboards | §3 |
 
 Los tres informes coincidieron además en que la documentación de 0.24.0
 describía mal la fórmula de LMP (decía "divisor 2 si mejora"; el código
@@ -974,7 +1019,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 210 del motor + 121 del banco + 8 del harness antiguo
+cargo test --release              # 217 del motor + 121 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

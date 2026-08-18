@@ -1,42 +1,12 @@
 use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::eval;
+use crate::magic;
 use crate::types::{CastlingRights, Color, Move, MoveFlag, PieceType, Square};
 
 // ---------------------------------------------------------------------
 // Precomputed attack tables, built once at compile time.
 // ---------------------------------------------------------------------
-
-const fn ray_from(sq: u8, df: i32, dr: i32) -> u64 {
-    let mut file = (sq % 8) as i32 + df;
-    let mut rank = (sq / 8) as i32 + dr;
-    let mut bb: u64 = 0;
-    while file >= 0 && file < 8 && rank >= 0 && rank < 8 {
-        bb |= 1u64 << (rank * 8 + file);
-        file += df;
-        rank += dr;
-    }
-    bb
-}
-
-const fn build_ray_table(df: i32, dr: i32) -> [u64; 64] {
-    let mut table = [0u64; 64];
-    let mut sq = 0;
-    while sq < 64 {
-        table[sq] = ray_from(sq as u8, df, dr);
-        sq += 1;
-    }
-    table
-}
-
-const NORTH: [u64; 64] = build_ray_table(0, 1);
-const SOUTH: [u64; 64] = build_ray_table(0, -1);
-const EAST: [u64; 64] = build_ray_table(1, 0);
-const WEST: [u64; 64] = build_ray_table(-1, 0);
-const NORTH_EAST: [u64; 64] = build_ray_table(1, 1);
-const NORTH_WEST: [u64; 64] = build_ray_table(-1, 1);
-const SOUTH_EAST: [u64; 64] = build_ray_table(1, -1);
-const SOUTH_WEST: [u64; 64] = build_ray_table(-1, -1);
 
 const fn knight_attacks_from(sq: u8) -> u64 {
     const DELTAS: [(i32, i32); 8] = [
@@ -147,41 +117,28 @@ const WHITE_PAWN_ATTACKS: [u64; 64] = build_pawn_table(true);
 const BLACK_PAWN_ATTACKS: [u64; 64] = build_pawn_table(false);
 
 // ---------------------------------------------------------------------
-// Sliding attack generation (classical ray/blocker technique).
+// Sliding attack generation.
+//
+// Delegated to `magic`, which answers with one multiply, one shift and one
+// lookup. The classical ray walk this replaced is still here, as
+// `classical_reference` below, and the tests check the two against each
+// other over every occupancy that can reach the tables: the point of magic
+// bitboards is that they change the cost of the answer and not the answer.
 // ---------------------------------------------------------------------
 
-fn positive_ray_attacks(table: &[u64; 64], sq: Square, occupied: Bitboard) -> Bitboard {
-    let ray = Bitboard(table[sq.0 as usize]);
-    match (ray & occupied).lsb() {
-        Some(blocker) => ray ^ Bitboard(table[blocker.0 as usize]),
-        None => ray,
-    }
-}
-
-fn negative_ray_attacks(table: &[u64; 64], sq: Square, occupied: Bitboard) -> Bitboard {
-    let ray = Bitboard(table[sq.0 as usize]);
-    match (ray & occupied).msb() {
-        Some(blocker) => ray ^ Bitboard(table[blocker.0 as usize]),
-        None => ray,
-    }
-}
-
+#[inline(always)]
 pub fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    positive_ray_attacks(&NORTH_EAST, sq, occupied)
-        | positive_ray_attacks(&NORTH_WEST, sq, occupied)
-        | negative_ray_attacks(&SOUTH_EAST, sq, occupied)
-        | negative_ray_attacks(&SOUTH_WEST, sq, occupied)
+    magic::bishop_attacks(sq, occupied)
 }
 
+#[inline(always)]
 pub fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    positive_ray_attacks(&NORTH, sq, occupied)
-        | negative_ray_attacks(&SOUTH, sq, occupied)
-        | positive_ray_attacks(&EAST, sq, occupied)
-        | negative_ray_attacks(&WEST, sq, occupied)
+    magic::rook_attacks(sq, occupied)
 }
 
+#[inline(always)]
 pub fn queen_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
-    bishop_attacks(sq, occupied) | rook_attacks(sq, occupied)
+    magic::bishop_attacks(sq, occupied) | magic::rook_attacks(sq, occupied)
 }
 
 pub fn knight_attacks(sq: Square) -> Bitboard {
@@ -717,6 +674,79 @@ pub fn perft(board: &mut Board, depth: u32) -> u64 {
     nodes
 }
 
+/// The ray-walking slider implementation that `magic` replaced, kept as an
+/// independent oracle. It arrives at the attack set a different way — one
+/// precomputed ray per direction, then the first blocker on it found with
+/// `lsb`/`msb` and its own ray XORed away — so agreeing with the magic
+/// tables is real evidence about both, not a tautology. Test-only: nothing
+/// in the engine calls it any more.
+#[cfg(test)]
+mod classical_reference {
+    use crate::bitboard::Bitboard;
+    use crate::types::Square;
+
+    const fn ray_from(sq: u8, df: i32, dr: i32) -> u64 {
+        let mut file = (sq % 8) as i32 + df;
+        let mut rank = (sq / 8) as i32 + dr;
+        let mut bb: u64 = 0;
+        while file >= 0 && file < 8 && rank >= 0 && rank < 8 {
+            bb |= 1u64 << (rank * 8 + file);
+            file += df;
+            rank += dr;
+        }
+        bb
+    }
+
+    const fn build_ray_table(df: i32, dr: i32) -> [u64; 64] {
+        let mut table = [0u64; 64];
+        let mut sq = 0;
+        while sq < 64 {
+            table[sq] = ray_from(sq as u8, df, dr);
+            sq += 1;
+        }
+        table
+    }
+
+    const NORTH: [u64; 64] = build_ray_table(0, 1);
+    const SOUTH: [u64; 64] = build_ray_table(0, -1);
+    const EAST: [u64; 64] = build_ray_table(1, 0);
+    const WEST: [u64; 64] = build_ray_table(-1, 0);
+    const NORTH_EAST: [u64; 64] = build_ray_table(1, 1);
+    const NORTH_WEST: [u64; 64] = build_ray_table(-1, 1);
+    const SOUTH_EAST: [u64; 64] = build_ray_table(1, -1);
+    const SOUTH_WEST: [u64; 64] = build_ray_table(-1, -1);
+
+    fn positive_ray_attacks(table: &[u64; 64], sq: Square, occupied: Bitboard) -> Bitboard {
+        let ray = Bitboard(table[sq.0 as usize]);
+        match (ray & occupied).lsb() {
+            Some(blocker) => ray ^ Bitboard(table[blocker.0 as usize]),
+            None => ray,
+        }
+    }
+
+    fn negative_ray_attacks(table: &[u64; 64], sq: Square, occupied: Bitboard) -> Bitboard {
+        let ray = Bitboard(table[sq.0 as usize]);
+        match (ray & occupied).msb() {
+            Some(blocker) => ray ^ Bitboard(table[blocker.0 as usize]),
+            None => ray,
+        }
+    }
+
+    pub fn bishop_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
+        positive_ray_attacks(&NORTH_EAST, sq, occupied)
+            | positive_ray_attacks(&NORTH_WEST, sq, occupied)
+            | negative_ray_attacks(&SOUTH_EAST, sq, occupied)
+            | negative_ray_attacks(&SOUTH_WEST, sq, occupied)
+    }
+
+    pub fn rook_attacks(sq: Square, occupied: Bitboard) -> Bitboard {
+        positive_ray_attacks(&NORTH, sq, occupied)
+            | negative_ray_attacks(&SOUTH, sq, occupied)
+            | positive_ray_attacks(&EAST, sq, occupied)
+            | negative_ray_attacks(&WEST, sq, occupied)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +757,51 @@ mod tests {
     const POSITION4_FEN: &str = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
     const POSITION5_FEN: &str = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
     const POSITION6_FEN: &str = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
+
+    /// Magic lookups against the ray-walking implementation they replaced,
+    /// over occupancies dense enough to exercise blockers on every ray. If
+    /// these two ever disagree, the search changes what it visits and the
+    /// change stops being a pure speed change.
+    #[test]
+    fn magic_sliders_agree_with_the_classical_ray_walk() {
+        // xorshift64*, fixed seed: a disagreement has to be reproducible.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+        for sq in 0..64u8 {
+            let square = Square(sq);
+            for _ in 0..256 {
+                // Three densities: a nearly empty board, a normal one, and
+                // one crowded enough that most rays stop after a step.
+                for occupied in [
+                    Bitboard(next() & next() & next()),
+                    Bitboard(next() & next()),
+                    Bitboard(next()),
+                ] {
+                    assert_eq!(
+                        bishop_attacks(square, occupied),
+                        classical_reference::bishop_attacks(square, occupied),
+                        "alfil en {sq}"
+                    );
+                    assert_eq!(
+                        rook_attacks(square, occupied),
+                        classical_reference::rook_attacks(square, occupied),
+                        "torre en {sq}"
+                    );
+                    assert_eq!(
+                        queen_attacks(square, occupied),
+                        classical_reference::bishop_attacks(square, occupied)
+                            | classical_reference::rook_attacks(square, occupied),
+                        "dama en {sq}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn startpos_has_20_legal_moves() {
