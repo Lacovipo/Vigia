@@ -1,6 +1,12 @@
+# Nota: aquí estuvieron listados Cargo.toml y Cargo.lock, y no debían. Los dos
+# se versionan (Cargo.toml lleva el número de versión, que es lo que el motor
+# anuncia por UCI). La regla nunca llegó a morder porque git no ignora lo que
+# ya rastrea, pero habría mordido en el primer clon limpio.
+
 /target
-Cargo.lock
-Cargo.toml
+
+# Pipeline de calibración del eval: los scripts llevan rutas absolutas del
+# equipo del usuario, misma razón que _Info_humano.md.
 /tools
 
 # Salidas de las tandas del banco de pruebas: pesan y se regeneran desde el

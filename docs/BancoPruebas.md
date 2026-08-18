@@ -268,11 +268,11 @@ repetir la medición varias veces antes de creérsela.
 El primer cambio aprobado por este comando —y la versión 0.26.0 entera—,
 que sirve de ejemplo de cómo se lee su salida. Sustituir el recorrido clásico de rayos por magic bitboards dio
 nodos idénticos en las **12** posiciones —línea *"Nodos idénticos en las 12
-posiciones"*, que es la que autoriza a saltarse `sprt`— y entre +12,2 % y
-+18,5 % de nodos/segundo en cuatro ejecuciones seguidas. Cuatro y no una: la
-ganancia es del orden de cuatro veces el ruido, pero la dispersión entre
-ellas (seis puntos porcentuales) enseña por qué una sola cifra no se cita
-como si fuera exacta. Detalle en §3 de `docs/Documentacion_tecnica.md`.
+posiciones"*, que es la que autoriza a saltarse `sprt`— y entre +12,8 % y
++18,7 % de nodos/segundo en tres ejecuciones seguidas (+18,7 / +12,8 / +13,9,
+media ≈ +15 %). Tres y no una: la ganancia es del orden de cuatro veces el
+ruido, pero la dispersión entre ellas (seis puntos porcentuales) enseña por
+qué una sola cifra no se cita como si fuera exacta. Detalle en §3 de `docs/Documentacion_tecnica.md`.
 
 Si la línea de nodos idénticos **no** aparece, el comando lista las
 posiciones que divergen y el cambio deja de ser candidato a este comando:

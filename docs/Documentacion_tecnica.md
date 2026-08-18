@@ -48,8 +48,9 @@ banco/
   libros/                   # libros de aperturas versionados
   resultados/                # salidas de las tandas (fuera del repositorio)
 tools/calibration/            # pipeline Python de calibración del eval (ver §9)
+                              # FUERA del repositorio: lleva rutas locales
 docs/                       # esta documentación + revisiones externas Rev_*.md
-Release/                      # binarios .exe congelados por versión (referencia)
+../zzRelease/                 # binarios .exe congelados por versión, FUERA del repositorio
 book/komodo.bin                 # libro polyglot para GUIs externos (sin uso en código)
 ```
 
@@ -62,7 +63,8 @@ tendría también el árbitro— y una ventaja demostrada: hubo tres copias
 distintas de la regla de material insuficiente y llegaron a discrepar.
 
 **Versionado:** no se usan tags de git; el histórico real de versiones
-se lleva con ejecutables numerados en `Release/`. Cada versión publicada
+se lleva con ejecutables numerados en `../zzRelease/`, hermana del repositorio
+y no versionada (comparte carpeta con los motores rivales). Cada versión publicada
 corresponde a un commit con mensaje `X.Y.Z: descripción`.
 
 ---
@@ -202,10 +204,11 @@ usados por la poda de *null move*.
   cuadrarían si algún ataque deslizante hubiera cambiado.
 - **Medición** (`banco velocidad --profundidad 12`, ver §8): nodos
   **idénticos** en las 12 posiciones —es decir, la búsqueda visita
-  exactamente lo mismo y el cambio es de solo velocidad— y entre +12,2 % y
-  +18,5 % de nodos/segundo en cuatro ejecuciones (media ≈ +16 %), sobre un
-  ruido de máquina de ±4 %. El binario pasa de 589 KB a 1,45 MB por las
-  tablas.
+  exactamente lo mismo y el cambio es de solo velocidad— y entre +12,8 % y
+  +18,7 % de nodos/segundo en tres ejecuciones (media ≈ +15 %), sobre un
+  ruido de máquina de ±4 %. Medido en la máquina de trabajo del usuario
+  (12 CPUs, MSVC), 0.26.0 congelada contra 0.25.0. El binario pasa de
+  320 KB a 1,13 MB por las tablas.
 - **Pseudo-legal + filtro de legalidad**, no generación legal-only directa:
   `generate_pseudo_legal_moves` genera todo; `legal_moves_scratch` filtra
   **in place** (`retain`) por make/unmake + detección de jaque propio sobre
@@ -933,8 +936,11 @@ usarse para aprobar un cambio.
 - **0.24.0** — calibración cuantitativa del eval contra motores oráculo
   (Stockfish 18, Obsidian 16.15, Berserk 14, Caissa 1.25) y 5 técnicas de
   búsqueda de consenso extraídas de una comparativa de 23 motores. Pipeline
-  conservado en `tools/calibration/` (requiere `python-chess` y rutas
-  locales a los motores oráculo; no reproducible sin ese entorno).
+  conservado en `tools/calibration/`, en el disco del usuario y **no en el
+  repositorio**: los scripts llevan escritas rutas absolutas de su equipo,
+  igual que `docs/_Info_humano.md`, y por eso `.gitignore` los excluye.
+  Requiere además `python-chess` y rutas locales a los motores oráculo, así
+  que no es reproducible fuera de ese entorno.
 - **0.25.0 — pasada de corrección a partir de tres revisiones externas.**
   Ver `docs/Rev_Opus5.md`, `docs/Rev_GPTSol.md` y `docs/Rev_Gemini36F.md`.
   Los hallazgos aceptados están implementados y documentados en las

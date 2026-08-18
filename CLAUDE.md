@@ -57,8 +57,14 @@ Al terminar una mejora hay que **actualizar la documentación**: el estado en
 
 ## Trampas conocidas
 
-- **Las releases anteriores a 0.25 no respetan `go nodes`** (0.24 se planta
-  en el 17 % de lo pedido). Comparar por nodos contra ellas da cifras
+- **Con presupuestos de nodos pequeños ningún Vigía agota `go nodes`**, ni
+  siquiera el actual: el límite blando cierra una iteración y no empieza la
+  siguiente si no cabe. A 5.000 nodos, 0.25 y 0.26 anuncian jugada al 42 %
+  (y en el mismo nodo exacto, 2.123, lo que de paso confirma que los magic
+  bitboards no tocan la búsqueda). No es un fallo; a partir de ~25.000 el
+  efecto desaparece. Por eso `banco humo` usa 25.000 por defecto.
+- **Las releases anteriores a 0.25 sí lo incumplen de verdad** (0.24 se planta
+  en el 17 % de lo pedido, y no por el límite blando). Comparar por nodos contra ellas da cifras
   absurdas (+422 Elo que no significan nada). El banco lo detecta y aborta;
   contra binarios antiguos hay que usar `movetime_ms`.
 - **La cifra de "+77 Elo" de 0.25 sobre 0.24 no está demostrada.** Repetida
@@ -78,6 +84,6 @@ Al terminar una mejora hay que **actualizar la documentación**: el estado en
 - Los comentarios explican **por qué**, no qué hace la línea siguiente.
 - Todo cambio va con sus tests. `cargo clippy` en cero avisos no es
   negociable.
-- Rama única `master`, remoto `origin` en GitHub. El usuario prefiere que
+- Rama única `main`, remoto `origin` en GitHub. El usuario prefiere que
   las operaciones de git las haga yo.
 - `banco/resultados/` está fuera del repositorio: pesa y se regenera.

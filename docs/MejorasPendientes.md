@@ -28,16 +28,14 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
   **Decisión: aceptada.** Nodos idénticos en las 12 posiciones (el criterio
   duro: la búsqueda visita exactamente lo mismo, luego el cambio es de solo
-  velocidad) y entre +12,2 % y +18,5 % de nodos/segundo en cuatro
-  ejecuciones seguidas (media ≈ +16 %), muy por encima del ruido de ±4 %. No se pasa por
+  velocidad) y entre +12,8 % y +18,7 % de nodos/segundo en tres
+  ejecuciones seguidas (media ≈ +15 %), muy por encima del ruido de ±4 %. No se pasa por
   `sprt` precisamente porque los nodos no se mueven: no hay diferencia de
   juego que medir.
 
-  **Advertencia sobre la cifra**: la medición se hizo en un contenedor
-  remoto de 4 CPUs, no en la máquina de 12 del usuario. Que los nodos son
-  idénticos no depende de la máquina; el porcentaje de nodos/segundo sí, y
-  conviene repetir el comando en la máquina de trabajo antes de citar un
-  número concreto.
+  Medido en la máquina de trabajo (12 CPUs, MSVC), enfrentando los
+  ejecutables congelados `../zzRelease/Vigia 0.26.exe` y
+  `../zzRelease/Vigia 0.25.exe`.
 
 ## Prioridad alta
 

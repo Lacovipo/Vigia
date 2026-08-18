@@ -225,7 +225,13 @@ fn cmd_humo(args: &Args) -> Result<ExitCode, String> {
     let motor = args.requerido("motor")?.to_string();
     let libro_ruta = args.opcional("libro").unwrap_or("banco/libros/humo.epd").to_string();
     let parejas = args.numero("parejas", 4)?;
-    let nodos = args.numero("nodos", 5_000)?;
+    // 25.000 y no 5.000: con un presupuesto pequeño el motor cierra una
+    // iteración de profundización y calcula que la siguiente no cabe, así que
+    // no la empieza y anuncia jugada al 42 % de los nodos pedidos. Es el
+    // límite blando funcionando bien, pero dispara el guardián de "no respeta
+    // el límite por nodos" de este mismo banco y la prueba de humo falla sin
+    // que haya nada roto. A partir de ~25.000 el margen sobra.
+    let nodos = args.numero("nodos", 25_000)?;
     let salida = args
         .opcional("salida")
         .unwrap_or("banco/resultados/humo")
