@@ -5,9 +5,7 @@
 
 /target
 
-# Pipeline de calibración del eval: los scripts llevan rutas absolutas del
-# equipo del usuario, misma razón que _Info_humano.md.
-/tools
+__pycache__/
 
 # Salidas de las tandas del banco de pruebas: pesan y se regeneran desde el
 # manifiesto. Las configuraciones y los libros SÍ se versionan.

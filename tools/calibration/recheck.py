@@ -2,11 +2,20 @@
 no han cambiado) y reescribe el CSV con la columna vigia actualizada."""
 
 import csv
+import os
+import pathlib
 import re
 import subprocess
 import sys
 
-VIGIA = r"C:\Users\JOSE CARLOS\OneDrive\IA\Ajedrez\Claude\target\release\vigia.exe"
+# Relativa al propio script: tools/calibration/ cuelga de la raíz del
+# repositorio, así que el binario está siempre dos niveles más arriba. La ruta
+# absoluta que había aquí solo valía en el equipo donde se escribió, y esta
+# carpeta se sincroniza entre varios. VIGIA_EXE la sobrescribe si hace falta.
+VIGIA = os.environ.get(
+    "VIGIA_EXE",
+    str(pathlib.Path(__file__).resolve().parents[2] / "target" / "release" / "vigia.exe"),
+)
 
 rows = list(csv.DictReader(open("calib.csv")))
 p = subprocess.Popen([VIGIA], stdin=subprocess.PIPE, stdout=subprocess.PIPE,

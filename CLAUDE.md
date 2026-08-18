@@ -36,7 +36,13 @@ Validar un cambio (detalle completo en `docs/BancoPruebas.md`):
 **Hay que decirle al usuario cuántas CPUs se van a ocupar y esperar a que
 libere sitio.** Es petición explícita suya: la máquina es la de trabajo y
 suele tener otras cosas corriendo. `partidas.workers` = partidas
-simultáneas = CPUs. La máquina tiene 12.
+simultáneas = CPUs.
+
+La máquina es un **AMD Ryzen 9 9950X: 16 núcleos físicos, 32 hilos
+lógicos** (comprobado, no heredado; aquí ponía 12 y era falso). Para medir
+fuerza cuenta el número de físicos: dos partidas compartiendo un núcleo por
+SMT van cada una a su ritmo y ensucian el control por tiempo. O sea, tope
+sensato 16 workers, y menos si el usuario está usando el equipo.
 
 Una tanda de 128 parejas a `movetime` 100 ms con 4 workers tarda unos 12
 minutos. A 25.000 nodos, unos 4.

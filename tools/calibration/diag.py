@@ -2,11 +2,20 @@
 usando el desglose por términos del comando `eval` nuevo."""
 
 import csv
+import os
+import pathlib
 import re
 import statistics
 import subprocess
 
-VIGIA = r"C:\Users\JOSE CARLOS\OneDrive\IA\Ajedrez\Claude\target\release\vigia.exe"
+# Relativa al propio script: tools/calibration/ cuelga de la raíz del
+# repositorio, así que el binario está siempre dos niveles más arriba. La ruta
+# absoluta que había aquí solo valía en el equipo donde se escribió, y esta
+# carpeta se sincroniza entre varios. VIGIA_EXE la sobrescribe si hace falta.
+VIGIA = os.environ.get(
+    "VIGIA_EXE",
+    str(pathlib.Path(__file__).resolve().parents[2] / "target" / "release" / "vigia.exe"),
+)
 
 
 class BreakdownClient:

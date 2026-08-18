@@ -6,6 +6,8 @@ Salida: CSV con fen, ply, phase, vigia, sf, obsidian, berserk, caissa.
 """
 
 import csv
+import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -13,12 +15,24 @@ import sys
 import chess
 import chess.engine
 
-VIGIA = r"C:\Users\JOSE CARLOS\OneDrive\IA\Ajedrez\Claude\target\release\vigia.exe"
+# Relativa al propio script: tools/calibration/ cuelga de la raíz del
+# repositorio, así que el binario está siempre dos niveles más arriba. La ruta
+# absoluta que había aquí solo valía en el equipo donde se escribió, y esta
+# carpeta se sincroniza entre varios. VIGIA_EXE la sobrescribe si hace falta.
+VIGIA = os.environ.get(
+    "VIGIA_EXE",
+    str(pathlib.Path(__file__).resolve().parents[2] / "target" / "release" / "vigia.exe"),
+)
+# Los oráculos sí viven fuera del repositorio y no hay ruta relativa posible:
+# se deja la carpeta donde el usuario los tiene y AJEENG la cambia de un tirón.
+# Las versiones van en el nombre a propósito: recalibrar contra otra versión de
+# un oráculo no da lo mismo, y conviene que se note al leer el fichero.
+AJEENG = pathlib.Path(os.environ.get("AJEENG", r"C:\AjeEng"))
 ORACLES = {
-    "sf": r"C:\AjeEng\Stockfish\18\stockfish_18_64_ja_avx512.exe",
-    "obsidian": r"C:\AjeEng\Obsidian\Obsidian 16.15 SE\Obsidian_dev16.15SE_BMI2.exe",
-    "berserk": r"C:\AjeEng\Berserk\berserk_14_64_ja_avx512.exe",
-    "caissa": r"C:\AjeEng\Caissa\caissa_125_64_ja_avx512.exe",
+    "sf": str(AJEENG / "Stockfish" / "18" / "stockfish_18_64_ja_avx512.exe"),
+    "obsidian": str(AJEENG / "Obsidian" / "Obsidian 16.15 SE" / "Obsidian_dev16.15SE_BMI2.exe"),
+    "berserk": str(AJEENG / "Berserk" / "berserk_14_64_ja_avx512.exe"),
+    "caissa": str(AJEENG / "Caissa" / "caissa_125_64_ja_avx512.exe"),
 }
 OUT_CSV = sys.argv[1] if len(sys.argv) > 1 else "calib.csv"
 GAMES_PER_OPENING = 4

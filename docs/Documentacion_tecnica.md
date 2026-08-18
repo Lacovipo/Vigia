@@ -48,7 +48,6 @@ banco/
   libros/                   # libros de aperturas versionados
   resultados/                # salidas de las tandas (fuera del repositorio)
 tools/calibration/            # pipeline Python de calibración del eval (ver §9)
-                              # FUERA del repositorio: lleva rutas locales
 docs/                       # esta documentación + revisiones externas Rev_*.md
 ../zzRelease/                 # binarios .exe congelados por versión, FUERA del repositorio
 book/komodo.bin                 # libro polyglot para GUIs externos (sin uso en código)
@@ -936,11 +935,11 @@ usarse para aprobar un cambio.
 - **0.24.0** — calibración cuantitativa del eval contra motores oráculo
   (Stockfish 18, Obsidian 16.15, Berserk 14, Caissa 1.25) y 5 técnicas de
   búsqueda de consenso extraídas de una comparativa de 23 motores. Pipeline
-  conservado en `tools/calibration/`, en el disco del usuario y **no en el
-  repositorio**: los scripts llevan escritas rutas absolutas de su equipo,
-  igual que `docs/_Info_humano.md`, y por eso `.gitignore` los excluye.
-  Requiere además `python-chess` y rutas locales a los motores oráculo, así
-  que no es reproducible fuera de ese entorno.
+  conservado en `tools/calibration/`. La ruta a `vigia.exe` se deduce de la
+  ubicación del propio script, así que no depende del equipo; los motores
+  oráculo, que sí viven fuera del repositorio, se buscan bajo `C:\AjeEng` y
+  la variable de entorno `AJEENG` cambia esa raíz. Requiere `python-chess` y
+  tener los cuatro oráculos instalados.
 - **0.25.0 — pasada de corrección a partir de tres revisiones externas.**
   Ver `docs/Rev_Opus5.md`, `docs/Rev_GPTSol.md` y `docs/Rev_Gemini36F.md`.
   Los hallazgos aceptados están implementados y documentados en las
