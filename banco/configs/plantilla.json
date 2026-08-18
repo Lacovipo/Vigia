@@ -23,7 +23,7 @@
 
   "_libro": "La semilla fija el orden. Cambiarla es cambiar el experimento.",
   "libro": {
-    "fichero": "banco/libros/vigia-256.epd",
+    "fichero": "banco/libros/vigia-2000.epd",
     "semilla": 20260818,
     "barajar": true
   },

@@ -893,10 +893,10 @@ Lectura honesta, que es distinta de la cómoda:
    dato antiguo era a 300 y 800 ms, y ya entonces se observó que la
    diferencia mejoraba cuanto más largo era el control.
 
-Lo pendiente, en ese orden: repetir a 300 ms y a 800 ms con el libro
-completo, y ampliar el libro por encima de 256 posiciones para poder decidir
-diferencias pequeñas. Hasta entonces, **el proyecto no tiene una cifra de
-Elo demostrada para 0.25 frente a 0.24**, y eso es una mejora sobre tener
+Lo pendiente: repetir a 300 ms y a 800 ms, ya con el libro ancho de 2.000
+posiciones (`banco/libros/vigia-2000.epd`), que era el otro punto de esta
+lista y ya está resuelto. Hasta entonces, **el proyecto no tiene una cifra
+de Elo demostrada para 0.25 frente a 0.24**, y eso es una mejora sobre tener
 una cifra falsa.
 
 Otras tandas registradas:

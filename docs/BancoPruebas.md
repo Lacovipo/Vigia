@@ -331,22 +331,36 @@ forma que pudiera afectar al determinismo.
 
 ## 7. `banco libro` — construir el libro de aperturas
 
-El libro que se usa por defecto ya está en el repositorio:
-`banco/libros/vigia-256.epd`, 256 posiciones. No hace falta regenerarlo para
-reproducir nada.
-
-Se construyó filtrando un volcado de posiciones de un libro Polyglot:
+El libro que se usa por defecto está en el repositorio:
+`banco/libros/vigia-2000.epd`, **2.000 posiciones**. No hace falta
+regenerarlo para reproducir nada. Sigue ahí `vigia-256.epd`, que es el que
+usaron las tandas anteriores y hace falta para repetirlas tal cual.
 
 ```bash
 ./target/release/banco.exe libro \
-  --fuente "C:/JC/Books/gm2001.epd" \
-  --salida banco/libros/vigia-256.epd \
-  --n 256 --semilla 20260818
+  --fuente "C:/Ajedrez/Probon_Gem/apertura.txt" \
+  --salida banco/libros/vigia-2000.epd \
+  --n 2000 --min-jugada 1 --max-jugada 1 --semilla 20260818
 ```
 
 Filtros por defecto: jugadas 4–12, al menos 26 piezas, no en jaque, no
-terminada, y `|evaluación estática| ≤ 90 cp`. De 27.925 posiciones del
-origen, 17.374 pasan los filtros y se muestrean 256 con la semilla dada.
+terminada, y `|evaluación estática| ≤ 90 cp`.
+
+**`--min-jugada 1 --max-jugada 1` no es cosmético**: todas las posiciones de
+ese origen llevan el contador de jugada a 1 aunque tengan diez o quince
+plies jugados. Con los valores por defecto el filtro las habría rechazado
+las 3.825.105, y el error resultante habría sido "no hay bastantes
+posiciones", que no señala hacia la causa. Al construir un libro conviene
+leer primero el recuento de descartes que imprime el propio comando.
+
+De 3.825.105 posiciones del origen —todas distintas entre sí, ni un solo
+duplicado— pasan los filtros 3.082.412. Los descartes: 742.486 por
+desequilibrio, 194 por estar en jaque y 13 por pocas piezas. De las
+aceptadas se muestrean 2.000 con la semilla dada.
+
+El libro anterior, de 256, salió de `C:/JC/Books/gm2001.epd` (27.925
+posiciones, 17.374 tras los filtros). Ese fichero ya no está en el disco,
+que es la razón de que ampliarlo obligara a cambiar de fuente.
 
 La cabecera del fichero registra origen, su SHA-256, filtros y semilla, así
 que el libro es auditable por sí solo.
@@ -369,8 +383,17 @@ Si el libro tiene menos posiciones únicas que parejas pedidas, el banco se
 planta: repetir aperturas reintroduce exactamente la correlación que las
 parejas venían a eliminar.
 
-Ampliar el libro es la vía natural para poder decidir mejoras pequeñas. Con
-256 parejas hay techo; para cambios de +2–3 Elo harán falta 1.000–2.000.
+Ampliar el libro es la vía natural para poder decidir mejoras pequeñas, y
+por eso se pasó de 256 a 2.000: con 256 parejas hay techo, y varias de las
+mejoras que quedan por probar son de +2–3 Elo.
+
+**Cuidado con el tamaño del origen.** La carga deduplica por identidad FEN4,
+y esa deduplicación fue cuadrática hasta que se arregló: con las 27.925
+posiciones del libro viejo costaba un par de segundos y nadie lo notó, pero
+con un fichero de 3,8 millones no terminaba en horas. Hoy son 17 segundos.
+Si alguna vez vuelve a tardar de forma desproporcionada, el sospechoso es
+ese, y hay un test que lo vigila
+(`loading_a_large_source_does_not_degrade_quadratically`).
 
 ---
 

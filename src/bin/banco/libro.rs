@@ -21,6 +21,7 @@
 //! lo dice y se planta: repetir aperturas reintroduce exactamente la
 //! correlación que las parejas venían a eliminar.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use vigia::board::Board;
@@ -67,7 +68,14 @@ pub fn cargar(ruta: &Path) -> Result<Libro, String> {
         .map_err(|_| format!("el libro '{}' no es UTF-8", ruta.display()))?;
 
     let mut aperturas: Vec<Apertura> = Vec::new();
-    let mut identidades: Vec<String> = Vec::new();
+    // HashSet y no Vec: aquí hubo un `Vec::contains`, que recorre todo lo
+    // acumulado por cada línea leída y hace la carga cuadrática. Con las
+    // ~28.000 posiciones del libro original eso eran un par de segundos y no
+    // se notó; con un fichero de 3,8 millones son billones de comparaciones
+    // de cadena y la orden no termina nunca. El orden de `aperturas` no
+    // depende de esta estructura —se conserva la primera aparición tal cual—,
+    // así que el libro generado es idéntico y sigue siendo reproducible.
+    let mut identidades: HashSet<String> = HashSet::new();
     let mut leidas = 0usize;
 
     for (n, linea) in texto.lines().enumerate() {
@@ -82,11 +90,11 @@ pub fn cargar(ruta: &Path) -> Result<Libro, String> {
         })?;
         leidas += 1;
         let apertura = Apertura { fen };
-        let id = apertura.identidad();
-        if identidades.contains(&id) {
+        // `insert` devuelve false si ya estaba: una sola consulta en lugar de
+        // consultar y volver a insertar.
+        if !identidades.insert(apertura.identidad()) {
             continue;
         }
-        identidades.push(id);
         aperturas.push(apertura);
     }
 
@@ -356,6 +364,93 @@ mod tests {
         assert_eq!(libro.unicas, 2);
         // Se conserva la primera, con sus relojes originales.
         assert_eq!(libro.aperturas[0].fen, "4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+        std::fs::remove_file(&ruta).unwrap();
+    }
+
+    /// FEN con blancas a mover a partir de las piezas colocadas. El índice de
+    /// casilla es `fila * 8 + columna`, con la fila 0 siendo la primera.
+    fn fen_con(piezas: &[(usize, char)]) -> String {
+        let mut tablero = [' '; 64];
+        for &(casilla, pieza) in piezas {
+            tablero[casilla] = pieza;
+        }
+        let mut filas: Vec<String> = Vec::with_capacity(8);
+        for fila in (0..8).rev() {
+            let mut texto = String::new();
+            let mut vacias = 0;
+            for columna in 0..8 {
+                match tablero[fila * 8 + columna] {
+                    ' ' => vacias += 1,
+                    pieza => {
+                        if vacias > 0 {
+                            texto.push_str(&vacias.to_string());
+                            vacias = 0;
+                        }
+                        texto.push(pieza);
+                    }
+                }
+            }
+            if vacias > 0 {
+                texto.push_str(&vacias.to_string());
+            }
+            filas.push(texto);
+        }
+        format!("{} w - - 0 1", filas.join("/"))
+    }
+
+    /// Este test existe por el coste, no por el resultado. La deduplicación se
+    /// hacía con `Vec::contains`, lineal, lo que volvía la carga cuadrática:
+    /// con las ~28.000 posiciones del libro original eran un par de segundos y
+    /// nadie lo vio, pero con un origen de 3,8 millones la orden se quedaba
+    /// horas sin terminar. Con 40.000 posiciones esto tarda décimas; si alguien
+    /// vuelve a poner una búsqueda lineal son ~800 millones de comparaciones de
+    /// cadena y el test pasa a tardar segundos largos, que es la señal.
+    #[test]
+    fn loading_a_large_source_does_not_degrade_quadratically() {
+        // Reyes en h1 y a8: ni adyacentes ni en jaque. Los peones blancos van
+        // por las filas 2 a 6 —fuera de la 7—, así que jamás dan jaque al rey
+        // negro ni quedan a un paso de coronar, y toda combinación es legal.
+        const REYES: [(usize, char); 2] = [(7, 'K'), (56, 'k')];
+        const OBJETIVO: usize = 40_000;
+        let casillas: Vec<usize> = (8..48).collect();
+        let mut fens: Vec<String> = Vec::with_capacity(OBJETIVO);
+        'generado: for a in 0..casillas.len() {
+            for b in (a + 1)..casillas.len() {
+                for c in (b + 1)..casillas.len() {
+                    for d in (c + 1)..casillas.len() {
+                        let mut piezas = REYES.to_vec();
+                        for &i in &[a, b, c, d] {
+                            piezas.push((casillas[i], 'P'));
+                        }
+                        fens.push(fen_con(&piezas));
+                        if fens.len() == OBJETIVO {
+                            break 'generado;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(fens.len(), OBJETIVO);
+
+        // Cada posición dos veces: de paso comprueba que deduplicar sigue
+        // funcionando a esta escala, y no solo con las tres líneas del test
+        // de al lado.
+        let mut texto = String::with_capacity(OBJETIVO * 140);
+        for fen in fens.iter().chain(fens.iter()) {
+            texto.push_str(fen);
+            texto.push('\n');
+        }
+
+        let dir = std::env::temp_dir().join("banco_libro_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("grande.epd");
+        std::fs::write(&ruta, &texto).unwrap();
+
+        let libro = cargar(&ruta).unwrap();
+        assert_eq!(libro.leidas, OBJETIVO * 2);
+        assert_eq!(libro.unicas, OBJETIVO);
+        assert_eq!(libro.aperturas[0].fen, fens[0], "se conserva el orden del fichero");
+        assert_eq!(libro.aperturas[OBJETIVO - 1].fen, fens[OBJETIVO - 1]);
         std::fs::remove_file(&ruta).unwrap();
     }
 

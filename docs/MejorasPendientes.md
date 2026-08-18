@@ -184,12 +184,15 @@ Y dos cosas que no estaban en la lista y aparecieron al construirlo:
 
 Por orden de utilidad para lo que viene:
 
-1. **Ampliar el libro** por encima de 256 posiciones (a 1.000–2.000). Es el
-   techo actual: con 256 parejas no se pueden decidir diferencias de +2–3
-   Elo, y varias mejoras de la lista de arriba son de ese tamaño. Se hace
-   con `banco libro --n 2000`, que ya tiene material de sobra (17.374
-   posiciones pasan los filtros).
-2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta.
+1. ~~**Ampliar el libro** por encima de 256 posiciones~~ → **hecho**:
+   `banco/libros/vigia-2000.epd`, 2.000 posiciones muestreadas de
+   `C:/Ajedrez/Probon_Gem/apertura.txt` (3.825.105 posiciones, todas
+   distintas; 3.082.412 pasan los filtros). Con esto dejan de estar fuera de
+   alcance las diferencias de +2–3 Elo, que es el tamaño de casi todo lo que
+   queda arriba. La fuente del libro viejo, `C:/JC/Books/gm2001.epd`, ya no
+   existe en el disco. `banco/configs/plantilla.json` apunta ya al nuevo.
+2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta,
+   ya con el libro ancho.
 3. **Soporte de ponder en el árbitro** (`go ponder` / `ponderhit`), sin el
    cual la mejora de ponder de prioridad alta no es medible.
 4. Recolectar una suite EPD externa (WAC, ECM…) para `banco epd`.
