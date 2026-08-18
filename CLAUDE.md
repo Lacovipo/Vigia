@@ -49,7 +49,7 @@ minutos. A 25.000 nodos, unos 4.
 | `docs/Documentacion_tecnica.md` | estado actual del motor, módulo a módulo |
 | `docs/MejorasPendientes.md` | qué hacer a continuación, priorizado, con cómo validar cada cosa |
 | `docs/Descartados.md` | propuestas rechazadas y por qué (no volver a proponerlas) |
-| `docs/_Info_humano.md` | recursos externos que el usuario pone a disposición |
+| `docs/_Info_humano.md` | recursos externos que el usuario pone a disposición. **Solo local**: no se publica porque lleva rutas de su equipo |
 
 Al terminar una mejora hay que **actualizar la documentación**: el estado en
 `Documentacion_tecnica.md` y el punto correspondiente de
