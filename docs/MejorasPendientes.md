@@ -187,10 +187,22 @@ Por orden de utilidad para lo que viene:
 1. ~~**Ampliar el libro** por encima de 256 posiciones~~ → **hecho**:
    `banco/libros/vigia-2000.epd`, 2.000 posiciones muestreadas de
    `C:/Ajedrez/Probon_Gem/apertura.txt` (3.825.105 posiciones, todas
-   distintas; 3.082.412 pasan los filtros). Con esto dejan de estar fuera de
-   alcance las diferencias de +2–3 Elo, que es el tamaño de casi todo lo que
-   queda arriba. La fuente del libro viejo, `C:/JC/Books/gm2001.epd`, ya no
-   existe en el disco. `banco/configs/plantilla.json` apunta ya al nuevo.
+   distintas; 3.082.412 pasan los filtros). La fuente del libro viejo,
+   `C:/JC/Books/gm2001.epd`, ya no existe en el disco.
+   `banco/configs/plantilla.json` apunta ya al nuevo.
+
+   **Corrección**: al cerrarlo escribí aquí que 2.000 posiciones ponían las
+   diferencias de +2–3 Elo al alcance. Es falso por un factor de ocho. Medido
+   sobre las 1.000 parejas de `027-tt-quiescencia`, 1.000 parejas dan ±12,3
+   Elo, y como el intervalo va con la raíz, ±3 Elo pide ~16.900 parejas. El
+   libro es además un techo duro, porque no caben más parejas que posiciones
+   únicas: con 2.000 no se baja de ±8,7 Elo por mucho tiempo que se le dé.
+   Tabla completa en §7 de `docs/BancoPruebas.md`.
+
+1bis. **Libro de 20.000 posiciones**, que es lo que este techo pide de
+   verdad. La fuente tiene 3,8 millones y generar el libro cuesta 17
+   segundos, así que el trabajo no es hacerlo sino asumir las horas de
+   partidas que habilita.
 2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta,
    ya con el libro ancho.
 3. **Soporte de ponder en el árbitro** (`go ponder` / `ponderhit`), sin el

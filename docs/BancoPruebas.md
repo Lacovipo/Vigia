@@ -384,8 +384,38 @@ planta: repetir aperturas reintroduce exactamente la correlación que las
 parejas venían a eliminar.
 
 Ampliar el libro es la vía natural para poder decidir mejoras pequeñas, y
-por eso se pasó de 256 a 2.000: con 256 parejas hay techo, y varias de las
-mejoras que quedan por probar son de +2–3 Elo.
+por eso se pasó de 256 a 2.000.
+
+### Cuántas parejas hacen falta de verdad
+
+Aquí llegó a estar escrito que 2.000 posiciones bastaban para decidir
+diferencias de +2–3 Elo. **Es falso, por un factor de ocho.** Lo que sigue
+está medido sobre las 1.000 parejas de `027-tt-quiescencia`, no estimado:
+
+| resolución buscada | parejas | partidas | a 2 CPUs, 100 ms/jugada |
+|---|---:|---:|---:|
+| ±12 Elo | 1.000 | 2.000 | 3 h |
+| ±10 Elo | 1.518 | 3.036 | 4,6 h |
+| ±5 Elo | 6.072 | 12.143 | 18,6 h |
+| ±3 Elo | 16.866 | 33.731 | 51,5 h |
+| ±2 Elo | 37.947 | 75.895 | 116 h |
+
+El intervalo se estrecha con la raíz de las parejas, así que **ganar un
+factor 2 de resolución cuesta un factor 4 de partidas**. Esa es la razón de
+que los bancos serios midan en decenas de miles de partidas y no en miles.
+
+Dos consecuencias prácticas:
+
+- El **libro es el techo duro**: no se pueden pedir más parejas que
+  posiciones únicas tenga (repetir aperturas reintroduce la correlación que
+  las parejas venían a eliminar). Con 2.000 posiciones el techo es ±8,7 Elo,
+  se disponga del tiempo que se disponga. Para bajar de ahí hay que generar
+  un libro mayor primero — la fuente de `apertura.txt` tiene 3,8 millones de
+  posiciones y generar 20.000 cuesta 17 segundos.
+- Antes de lanzar una tanda conviene **mirar en esta tabla si la pregunta
+  cabe en el presupuesto**. Un contraste `elo0=0, elo1=5` sobre una mejora
+  real de +12 Elo necesitó más de 2.000 parejas para cruzar la frontera; una
+  de +3 Elo no es contestable en una noche.
 
 **Cuidado con el tamaño del origen.** La carga deduplica por identidad FEN4,
 y esa deduplicación fue cuadrática hasta que se arregló: con las 27.925
