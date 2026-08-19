@@ -682,6 +682,58 @@ o reforzando el error en vez de corregirlo.
   entre "falló bajo por poco" y "falló bajo por una dama", que es
   información que la TT del padre podía aprovechar.
 
+#### Tabla de transposición en quiescencia (0.27.0)
+
+Hasta 0.26 quiescencia ni leía ni escribía la TT, siendo la mayoría de los
+nodos de cualquier búsqueda. Ahora hace ambas cosas, con tres decisiones que
+conviene no deshacer sin entender por qué están:
+
+- **Se lee después del control de tablas por regla, nunca antes.** Que una
+  posición sea tablas depende del camino recorrido para llegar a ella
+  —repeticiones, contador de cincuenta jugadas—, y una entrada de la tabla
+  no lleva camino. Sondear primero dejaría que una entrada legítima de otra
+  transposición convirtiera unas tablas muertas en partida ganada. Lo fija
+  el test `a_stored_score_never_overrides_a_draw_by_rule_in_quiescence`.
+- **No hace falta comparar profundidades.** Un nodo de quiescencia es
+  profundidad 0 por definición y toda entrada guardada se buscó al menos
+  tan hondo, así que cualquiera cuyo contador de cincuenta jugadas sea
+  compatible sirve.
+- **El corte no se restringe a nodos que no son PV**, al revés que en
+  `negamax`. Allí esa restricción existe porque devolver pronto deja al
+  padre sin línea que enseñar; quiescencia solo limpia la variante y nunca
+  escribe en ella, así que no hay línea que truncar.
+
+Se **escribe siempre con profundidad 0**, y eso es lo que impide que un
+resultado de quiescencia suplante a una búsqueda real: `negamax` solo se fía
+de entradas que alcancen su propia profundidad, y nunca pregunta a
+profundidad 0 porque esos nodos se los pasa directamente a quiescencia.
+
+Las puntuaciones de mate se desplazan por `ply` al entrar y al salir, igual
+que en `negamax`. Es la parte más fácil de romper, porque un fallo ahí solo
+se manifiesta en la *segunda* búsqueda de una posición, nunca en la primera;
+lo cubre `a_horizon_mate_still_reads_back_correctly_from_a_warm_table`.
+
+**Medición** (`banco sprt`, experimentos `027-tt-quiescencia` y
+`027-tt-quiescencia-largo`): **aceptada**, veredicto `acepta_h1`. Es la
+primera mejora del proyecto con decisión formal del banco.
+
+Sobre la magnitud hay que tener cuidado y por eso queda escrita aquí con su
+reserva. La tanda larga paró al cruzar la frontera y reporta +20,4 Elo, pero
+**esa cifra está sesgada al alza por construcción**: una prueba secuencial
+que se detiene en el instante en que cruza se detiene, por definición, en un
+momento favorable. La estimación sin ese sesgo es la de la tanda que agotó
+su tope de libro sin pararse en ninguna frontera: **+11,4 Elo** sobre 4.000
+partidas, IC95 [+2,5, +20,3]. Agregando las dos, 6.626 partidas, sale +15,0
+[+8,1, +21,8]. **La magnitud honesta es "entre +11 y +15 Elo"**; lo que el
+`acepta_h1` certifica es que supera +5, y eso sí es firme.
+
+Un dato que contradijo la hipótesis de partida: la profundidad media
+alcanzada **no sube** (10,763 plies el candidato frente a 10,797 la base,
+sobre 40.000 jugadas). La ganancia no es llegar más hondo sino acertar más a
+la misma profundidad, porque un nodo de quiescencia que acierta en la tabla
+recupera una puntuación guardada por una búsqueda más profunda en vez de
+resolver el intercambio con su propia vista corta.
+
 ### Gestión de tiempo y límites
 
 - Presupuesto blando/duro por jugada; el blando decide si arranca una nueva
@@ -961,6 +1013,16 @@ usarse para aprobar un cambio.
   una mejora de evaluación y el resultado saliera raro, no habría forma de
   saber cuál de las dos fue. Al no tocar ninguna decisión de la búsqueda no
   necesitaba `sprt`, y por tanto no consumió ni una partida.
+- **0.27.0 — tabla de transposición en quiescencia, y nada más.** La
+  **primera mejora de fuerza del proyecto con veredicto formal**:
+  `acepta_h1` sobre 2.626 partidas, tras 4.000 previas que no llegaron a
+  decidir por agotarse el libro. Magnitud honesta entre +11 y +15 Elo (§6,
+  con el detalle de por qué no es el +20,4 que reporta la tanda que paró al
+  cruzar). Un solo cambio otra vez, por la misma razón.
+
+  Lo que costó no fue el código —unas cuarenta líneas— sino aprender a
+  medirlo: hicieron falta tres tandas, dos libros y dos hallazgos de método
+  que están en §7 de `docs/BancoPruebas.md`.
 
 ---
 

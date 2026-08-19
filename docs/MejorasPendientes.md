@@ -14,6 +14,35 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
 ## Hecho
 
+- **Sonda de tabla de transposición en quiescencia** — **HECHO en 0.27.0**,
+  en `src/search.rs`, documentado en §6 del documento técnico.
+
+  **Decisión: aceptada.** Es la **primera mejora de fuerza del proyecto con
+  veredicto formal del banco**.
+
+  ```bash
+  ./target/release/banco.exe sprt --config banco/configs/027-tt-quiescencia-largo.json
+  ```
+
+  | experimento | libro | parejas | cómo terminó | Elo |
+  |---|---:|---:|---|---:|
+  | `027-tt-quiescencia` | 2.000 | 2.000 | agotó el tope, `continuar` | +11,4 |
+  | `027-tt-quiescencia-largo` | 20.000 | 1.313 | **`acepta_h1`** | +20,4 |
+
+  **Magnitud honesta: entre +11 y +15 Elo, no +20,4.** La tanda que cruzó
+  paró en el instante favorable en que cruzó, y eso sesga su cifra al alza;
+  la primera, que agotó su tope sin pararse en ninguna frontera, es la
+  estimación limpia. Agregando las dos (6.626 partidas) sale +15,0
+  [+8,1, +21,8]. Lo que el `acepta_h1` certifica es que supera +5 Elo.
+
+  Tres cosas que enseñó y que están en §7 de `docs/BancoPruebas.md`: que el
+  control por nodos **no puede medir** esta familia de cambios, que la cifra
+  de una tanda que cruzó frontera va sesgada, y cuántas parejas hace falta
+  jugar de verdad para cada resolución.
+
+  Y una que contradijo la hipótesis: la profundidad media **no sube**. La
+  ganancia es acertar más a la misma profundidad, no llegar más hondo.
+
 - **Magic bitboards** (Opus P8) — **HECHO en 0.26.0**, implementado en
   `src/magic.rs` y documentado en §3 del documento técnico.
 
@@ -123,10 +152,10 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
 - **Técnicas de fuerza adicionales**: LMR sensible a la historia (Gemini
   4.1, Opus M4), poda por SEE de tranquilas (Gemini 4.2, Opus M4), *capture
-  history* (Gemini 4.3, GPT 6.2), sonda de TT en quiescencia, ProbCut,
-  multicut, gestión de tiempo adaptativa (Opus M5). Todas plausibles,
-  todas importantes a medio plazo — se prueban de una en una, cada una
-  contra el banco de pruebas, nunca en bloque.
+  history* (Gemini 4.3, GPT 6.2), ~~sonda de TT en quiescencia~~ (hecha en
+  0.27.0, ver arriba), ProbCut, multicut, gestión de tiempo adaptativa
+  (Opus M5). Todas plausibles, todas importantes a medio plazo — se prueban
+  de una en una, cada una contra el banco de pruebas, nunca en bloque.
 
 ## Fuera de planificación (no aplazado — descartado por ahora, con revisión futura)
 

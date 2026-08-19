@@ -1591,6 +1591,40 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
         return score;
     }
 
+    // Transposition table, read side. Deliberately *after* the draw check
+    // above: repetition and the fifty-move rule depend on the path taken to
+    // get here, not on the position alone, so a stored score must never
+    // override them.
+    //
+    // Unlike `negamax`, no depth comparison is needed. A quiescence node is
+    // depth 0 by definition and every stored entry was searched at least
+    // that deep, so any entry whose fifty-move counter is compatible can be
+    // trusted here. And unlike `negamax`, the cutoff is *not* restricted to
+    // non-PV nodes: that restriction exists there because returning early
+    // leaves the parent without a line to report, but quiescence only ever
+    // clears the PV and never writes one, so there is no line to cut short.
+    if let Some(entry) = ctx.tt.probe(board.hash) {
+        if tt_score_is_clock_compatible(&entry, board.halfmove_clock) {
+            let score = score_from_tt(entry.score, ply);
+            match entry.flag {
+                TtFlag::Exact => return score,
+                TtFlag::Lower => {
+                    if score >= beta {
+                        return score;
+                    }
+                }
+                TtFlag::Upper => {
+                    if score <= alpha {
+                        return score;
+                    }
+                }
+            }
+        }
+    }
+    // The window as the caller gave it, needed to classify the bound when
+    // storing below: `alpha` itself is raised as the search progresses.
+    let alpha_orig = alpha;
+
     let in_check = movegen::is_in_check(board, board.side_to_move);
 
     // The full legal list is generated first and only then filtered down to
@@ -1601,7 +1635,11 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
     // stalemating Black, and announce more than ten pawns of advantage.
     let mut moves = movegen::legal_moves_scratch(board);
     if moves.is_empty() {
-        return if in_check { -MATE_SCORE + ply as i32 } else { 0 };
+        // Mate or stalemate: an exact, final value for this position that
+        // no deeper search can improve on, so it is worth keeping.
+        let score = if in_check { -MATE_SCORE + ply as i32 } else { 0 };
+        store_quiescence(ctx, board, ply, score, alpha_orig, beta, None);
+        return score;
     }
 
     // When in check there is no "stand pat": the side to move might be
@@ -1614,8 +1652,13 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
         eval::evaluate_relative(board)
     };
     let mut best_score = stand_pat;
+    let mut best_move: Option<Move> = None;
     if !in_check {
         if stand_pat >= beta {
+            // Standing pat already fails high, so the true score is at
+            // least this: a lower bound, and the most common way out of a
+            // quiescence node by a wide margin.
+            store_quiescence(ctx, board, ply, stand_pat, alpha_orig, beta, None);
             return stand_pat;
         }
         if stand_pat > alpha {
@@ -1654,6 +1697,11 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
 
         if score > best_score {
             best_score = score;
+            // Only tracked to put it in the TT entry: a later visit to this
+            // position orders it first. `best_score` starts at `stand_pat`,
+            // which is no move at all, so this stays `None` unless some
+            // capture actually beat standing pat.
+            best_move = Some(mv);
         }
         if score > alpha {
             alpha = score;
@@ -1662,10 +1710,45 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
             break;
         }
     }
+
+    store_quiescence(ctx, board, ply, best_score, alpha_orig, beta, best_move);
+
     // Fail-soft, matching `negamax`: returning `alpha` instead threw away
     // the difference between "failed low by a little" and "failed low by a
     // queen", which is information the parent's TT entry could have used.
     best_score
+}
+
+/// Transposition-table write for a quiescence node.
+///
+/// The depth stored is always 0, and that is what keeps quiescence results
+/// from leaking into the main search: `negamax` only trusts an entry whose
+/// `depth` reaches its own, and it never asks at depth 0 — it hands those
+/// nodes straight to quiescence. So these entries serve quiescence itself
+/// (and move ordering) without ever standing in for a real search.
+///
+/// Nothing is written once the search has been aborted: `best_score` would
+/// then be whatever the truncated loop happened to reach, not a bound.
+fn store_quiescence(
+    ctx: &Context,
+    board: &Board,
+    ply: u32,
+    score: i32,
+    alpha_orig: i32,
+    beta: i32,
+    best_move: Option<Move>,
+) {
+    if ctx.aborted {
+        return;
+    }
+    let flag = if score <= alpha_orig {
+        TtFlag::Upper
+    } else if score >= beta {
+        TtFlag::Lower
+    } else {
+        TtFlag::Exact
+    };
+    ctx.tt.store(board.hash, 0, score_to_tt(score, ply), flag, best_move, tt_clock(board));
 }
 
 /// True if `color` has any piece besides pawns and the king, i.e. it is
@@ -2274,6 +2357,55 @@ mod tests {
         let shared_nodes = AtomicU64::new(0);
         let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
         assert_eq!(quiescence(&mut board, -INF, INF, 0, &mut ctx), 0);
+    }
+
+    #[test]
+    fn a_stored_score_never_overrides_a_draw_by_rule_in_quiescence() {
+        // Same K+B vs K dead draw, but the table is deliberately poisoned
+        // with a winning score for that exact position. Quiescence must
+        // still answer 0.
+        //
+        // This is what pins down the order of the two checks: whether this
+        // position is a draw depends on the path taken to reach it (the
+        // fifty-move counter, repetitions, the material left), and a table
+        // entry carries no path. Probing before the draw check would let a
+        // stale or differently-reached entry turn a dead draw into a won
+        // game.
+        let mut board = Board::from_fen("4k3/8/8/8/8/8/8/3BK3 w - - 0 1").unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        tt.store(board.hash, 0, 900, TtFlag::Exact, None, 0);
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
+        assert_eq!(quiescence(&mut board, -INF, INF, 0, &mut ctx), 0);
+    }
+
+    #[test]
+    fn a_horizon_mate_still_reads_back_correctly_from_a_warm_table() {
+        // The back-rank mate of the test above, searched twice over one
+        // shared table: the first pass fills quiescence entries, the second
+        // reads them back instead of recomputing.
+        //
+        // Mate scores are the trap here. They encode *distance to mate from
+        // this node*, so they are shifted by `ply` on the way into the table
+        // and shifted back on the way out. Quiescence now stores and reads
+        // them too, and getting either half of that conversion wrong shows
+        // up as a mate announced at the wrong distance — or lost entirely —
+        // only on the second search, never the first.
+        let board = Board::from_fen("6kq/5ppp/8/8/8/8/8/R5K1 w - - 0 1").unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let limits = SearchLimits { max_depth: Some(1), ..Default::default() };
+        let fria = search(&board, limits.clone(), &stop, &tt, &[], |_, _| {});
+        let caliente = search(&board, limits, &stop, &tt, &[], |_, _| {});
+        assert_eq!(fria.best_move.map(|m| m.to_string()), Some("a1a8".to_string()));
+        assert_eq!(
+            caliente.best_move.map(|m| m.to_string()),
+            Some("a1a8".to_string()),
+            "con la tabla caliente se perdió el mate"
+        );
+        assert_eq!(fria.score, caliente.score, "la tabla caliente cambió la puntuación del mate");
+        assert!(caliente.score >= MATE_SCORE - 10, "no es puntuación de mate: {}", caliente.score);
     }
 
     #[test]

@@ -386,6 +386,57 @@ parejas venían a eliminar.
 Ampliar el libro es la vía natural para poder decidir mejoras pequeñas, y
 por eso se pasó de 256 a 2.000.
 
+### Hay mejoras que el control por nodos no puede medir
+
+`banco sprt` prefiere `nodos` porque es reproducible y no depende de la
+carga de la máquina. Pero hay una familia de cambios para los que **no
+sirve**, y la 0.27 fue la primera en tropezar con ella.
+
+Una sonda de tabla de transposición hace que cada iteración de
+profundización cueste menos nodos. Con presupuesto de nodos, el motor cierra
+una iteración antes, calcula que la siguiente no cabe y anuncia jugada
+usando una fracción de lo concedido: 8.310 de 25.000, el 33 %. El guardián
+del propio banco aborta la tanda, y hace bien, porque enfrentar así compara
+cuánto piensa cada motor y no cuánto sabe.
+
+`profundidad` tampoco vale, por el motivo contrario: fija justo la variable
+sobre la que el cambio podría estar actuando.
+
+Queda `movetime_ms`, que además es el control que más se parece a cómo juega
+el motor de verdad. Su pega —depender de la máquina— se mitiga sola: los dos
+motores de una partida corren a la vez y bajo la misma carga, y cada apertura
+se juega dos veces con los colores cambiados.
+
+**Regla práctica**: si el cambio toca cuántos nodos cuesta llegar a una
+profundidad, mídelo por tiempo. Si toca lo que se hace en cada nodo sin
+cambiar su coste, los nodos siguen valiendo.
+
+### La cifra de Elo de una tanda que cruzó frontera está sesgada al alza
+
+Un SPRT para en cuanto la evidencia basta. Eso significa que para en un
+momento **favorable a la hipótesis que acaba de aceptar**, y la puntuación
+observada en ese instante exagera el efecto. No es un fallo: es el precio de
+poder parar pronto, y no invalida la decisión, solo la magnitud.
+
+Se vio con claridad en la 0.27, que se midió dos veces:
+
+| tanda | cómo terminó | Elo |
+|---|---|---:|
+| libro de 2.000 | agotó el tope, sin cruzar | +11,4 |
+| libro de 20.000 | paró al cruzar la frontera | +20,4 |
+| agregado, 6.626 partidas | — | +15,0 |
+
+**Al citar la magnitud, usa la tanda que no paró en una frontera**, o el
+agregado, y di cuál estás citando. Lo que el `acepta_h1` certifica es el
+lado de la frontera, no el número.
+
+Corolario para leer el progreso de una tanda en marcha: la puntuación de un
+tramo de 250 parejas tiene un error típico de ±1,75 puntos, así que verás
+tramos del 47 % y del 56 % en una tanda cuyo valor real es 51,7 %. En la
+0.27 un tramo del 55,9 % disparó el LLR a +2,68 y luego se corrigió solo.
+Con el harness viejo de 16 partidas, esa racha se habría cantado como
+"+40 Elo, mejora clara".
+
 ### Cuántas parejas hacen falta de verdad
 
 Aquí llegó a estar escrito que 2.000 posiciones bastaban para decidir

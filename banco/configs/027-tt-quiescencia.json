@@ -1,0 +1,72 @@
+{
+  "_": "0.27: sonda de tabla de transposición en la búsqueda de quiescencia.",
+  "_2": "Quiescencia no consultaba ni escribía la TT. Ahora lee al entrar (sin",
+  "_3": "restricción de nodo PV, porque quiescencia no construye variante) y",
+  "_4": "escribe al salir con profundidad 0, que es lo que impide que sus",
+  "_5": "entradas suplanten a una búsqueda real en negamax.",
+  "_6": "banco velocidad da nodos distintos en 12 de 12 posiciones: altera lo",
+  "_7": "que la búsqueda visita, luego hace falta medir fuerza aquí.",
+
+  "esquema": 1,
+  "id": "027-tt-quiescencia",
+
+  "_binario": "La ruta del candidato es un directorio temporal de la sesión y",
+  "_binario_2": "ya no existe. No se reescribe a proposito: 'ruta' entra en la firma",
+  "_binario_3": "del experimento, y cambiarla romperia el vinculo con la tanda",
+  "_binario_4": "archivada. El manifiesto guarda su sha256 (4b0c1916...), y el binario",
+  "_binario_5": "equivalente congelado es ../zzRelease/Vigia 0.27.exe: mismo codigo,",
+  "_binario_6": "sha distinto solo porque la version se subio a 0.27.0 despues de",
+  "_binario_7": "jugar, y el numero de version viaja dentro del ejecutable.",
+
+  "candidato": {
+    "nombre": "0.27-tt-qs",
+    "ruta": "C:/Users/JOSECA~1/AppData/Local/Temp/claude/C--Users-JOSE-CARLOS-OneDrive-IA-Ajedrez-Claude/5a73e019-da36-492d-beb9-fb7df1d9b33f/scratchpad/vigia-027-ttq.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.26",
+    "ruta": "../zzRelease/Vigia 0.26.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-2000.epd",
+    "semilla": 20260818,
+    "barajar": true
+  },
+
+  "_busqueda": "movetime y no nodos, por dos razones. La primera es que con",
+  "_busqueda_2": "'nodos' el banco aborta: el candidato anuncia jugada al 33 % del",
+  "_busqueda_3": "presupuesto (8.310 de 25.000) porque cierra una iteración y calcula que",
+  "_busqueda_4": "la siguiente no cabe. La segunda es de fondo: la ganancia de esta mejora",
+  "_busqueda_5": "es llegar más hondo con menos nodos, así que medirla a nodos fijos la",
+  "_busqueda_6": "esconde y a profundidad fija la anula por definición. El tiempo es el",
+  "_busqueda_7": "único control que la ve.",
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "2 workers = 2 CPUs, que es lo que el usuario autorizó estando ausente.",
+  "partidas": {
+    "_max_parejas": "2000 es el tope duro: el libro tiene 2.000 posiciones únicas",
+    "_max_parejas_2": "y el banco no permite repetir aperturas. Se llegó aquí ampliando",
+    "_max_parejas_3": "desde 1.000 sin perder lo jugado, que es para lo que 'max_parejas'",
+    "_max_parejas_4": "está fuera de la firma del experimento.",
+    "max_parejas": 2000,
+    "workers": 2,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/027-tt-quiescencia"
+}

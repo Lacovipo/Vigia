@@ -1,0 +1,69 @@
+{
+  "_": "0.27, tanda definitiva: sonda de TT en quiescencia, contra 0.26.",
+  "_2": "Repite el mismo contraste que '027-tt-quiescencia' con un libro que no",
+  "_3": "impone techo. Aquella agotó sus 2.000 parejas (el libro tenía 2.000",
+  "_4": "posiciones y no caben más parejas que posiciones únicas) y cerró en",
+  "_5": "LLR +2,158 de +2,944: +11,4 Elo, IC95 [+2,5, +20,3], LOS 99,4 %, pero",
+  "_6": "sin cruzar frontera. Con la tasa de LLR observada el cruce cae sobre la",
+  "_7": "pareja ~2.700, así que hace falta libro para llegar ahí.",
+  "_8": "Las parejas de aquella tanda NO se reaprovechan: la firma incluye el",
+  "_9": "sha256 del libro, y con razón, porque cambiar de libro cambia lo medido.",
+
+  "esquema": 1,
+  "id": "027-tt-quiescencia-largo",
+
+  "_binario": "La ruta del candidato es un directorio temporal de la sesión y",
+  "_binario_2": "ya no existe. No se reescribe a proposito: 'ruta' entra en la firma",
+  "_binario_3": "del experimento, y cambiarla romperia el vinculo con la tanda",
+  "_binario_4": "archivada. El manifiesto guarda su sha256 (4b0c1916...), y el binario",
+  "_binario_5": "equivalente congelado es ../zzRelease/Vigia 0.27.exe: mismo codigo,",
+  "_binario_6": "sha distinto solo porque la version se subio a 0.27.0 despues de",
+  "_binario_7": "jugar, y el numero de version viaja dentro del ejecutable.",
+
+  "candidato": {
+    "nombre": "0.27-tt-qs",
+    "ruta": "C:/Users/JOSECA~1/AppData/Local/Temp/claude/C--Users-JOSE-CARLOS-OneDrive-IA-Ajedrez-Claude/5a73e019-da36-492d-beb9-fb7df1d9b33f/scratchpad/vigia-027-ttq.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.26",
+    "ruta": "../zzRelease/Vigia 0.26.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "20.000 posiciones, semilla distinta de la del libro de 2.000:",
+  "_libro_2": "muestra independiente, no un superconjunto de aquella.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260819,
+    "barajar": true
+  },
+
+  "_busqueda": "Tiempo y no nodos: con 'nodos' el banco aborta porque el",
+  "_busqueda_2": "candidato anuncia jugada al 33 % del presupuesto. Ver el fichero",
+  "_busqueda_3": "hermano para el razonamiento completo.",
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "2 workers = 2 CPUs, lo autorizado. El tope de 20.000 es el del",
+  "_partidas_2": "libro; el SPRT parará mucho antes si hay evidencia.",
+  "partidas": {
+    "max_parejas": 20000,
+    "workers": 2,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/027-tt-quiescencia-largo"
+}
