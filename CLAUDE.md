@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 349 tests (219 motor, 122 banco, 8 harness viejo)
+cargo test --release                   # 356 tests (226 motor, 122 banco, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -67,8 +67,15 @@ Al terminar una mejora hay que **actualizar la documentación**: el estado en
   siquiera el actual: el límite blando cierra una iteración y no empieza la
   siguiente si no cabe. A 5.000 nodos, 0.25 y 0.26 anuncian jugada al 42 %
   (y en el mismo nodo exacto, 2.123, lo que de paso confirma que los magic
-  bitboards no tocan la búsqueda). No es un fallo; a partir de ~25.000 el
-  efecto desaparece. Por eso `banco humo` usa 25.000 por defecto.
+  bitboards no tocan la búsqueda). No es un fallo.
+
+  Aquí ponía que a partir de ~25.000 el efecto desaparece, y que por eso
+  `banco humo` usaba 25.000 por defecto. **Las dos cosas eran falsas** y
+  dejaban la prueba de humo sin poder ejecutarse: el punto de parada no
+  crece con el presupuesto sino a saltos, así que 0.27 se planta en 8.310
+  nodos tanto con 20.000 (42 %) como con 25.000 (33 %), por debajo del 50 %
+  que exige el guardián del banco. Corregido en 0.28: el defecto es 50.000,
+  y a partir de 30.000 ya pasa.
 - **Las releases anteriores a 0.25 sí lo incumplen de verdad** (0.24 se planta
   en el 17 % de lo pedido, y no por el límite blando). Comparar por nodos contra ellas da cifras
   absurdas (+422 Elo que no significan nada). El banco lo detecta y aborta;

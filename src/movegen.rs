@@ -150,11 +150,145 @@ pub fn king_attacks(sq: Square) -> Bitboard {
 }
 
 // ---------------------------------------------------------------------
+// Ray geometry: which squares lie between two others, and which whole line
+// they share. Both tables exist so that legality can be answered by
+// arithmetic instead of by playing the move -- see `check_info`.
+// ---------------------------------------------------------------------
+
+/// The eight ray directions as `(file, rank)` deltas.
+const RAY_DIRS: [(i32, i32); 8] = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+/// Squares strictly between `a` and `b` when the two share a rank, file or
+/// diagonal; empty otherwise, and empty for adjacent squares.
+const fn between_from(a: u8, b: u8) -> u64 {
+    if a == b {
+        return 0;
+    }
+    let file = (a % 8) as i32;
+    let rank = (a / 8) as i32;
+    let mut i = 0;
+    while i < 8 {
+        let (df, dr) = RAY_DIRS[i];
+        let mut f = file + df;
+        let mut r = rank + dr;
+        let mut walked: u64 = 0;
+        while f >= 0 && f < 8 && r >= 0 && r < 8 {
+            let sq = (r * 8 + f) as u32;
+            if sq as u8 == b {
+                return walked;
+            }
+            walked |= 1u64 << sq;
+            f += df;
+            r += dr;
+        }
+        i += 1;
+    }
+    0
+}
+
+/// Every square of the line through `a` and `b`, `a` itself included, when
+/// the two share one; empty otherwise. A pinned piece may move anywhere on
+/// this line and nowhere else: its own king closes one end and the pinner
+/// the other, so the squares past either of them are unreachable anyway.
+const fn line_from(a: u8, b: u8) -> u64 {
+    if a == b {
+        return 0;
+    }
+    let file = (a % 8) as i32;
+    let rank = (a / 8) as i32;
+    let mut i = 0;
+    while i < 8 {
+        let (df, dr) = RAY_DIRS[i];
+        let mut f = file + df;
+        let mut r = rank + dr;
+        let mut found = false;
+        while f >= 0 && f < 8 && r >= 0 && r < 8 {
+            if (r * 8 + f) as u8 == b {
+                found = true;
+                break;
+            }
+            f += df;
+            r += dr;
+        }
+        if found {
+            let mut bb = 1u64 << a;
+            let mut f = file + df;
+            let mut r = rank + dr;
+            while f >= 0 && f < 8 && r >= 0 && r < 8 {
+                bb |= 1u64 << (r * 8 + f) as u32;
+                f += df;
+                r += dr;
+            }
+            let mut f = file - df;
+            let mut r = rank - dr;
+            while f >= 0 && f < 8 && r >= 0 && r < 8 {
+                bb |= 1u64 << (r * 8 + f) as u32;
+                f -= df;
+                r -= dr;
+            }
+            return bb;
+        }
+        i += 1;
+    }
+    0
+}
+
+const fn build_between() -> [[u64; 64]; 64] {
+    let mut table = [[0u64; 64]; 64];
+    let mut a = 0usize;
+    while a < 64 {
+        let mut b = 0usize;
+        while b < 64 {
+            table[a][b] = between_from(a as u8, b as u8);
+            b += 1;
+        }
+        a += 1;
+    }
+    table
+}
+
+const fn build_line() -> [[u64; 64]; 64] {
+    let mut table = [[0u64; 64]; 64];
+    let mut a = 0usize;
+    while a < 64 {
+        let mut b = 0usize;
+        while b < 64 {
+            table[a][b] = line_from(a as u8, b as u8);
+            b += 1;
+        }
+        a += 1;
+    }
+    table
+}
+
+// 32 KB each, built at compile time and read in place. `static` rather than
+// `const` on purpose: a `const` of this size is a value, not a place, and
+// every indexing could materialise a fresh copy of the whole table.
+static BETWEEN: [[u64; 64]; 64] = build_between();
+static LINE: [[u64; 64]; 64] = build_line();
+
+#[inline(always)]
+fn between(a: Square, b: Square) -> Bitboard {
+    Bitboard(BETWEEN[a.0 as usize][b.0 as usize])
+}
+
+#[inline(always)]
+fn line(a: Square, b: Square) -> Bitboard {
+    Bitboard(LINE[a.0 as usize][b.0 as usize])
+}
+
+// ---------------------------------------------------------------------
 // Attack detection.
 // ---------------------------------------------------------------------
 
-/// Is `sq` attacked by any piece of `by_color` in the current position?
-pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
+/// Is `sq` attacked by any piece of `by_color`, judged against an occupancy
+/// that need not be the board's own?
+///
+/// The parameter is there for king moves in the legality filter: a king has
+/// to be tested on its destination with *itself* taken off the board, or it
+/// would block the very ray it is running along and a retreat straight back
+/// from a checking rook would come out looking safe.
+fn attacked_with_occ(board: &Board, sq: Square, by_color: Color, occupied: Bitboard) -> bool {
     if !(Bitboard(KNIGHT_ATTACKS[sq.0 as usize]) & board.pieces_of(by_color, PieceType::Knight)).is_empty() {
         return true;
     }
@@ -171,7 +305,6 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
         return true;
     }
 
-    let occupied = board.occupied();
     let diagonal_attackers = board.pieces_of(by_color, PieceType::Bishop) | board.pieces_of(by_color, PieceType::Queen);
     if !(bishop_attacks(sq, occupied) & diagonal_attackers).is_empty() {
         return true;
@@ -181,6 +314,11 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
         return true;
     }
     false
+}
+
+/// Is `sq` attacked by any piece of `by_color` in the current position?
+pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
+    attacked_with_occ(board, sq, by_color, board.occupied())
 }
 
 /// Whether `color`'s king is under attack. A position with no such king is
@@ -463,34 +601,154 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 
 /// Generates only fully legal moves: pseudo-legal moves that do not leave
 /// the mover's own king in check. Castling moves are already fully vetted
-/// by `generate_castling`, so this filter is redundant-but-harmless there.
+/// by `generate_castling`, so the filter lets them straight through.
 ///
-/// Clones `board` into a scratch copy to make/unmake moves on while testing
-/// legality. Called once per search node, so that clone is a real cost;
-/// `legal_moves_scratch` below exists for the hot path, which already has a
-/// `&mut Board` on hand and can reuse it directly instead.
+/// Clones `board` into a scratch copy because en passant -- and only en
+/// passant -- is still decided by playing it. `legal_moves_scratch` below
+/// is the same function without the clone, for the hot path, which already
+/// holds a `&mut Board` of its own.
 pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
     let mut working = board.clone();
     legal_moves_scratch(&mut working)
 }
 
-/// Same as `generate_legal_moves`, but does its make/unmake legality
-/// testing directly on the caller's own board instead of an internal
-/// clone. `working` is restored to its original position before returning
-/// (every generated move is made and then unmade), so this is transparent
-/// to the caller — it just avoids a clone per call in `negamax`/
-/// `quiescence`/`search_root`, which already hold a `&mut Board` anyway.
+/// King square, checking pieces and absolutely pinned pieces of the side to
+/// move: everything a legality test needs, computed once per node instead of
+/// once per candidate move.
+#[derive(Clone, Copy)]
+struct CheckInfo {
+    king_sq: Square,
+    checkers: Bitboard,
+    pinned: Bitboard,
+}
+
+/// Builds the `CheckInfo` of `us`, or `None` when `us` has no king on the
+/// board. That position is unreachable through `Board::from_fen` (which
+/// demands exactly one king per side), and the `None` exists for the same
+/// reason `is_in_check` answers `false` there: a search thread dying on a
+/// hand-built position is a worse failure mode than one extra branch.
+fn check_info(board: &Board, us: Color) -> Option<CheckInfo> {
+    let king_sq = board.pieces_of(us, PieceType::King).lsb()?;
+    let them = us.opposite();
+    let occupied = board.occupied();
+
+    let pawn_table = match them {
+        Color::White => &BLACK_PAWN_ATTACKS,
+        Color::Black => &WHITE_PAWN_ATTACKS,
+    };
+    let diagonal = board.pieces_of(them, PieceType::Bishop) | board.pieces_of(them, PieceType::Queen);
+    let orthogonal = board.pieces_of(them, PieceType::Rook) | board.pieces_of(them, PieceType::Queen);
+
+    // No king term: a king can never attack the other one, `from_fen`
+    // rejects adjacent kings, and `make_move` never produces them.
+    let checkers = (Bitboard(KNIGHT_ATTACKS[king_sq.0 as usize]) & board.pieces_of(them, PieceType::Knight))
+        | (Bitboard(pawn_table[king_sq.0 as usize]) & board.pieces_of(them, PieceType::Pawn))
+        | (bishop_attacks(king_sq, occupied) & diagonal)
+        | (rook_attacks(king_sq, occupied) & orthogonal);
+
+    // Snipers are the enemy sliders that would see the king on an empty
+    // board. Exactly one piece standing between a sniper and the king means
+    // that piece is pinned -- and only ours can be, since moving theirs is
+    // not a move we get to make.
+    let ours = board.color_occupied(us);
+    let snipers =
+        (bishop_attacks(king_sq, Bitboard::EMPTY) & diagonal) | (rook_attacks(king_sq, Bitboard::EMPTY) & orthogonal);
+    let mut pinned = Bitboard::EMPTY;
+    for sniper in snipers {
+        let blockers = between(king_sq, sniper) & occupied;
+        if blockers.count() == 1 {
+            pinned = pinned | (blockers & ours);
+        }
+    }
+
+    Some(CheckInfo { king_sq, checkers, pinned })
+}
+
+/// Is `mv` legal, answered from `info` without touching the board?
+///
+/// Equivalent to make/unmake plus `is_in_check` for every move except en
+/// passant, which the caller keeps sending down the old path.
+fn legal_by_pins(board: &Board, mv: Move, info: &CheckInfo, us: Color) -> bool {
+    if mv.from == info.king_sq {
+        // Castling already passed `try_add_castle`, which tests the origin
+        // square along with the two the king crosses. Emptying e1/h1/a1
+        // cannot uncover a ray onto f1/g1/c1/d1 that did not already pass
+        // through e1, and e1 is one of the squares tested.
+        if mv.flag.is_castle() {
+            return true;
+        }
+        let mut occupied = board.occupied();
+        occupied.clear(info.king_sq);
+        // The piece being captured, if any, stays in the occupancy: it sits
+        // on the destination square itself, where it blocks nothing that
+        // reaches that square, and it cannot be attacking the square it
+        // stands on.
+        return !attacked_with_occ(board, mv.to, us.opposite(), occupied);
+    }
+
+    // Double check: no interposition and no capture answers both attacks at
+    // once, so only the king may move.
+    if info.checkers.count() > 1 {
+        return false;
+    }
+
+    // A pinned piece may travel along the line it is pinned on and nowhere
+    // else. That covers capturing the pinner and shuffling towards the king.
+    if info.pinned.contains(mv.from) && !line(info.king_sq, mv.from).contains(mv.to) {
+        return false;
+    }
+
+    // Single check: capture the checker or step into the line. `BETWEEN` is
+    // empty for a checking pawn (adjacent) and for a checking knight (a
+    // knight is never aligned with a square it attacks), so for those two
+    // the mask collapses to "capture it", which is exactly right.
+    if let Some(checker) = info.checkers.lsb() {
+        if !(between(info.king_sq, checker) | Bitboard::from_square(checker)).contains(mv.to) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Same as `generate_legal_moves`, but filters in place on the caller's own
+/// board instead of on an internal clone. `working` comes back exactly as it
+/// went in, so this is transparent to the caller -- it just avoids a clone
+/// per call in `negamax`/`quiescence`/`search_root`, which already hold a
+/// `&mut Board` anyway.
+///
+/// Until 0.28 this played and took back every pseudo-legal move just to ask
+/// whether it left the king in check. Measured on the twelve positions of
+/// `banco velocidad`, that filter was 27.9 % of the time spent per node --
+/// paid in full even in quiescence, which builds the whole legal list before
+/// the `stand_pat >= beta` cutoff that is its most frequent exit.
 pub(crate) fn legal_moves_scratch(working: &mut Board) -> Vec<Move> {
-    let color = working.side_to_move;
+    let us = working.side_to_move;
     let mut moves = generate_pseudo_legal_moves(working);
+    let Some(info) = check_info(working, us) else {
+        // No king of ours: `is_in_check` answers `false` for such a
+        // position, so the filter this replaced kept every move. Keep that.
+        return moves;
+    };
     // `retain` in place rather than `filter().collect()`: the latter built a
     // second `Vec` per node on top of the generator's own, and this is the
     // single most frequently called allocation site in the engine.
     moves.retain(|&mv| {
-        let undo = working.make_move(mv);
-        let legal = !is_in_check(working, color);
-        working.unmake_move(mv, undo);
-        legal
+        if mv.flag == MoveFlag::EnPassant {
+            // The one move that empties a square it never touches. It can
+            // uncover the king along a rank through the captured pawn and
+            // the capturing one at once, which no mask taken before the
+            // move can express, so it keeps paying make/unmake. It is well
+            // under 1 % of the moves generated: measured by doubling the
+            // filter for king and en passant moves alone, the two together
+            // are ~2 % of the time per node.
+            let undo = working.make_move(mv);
+            let legal = !is_in_check(working, us);
+            working.unmake_move(mv, undo);
+            legal
+        } else {
+            legal_by_pins(working, mv, &info, us)
+        }
     });
     moves
 }
@@ -1094,5 +1352,199 @@ mod tests {
         let rxb3 = Move::new(Square::new(1, 3), Square::new(1, 2), MoveFlag::Capture);
         let see = static_exchange_eval(&board, rxb3);
         assert_eq!(see, eval::piece_value(PieceType::Rook) - eval::piece_value(PieceType::Rook));
+    }
+
+    /// The legality filter as it stood until 0.28: play the move, ask
+    /// whether it left our own king in check, take it back. Kept here as
+    /// the oracle `legal_by_pins` has to agree with.
+    fn legal_moves_by_make_unmake(working: &mut Board) -> Vec<Move> {
+        let color = working.side_to_move;
+        let mut moves = generate_pseudo_legal_moves(working);
+        moves.retain(|&mv| {
+            let undo = working.make_move(mv);
+            let legal = !is_in_check(working, color);
+            working.unmake_move(mv, undo);
+            legal
+        });
+        moves
+    }
+
+    /// Walks every legal move down to `depth` comparing the two filters
+    /// move by move and in order, not as sets. The order is part of what
+    /// has to hold: `legal_moves_scratch` filters with `retain`, the search
+    /// orders that list, and a permuted list would be a different search.
+    fn assert_legality_agrees(board: &mut Board, depth: u32) {
+        let by_pins = legal_moves_scratch(board);
+        let by_make_unmake = legal_moves_by_make_unmake(board);
+        assert_eq!(by_pins, by_make_unmake, "legality disagreed in {}", board.to_fen());
+        if depth > 1 {
+            for mv in by_pins {
+                let undo = board.make_move(mv);
+                assert_legality_agrees(board, depth - 1);
+                board.unmake_move(mv, undo);
+            }
+        }
+    }
+
+    #[test]
+    fn legality_by_pins_matches_the_make_unmake_filter_it_replaced() {
+        // Perft already counts these trees, but it only compares totals: two
+        // errors of opposite sign in the same subtree cancel out and the
+        // count still matches. This compares the lists themselves, which is
+        // the property the search actually depends on.
+        let cases = [
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 4),
+            (KIWIPETE_FEN, 3),
+            (POSITION3_FEN, 4),
+            (POSITION4_FEN, 3),
+            (POSITION5_FEN, 3),
+            (POSITION6_FEN, 3),
+            // En passant with both kings on the fourth rank's line of fire.
+            ("8/8/8/8/k1pP3R/8/8/4K3 b - d3 0 1", 3),
+            // Four white pieces pinned at once, one per ray family: Re6 on
+            // the file, Nd4 on the rank, Bf5 and the d3 pawn on the two
+            // diagonals.
+            ("4r3/7b/4R3/5B2/r2NK3/3P4/8/1b5k w - - 0 1", 3),
+            // Castling available to both sides while under fire.
+            ("r3k2r/pppq1ppp/2n1bn2/3pp3/3PP3/2N1BN2/PPPQ1PPP/R3K2R w KQkq - 0 1", 3),
+        ];
+        for (fen, depth) in cases {
+            let mut board = Board::from_fen(fen).unwrap();
+            assert_legality_agrees(&mut board, depth);
+        }
+    }
+
+    #[test]
+    fn a_king_may_not_retreat_along_the_ray_of_the_rook_checking_it() {
+        // The single most likely way to get this wrong: testing the
+        // destination for attacks with the king still standing on its
+        // origin, where it blocks the very ray it is fleeing along. The
+        // rook on e1 checks the king on e5; with the king left in the
+        // occupancy it stops the ray at e5 and Ke6 comes out looking safe,
+        // when it is just the same check one square further away.
+        let mut board = Board::from_fen("8/8/8/4k3/8/8/8/K3R3 b - - 0 1").unwrap();
+        let moves = legal_moves_scratch(&mut board);
+        let (e4, e6) = (Square::new(4, 3), Square::new(4, 5));
+        assert!(
+            !moves.iter().any(|mv| mv.to == e6),
+            "Ke5-e6 runs away down the rook's own file and must not be legal: {moves:?}"
+        );
+        assert!(
+            !moves.iter().any(|mv| mv.to == e4),
+            "Ke5-e4 walks towards the rook on the same file and must not be legal: {moves:?}"
+        );
+        assert_eq!(moves.len(), 6, "the six squares off the e-file are the legal ones: {moves:?}");
+        assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
+    }
+
+    #[test]
+    fn a_double_check_leaves_only_king_moves() {
+        // Rook on e1 down the file, knight on f6: nothing blocks or
+        // captures both, so every legal move has to start on e8.
+        let mut board = Board::from_fen("4k3/8/5N2/8/8/8/8/4RK2 b - - 0 1").unwrap();
+        let moves = legal_moves_scratch(&mut board);
+        let e8 = Square::new(4, 7);
+        assert!(!moves.is_empty(), "the king still has squares to run to");
+        assert!(
+            moves.iter().all(|mv| mv.from == e8),
+            "only the king may answer a double check: {moves:?}"
+        );
+        assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
+    }
+
+    #[test]
+    fn en_passant_that_uncovers_the_king_along_the_rank_is_rejected() {
+        // c4xd3 e.p. empties c4 *and* d4 at once, leaving the black king on
+        // a4 in line with the rook on h4. This is the case no mask taken
+        // before the move can express, and the reason en passant keeps
+        // paying make/unmake.
+        let mut board = Board::from_fen("8/8/8/8/k1pP3R/8/8/4K3 b - d3 0 1").unwrap();
+        let moves = legal_moves_scratch(&mut board);
+        assert!(
+            !moves.iter().any(|mv| mv.flag == MoveFlag::EnPassant),
+            "the en passant capture uncovers the king and must not be legal: {moves:?}"
+        );
+        assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
+    }
+
+    #[test]
+    fn en_passant_that_captures_the_checking_pawn_is_allowed() {
+        // The white pawn double-pushed to d4 giving check from there. The
+        // reply e4xd3 e.p. answers it by removing the checker -- and the
+        // captured pawn is not on the destination square, so the
+        // "capture the checker or block" mask would reject it. Only the
+        // en passant branch coming first keeps this move alive.
+        let mut board = Board::from_fen("8/8/8/4k3/3Pp3/8/8/4K3 b - d3 0 1").unwrap();
+        let moves = legal_moves_scratch(&mut board);
+        assert!(
+            moves.iter().any(|mv| mv.flag == MoveFlag::EnPassant),
+            "exd3 e.p. captures the checking pawn and must be legal: {moves:?}"
+        );
+        assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
+    }
+
+    #[test]
+    fn a_pinned_piece_may_still_move_along_its_pin() {
+        // White king d1, white rook d4, black queen d8: the rook is pinned
+        // on the d-file and may travel it, capturing the pinner included,
+        // but may not leave it.
+        let mut board = Board::from_fen("3q3k/8/8/8/3R4/8/8/3K4 w - - 0 1").unwrap();
+        let moves = legal_moves_scratch(&mut board);
+        let d4 = Square::new(3, 3);
+        let d8 = Square::new(3, 7);
+        assert!(
+            moves.iter().any(|mv| mv.from == d4 && mv.to == d8),
+            "Rxd8 captures the pinner along the pin and must be legal: {moves:?}"
+        );
+        assert!(
+            moves.iter().filter(|mv| mv.from == d4).all(|mv| mv.to.file() == 3),
+            "the pinned rook must not leave the d-file: {moves:?}"
+        );
+        assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
+    }
+
+    #[test]
+    fn between_and_line_agree_with_walking_the_ray() {
+        // The two tables in one sweep, against the definitions in prose.
+        for a in 0..64u8 {
+            for b in 0..64u8 {
+                let (sa, sb) = (Square(a), Square(b));
+                let aligned = a != b
+                    && (sa.file() == sb.file()
+                        || sa.rank() == sb.rank()
+                        || (sa.file() as i32 - sb.file() as i32).abs()
+                            == (sa.rank() as i32 - sb.rank() as i32).abs());
+                assert_eq!(
+                    !line(sa, sb).is_empty(),
+                    aligned,
+                    "LINE[{a}][{b}] should be non-empty exactly when the two are aligned"
+                );
+                if !aligned {
+                    assert!(between(sa, sb).is_empty(), "BETWEEN[{a}][{b}] must be empty when not aligned");
+                    continue;
+                }
+                // Everything between is on the shared line, and neither
+                // endpoint is in it.
+                assert!(!between(sa, sb).contains(sa) && !between(sa, sb).contains(sb));
+                assert_eq!(between(sa, sb) & line(sa, sb), between(sa, sb));
+                assert!(line(sa, sb).contains(sa) && line(sa, sb).contains(sb));
+                assert_eq!(between(sa, sb), between(sb, sa), "between is symmetric");
+                assert_eq!(line(sa, sb), line(sb, sa), "the line through two squares is symmetric");
+                // A rook or bishop on `a` with the squares between occupied
+                // by nothing reaches `b`; with them occupied it does not,
+                // unless the two are adjacent.
+                let occupied = between(sa, sb);
+                let attacks = if sa.file() == sb.file() || sa.rank() == sb.rank() {
+                    rook_attacks(sa, occupied)
+                } else {
+                    bishop_attacks(sa, occupied)
+                };
+                assert_eq!(
+                    attacks.contains(sb),
+                    occupied.is_empty(),
+                    "BETWEEN[{a}][{b}] must be exactly the squares that block the ray"
+                );
+            }
+        }
     }
 }

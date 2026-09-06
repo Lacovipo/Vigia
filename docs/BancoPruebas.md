@@ -246,8 +246,8 @@ partidas.
 ```bash
 ./target/release/banco.exe velocidad \
   --motor target/release/vigia.exe \
-  --contra ../zzRelease/Vigia\ 0.25.exe \
-  --profundidad 12
+  --contra "Release/Vigia 0.27.exe" \
+  --profundidad 12 --hash 32 --hilos 1
 ```
 
 Doce posiciones a profundidad fija (apertura, medio juego táctico,
@@ -273,6 +273,45 @@ posiciones"*, que es la que autoriza a saltarse `sprt`— y entre +12,8 % y
 media ≈ +15 %). Tres y no una: la ganancia es del orden de cuatro veces el
 ruido, pero la dispersión entre ellas (seis puntos porcentuales) enseña por
 qué una sola cifra no se cita como si fuera exacta. Detalle en §3 de `docs/Documentacion_tecnica.md`.
+
+### Precedente: la legalidad por clavadas
+
+El segundo, y la versión 0.28.0 entera. Nodos idénticos en las 12
+posiciones y **+29,7 % / +34,1 % / +32,5 %** en tres pasadas. Añade dos
+cosas al método que el precedente anterior no tenía y que conviene copiar:
+
+- **Alternar el orden de los binarios entre pasadas** (A-B, B-A, A-B). El
+  comando mide A entero y luego B entero, nunca intercalado, así que una
+  carga de fondo durante la mitad A sesga el cociente directamente. Con el
+  orden alternado, un sesgo así se ve porque una pasada se sale de la
+  banda de las otras dos.
+- **Predecir la cifra antes de medirla.** Aquí se midió primero cuánto
+  costaba lo que se iba a quitar —duplicando a propósito el make/unmake de
+  legalidad, el mismo árbol tardaba un 27,9 % más— y de ahí salió una
+  predicción declarada de +25/+33 % y un umbral de reversión. Una medición
+  que puede fallar dice mucho más que una que solo puede confirmar.
+
+Y una advertencia sobre el estado de la máquina, aprendida en la misma
+sesión y por las malas. Repitiendo esas tres pasadas más tarde, con el
+equipo ocupado, salieron **+41,2 %, +13,6 %, +40,4 % y +49,9 %** para el
+mismo par de binarios, y el nps absoluto de 0.27 osciló entre 934.000 y
+1.214.000 — un 30 % de deriva sin que nada cambiara en el código. El
+comando mide A entero y luego B entero, nunca intercalado, así que una
+carga que aparece a mitad de camino se cobra entera contra uno de los dos.
+
+De ahí dos reglas: **medir con la máquina en reposo**, y **el ±4 % de
+ruido documentado arriba vale solo en reposo**. Si las pasadas alternadas
+no caen en una banda estrecha, no hay medición: hay que esperar a que la
+máquina esté libre y repetirla. Intercalar A y B posición a posición
+dentro del propio comando lo arreglaría de raíz; está anotado como trabajo
+pendiente del banco.
+
+Y una advertencia sobre la salida: **leer la línea GLOBAL, no las
+posiciones sueltas**. Las cuatro posiciones rápidas terminan en decenas de
+milisegundos, y ahí la columna A/B es resolución de reloj y no
+rendimiento: entre binarios idénticos se han visto 1,58x y 0,54x por
+posición con GLOBAL en +0,4 %. El ±4 % documentado arriba es el ruido de
+GLOBAL, no el de una posición.
 
 Si la línea de nodos idénticos **no** aparece, el comando lista las
 posiciones que divergen y el cambio deja de ser candidato a este comando:
@@ -326,6 +365,37 @@ simetría de colores, paralelismo, persistencia y estadística.
 
 Conviene ejecutarla después de tocar el banco, y tras cambiar el motor de
 forma que pudiera afectar al determinismo.
+
+### Lo que esta prueba SÍ dice de un cambio del motor, y lo que no
+
+No valida el cambio. Es A contra A: si el filtro de legalidad estuviera
+roto, los dos procesos lo estarían igual y las parejas seguirían cayendo
+en el cajón central. Y el árbitro no lo cazaría tampoco, porque enlaza
+`vigia::movegen` y tendría el mismo fallo (§8).
+
+Lo que sí aporta, y es la razón de correrla al cambiar la generación de
+jugadas, es que **es el único paso que juega partidas de verdad**, y por
+tanto el único que recorre el camino de `uci.rs` que rehace la partida
+desde `position ... moves`. Una jugada legal descartada por error no
+aparece ni en perft ni en `banco velocidad` —que manda la lista de jugadas
+vacía— y ahí se manifiesta como partida perdida por jugada ilegal.
+
+### El presupuesto por defecto estaba mal, y se ha corregido (0.28.0)
+
+Aquí ponía 25.000 nodos, con el argumento de que a partir de ahí sobraba
+margen frente al guardián de "no respeta el límite por nodos". **Era
+falso, y también para el binario que lo escribió**: desde la posición
+inicial, 0.27 se planta en 8.310 nodos tanto si se le piden 20.000 (42 %)
+como si se le piden 25.000 (33 %), porque el punto de parada no crece con
+el presupuesto sino a saltos, cuando una iteración entera más pasa a
+caber. El guardián exige el 50 %, así que el valor por defecto caía justo
+por debajo y `banco humo` no se podía ejecutar.
+
+Medido en 2026-09 barriendo presupuestos: a 30.000 ya pasa. El nuevo
+defecto es **50.000**, para dejar margen a que un cambio en el reparto de
+nodos no lo vuelva a dejar al borde. Si algún día vuelve a fallar por esto,
+el síntoma es inconfundible —el propio mensaje de error da el porcentaje— y
+la respuesta es subir `--nodos`, no desactivar el guardián.
 
 ---
 
@@ -625,18 +695,20 @@ desde los resultados) cada vez que se lee.
 
 | qué se comprobó | resultado |
 |---|---|
+| `banco velocidad` de 0.28 (legalidad por clavadas) contra 0.27 | nodos idénticos en las 12 posiciones; +29,7 / +34,1 / +32,5 % de nps con la máquina en reposo |
 | A/A determinista (`banco humo`, 8 parejas, 20.000 nodos) | pentanomial `[0,0,8,0,0]`, 0,00 Elo exacto |
 | Misma tanda A/A con 1 worker y con 4 | ficheros de partidas byte a byte idénticos |
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 339 tests (210 motor + 121 banco + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 356 tests (226 motor + 122 banco + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
 | id | qué compara | control | resultado |
 |---|---|---|---|
 | `humo-A-contra-A` | 0.25-dev contra sí mismo | 20.000 nodos | `[0,0,8,0,0]`, 0,00 Elo |
+| `humo-A-contra-A` | 0.28 contra sí mismo | 50.000 nodos, libro de 2.000 | 32 parejas, `[0,0,32,0,0]`, 0,00 Elo |
 | `025dev-vs-024` (nodos) | 0.25-dev vs 0.24 | 25.000 nodos | **inválido**: 0.24 no respeta `go nodes`. Ver §3.4 |
 | `025dev-vs-024` | 0.25-dev vs 0.24 | `movetime` 100 ms | 128 parejas: **−17,7 Elo** (IC 95 % −53,7 … +18,0), LLR −0,30, **`continuar`** |
 

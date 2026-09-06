@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.25.0 (`Cargo.toml`).
+**Versión:** 0.28.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -208,12 +208,101 @@ usados por la poda de *null move*.
   ruido de máquina de ±4 %. Medido en la máquina de trabajo del usuario
   (12 CPUs, MSVC), 0.26.0 congelada contra 0.25.0. El binario pasa de
   320 KB a 1,13 MB por las tablas.
-- **Pseudo-legal + filtro de legalidad**, no generación legal-only directa:
-  `generate_pseudo_legal_moves` genera todo; `legal_moves_scratch` filtra
-  **in place** (`retain`) por make/unmake + detección de jaque propio sobre
-  el tablero del llamador, sin clonar y sin reservar un segundo `Vec`;
-  `generate_legal_moves` es un envoltorio que clona el tablero una vez,
-  para llamadores sin `&mut Board` a mano (UCI, selfplay).
+- **Pseudo-legal + filtro de legalidad por clavadas** (0.28.0), no
+  generación legal-only directa: `generate_pseudo_legal_moves` genera todo
+  y `legal_moves_scratch` filtra **in place** (`retain`) sobre el tablero
+  del llamador, sin clonar y sin reservar un segundo `Vec`.
+  `generate_legal_moves` es el envoltorio que clona una vez, para
+  llamadores sin `&mut Board` a mano (UCI, selfplay).
+
+  Hasta 0.27 ese filtro *jugaba y deshacía* cada jugada pseudo-legal solo
+  para preguntar si dejaba al rey propio en jaque. Desde 0.28 la respuesta
+  se calcula por geometría:
+
+  - `check_info` se computa **una vez por nodo** y trae tres cosas: la
+    casilla del rey, las piezas que le dan jaque (`checkers`) y las piezas
+    propias absolutamente clavadas (`pinned`). Las clavadas salen de los
+    *snipers*, los deslizantes rivales que verían al rey en un tablero
+    vacío: si entre uno de ellos y el rey hay exactamente una pieza y es
+    nuestra, está clavada.
+  - `legal_by_pins` decide cada jugada con cuatro reglas. Una jugada de rey
+    es legal si su destino no está atacado **con el propio rey fuera de la
+    ocupación** — dejarlo dentro le permite taparse a sí mismo el rayo del
+    que huye, y `Ke5-e6` ante una torre en e1 saldría legal. Con jaque
+    doble solo mueve el rey. Una pieza clavada solo puede viajar por su
+    línea (`LINE`). Con jaque simple hay que capturar al que lo da o
+    interponerse (`BETWEEN` más la casilla del que da jaque).
+  - El enroque se deja pasar sin volver a filtrarlo: `try_add_castle` ya
+    comprobó la casilla de origen y las dos que cruza el rey, y vaciar
+    e1/h1/a1 no puede descubrir hacia f1/g1/c1/d1 ningún rayo que no
+    pasara ya por e1.
+  - **El *en passant* sigue pagando make/unmake**, y es la única excepción.
+    Es la jugada que vacía una casilla que no toca, así que puede descubrir
+    al rey por la fila a través del peón capturado y del capturador a la
+    vez, y eso ninguna máscara tomada antes de jugar lo expresa. Es menos
+    del 1 % de las jugadas generadas: midiendo con el filtro duplicado solo
+    para rey y *en passant*, los dos juntos son ~2 % del tiempo de nodo.
+
+  Dos tablas nuevas de 32 KB construidas con `const fn`: `BETWEEN[a][b]`
+  (casillas estrictamente entre dos que comparten línea) y `LINE[a][b]` (la
+  línea entera, extremos incluidos). Son `static` y no `const` a propósito,
+  siguiendo lo que ya hace `magic.rs` con sus tablas grandes: un `const` de
+  ese tamaño es un valor y no un sitio, y cada indexación podría
+  materializar una copia de la tabla entera.
+
+  `is_square_attacked` pasó a ser un envoltorio de una línea sobre
+  `attacked_with_occ`, que acepta la ocupación como parámetro. Es lo que
+  necesita el caso del rey, y se hizo así —en vez de copiar el detector—
+  para que no haya dos rutinas de ataques que puedan divergir con el
+  tiempo.
+
+  Un detalle que hace correcta la regla del jaque simple sin ningún caso
+  especial: **un caballo nunca está alineado con una casilla que ataca**
+  (sus saltos son (1,2) y (2,1), que no caen ni en fila, ni en columna, ni
+  en diagonal), así que `BETWEEN` es vacío para un caballo que da jaque y
+  la máscara se reduce a "cómetelo", que es exactamente lo que hay que
+  hacer. Con un peón que da jaque pasa lo mismo, por adyacencia.
+- **Cómo se comprobó que la respuesta no ha cambiado** (0.28.0). Perft es
+  un oráculo exhaustivo y lo pasa entero, profundos incluidos, pero solo
+  compara totales: dos errores de signo opuesto en el mismo subárbol se
+  cancelan y el recuento sigue cuadrando. El test que manda es
+  `legality_by_pins_matches_the_make_unmake_filter_it_replaced`, que
+  recorre nueve posiciones de referencia a profundidad 3–4 comparando la
+  lista nueva contra la vieja **jugada a jugada y en orden**, no como
+  conjuntos: el orden es parte de lo que tiene que valer, porque la
+  búsqueda ordena esa lista y una lista permutada sería otra búsqueda.
+  Más cinco tests dirigidos a los casos que rompen esto en la práctica: el
+  rey huyendo por el rayo del que le da jaque, el jaque doble, el *en
+  passant* que descubre al rey por la fila, el *en passant* que resuelve el
+  jaque capturando al peón que lo da, y la pieza clavada que sí puede
+  moverse por su clavada. Y una comprobación de las dos tablas contra la
+  definición en prosa, barriendo los 4.096 pares de casillas.
+
+  Verificado además por mutación: quitar `occupied.clear(info.king_sq)` —el
+  error más probable de todos— lo cazan seis tests, el de equivalencia
+  entre ellos.
+- **Medición** (`banco velocidad --profundidad 12 --hash 32 --hilos 1`, tres
+  pasadas alternando el orden de los binarios para que una carga de fondo
+  no caiga siempre sobre el mismo): nodos **idénticos** en las 12
+  posiciones y **+29,7 %, +34,1 % y +32,5 %** de nodos/segundo frente a
+  0.27 congelada, sobre un ruido de ±4 %, **con la máquina en reposo**.
+  Repetidas después con el equipo ocupado dan de +13,6 % a +49,9 % para los
+  mismos binarios, porque el comando mide A entero y luego B entero; la
+  cifra que vale es la de las tres primeras. Detalle y consecuencia para el
+  banco en §4 de `docs/BancoPruebas.md`.
+
+  El techo estaba medido *antes* de escribir el código: duplicando a
+  propósito el make/unmake de legalidad, el mismo árbol tardaba un 27,9 %
+  más, luego el filtro era el 27,9 % del tiempo de nodo y una legalidad
+  gratuita valía como mucho +38,7 %. La predicción declarada de antemano
+  fue +25/+33 %, y salió dentro. En perft puro, que es 100 % generación, se
+  ve el efecto entero: los dos perft profundos bajan de 0,12–0,14 s a
+  0,03–0,06 s.
+
+  **No se declara cifra de Elo**, igual que con los magic bitboards de
+  0.26: si los nodos no se mueven no hay diferencia de juego que medir, y
+  convertir nodos/segundo en Elo con la regla de "duplicar velocidad = +65
+  Elo" sería citar un número que este proyecto no ha medido nunca.
 - **`gives_check(board, mv)`** (0.25.0): responde si una jugada da jaque
   *sin jugarla*, con la misma respuesta que `make_move` + `is_in_check` +
   `unmake_move`. Cubre jaque directo desde la casilla de destino (con la
@@ -1023,6 +1112,25 @@ usarse para aprobar un cambio.
   Lo que costó no fue el código —unas cuarenta líneas— sino aprender a
   medirlo: hicieron falta tres tandas, dos libros y dos hallazgos de método
   que están en §7 de `docs/BancoPruebas.md`.
+- **0.28.0 — legalidad por clavadas, y nada más.** Sustituye el make/unmake
+  por jugada del filtro de legalidad por aritmética de rayos (§3).
+  Aprobada por `banco velocidad` con nodos idénticos y ~+32 % de
+  nodos/segundo; cero partidas gastadas, como 0.26.
+
+  Se eligió entre diez candidatos, analizando cada uno contra el código en
+  vez de contra la literatura, y el criterio que decidió fue **Elo por hora
+  de máquina**. Las cuatro mejoras de fuerza que competían (LMR sensible a
+  la historia, poda por SEE de tranquilas, historia de capturas, ProbCut)
+  comparten un problema que la lista de pendientes no decía: su efecto
+  esperado ronda +3/+5 Elo, y un efecto de +4 Elo **no cruza `elo1=5`
+  nunca**. Cada una habría costado cinco o seis horas de máquina para
+  terminar, con toda probabilidad, en *sin decisión*.
+
+  De paso salieron tres correcciones a datos que la documentación daba por
+  buenos: la premisa de Syzygy (§`MejorasPendientes`), la cifra de nps de
+  referencia de la máquina, y un defecto real del banco — `banco humo` no
+  se podía correr con su presupuesto de nodos por defecto, y tampoco con
+  0.27. Está arreglado y contado en §6 de `docs/BancoPruebas.md`.
 
 ---
 
@@ -1090,7 +1198,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 217 del motor + 121 del banco + 8 del harness antiguo
+cargo test --release              # 226 del motor + 122 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

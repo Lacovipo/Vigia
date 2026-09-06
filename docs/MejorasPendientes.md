@@ -14,6 +14,48 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
 ## Hecho
 
+- **Legalidad por clavadas** (Opus P1) — **HECHO en 0.28.0**, en
+  `src/movegen.rs`, documentado en §3 del documento técnico. Era la mitad
+  del punto de prioridad media que se llamaba "`MovePicker` por etapas y
+  legalidad por clavadas"; la otra mitad sigue pendiente y ha cambiado de
+  valor (ver más abajo).
+
+  **Decisión: aceptada**, por el carril de velocidad, sin gastar una sola
+  partida.
+
+  ```bash
+  ./target/release/banco.exe velocidad --motor <nuevo> \
+      --contra "Release/Vigia 0.27.exe" --profundidad 12 --hash 32 --hilos 1
+  ```
+
+  | pasada | orden | resultado |
+  |---|---|---|
+  | 1 | 0.28 contra 0.27 | +29,7 % |
+  | 2 | 0.27 contra 0.28 (invertida) | +34,1 % |
+  | 3 | 0.28 contra 0.27 | +32,5 % |
+
+  **Con la máquina en reposo.** Repetidas más tarde con el equipo ocupado
+  dieron +41,2 %, +13,6 %, +40,4 % y +49,9 %, y el nps absoluto de 0.27
+  osciló un 30 % sin que nada cambiara: el comando mide A entero y luego B
+  entero, así que una carga que aparece a mitad se cobra contra uno solo de
+  los dos. La cifra que se cita es la banda de las tres primeras, no la
+  media de las siete, y de ahí sale una tarea nueva para el banco (ver más
+  abajo).
+
+  Nodos **idénticos** en las 12 posiciones en las siete pasadas, que es el
+  criterio duro que autoriza a saltarse `sprt`, y en las siete 0.28 salió
+  más rápido: la dirección nunca estuvo en duda, solo la magnitud. En perft puro, que es 100 %
+  generación, los dos perft profundos bajan de 0,12–0,14 s a 0,03–0,06 s.
+
+  Lo que enseñó y merece copiarse: **medir el techo antes de escribir el
+  código**. Duplicando a propósito el make/unmake de legalidad, el mismo
+  árbol tardaba un 27,9 % más, luego el filtro era el 27,9 % del tiempo de
+  nodo y una legalidad gratuita valía como mucho +38,7 %. Con eso se
+  declaró de antemano una predicción falsable (+25/+33 %) y un umbral de
+  reversión. Es barato —dos compilaciones y dos minutos de una CPU— y
+  convierte la medición final en una comprobación en vez de en una
+  sorpresa.
+
 - **Sonda de tabla de transposición en quiescencia** — **HECHO en 0.27.0**,
   en `src/search.rs`, documentado en §6 del documento técnico.
 
@@ -90,13 +132,29 @@ final recoge el estado y lo que el banco ya ha enseñado.
   árbitro, que es trabajo del banco y no del motor; está listado como
   pendiente al final.
 
-- **Syzygy** (Gemini 4.5, GPT 6.5). El usuario ya dispone de EGTBs hasta 6
-  piezas (como la mayoría de referencias con las que se calibra). Se
-  considera relativamente fácil de integrar con Pyrrhic (biblioteca en C,
-  de cabecera única, la que usan Stockfish/Ethereal/etc. — "phatom" en la
-  nota original del usuario es Pyrrhic) y da Elo gratis sin tocar
-  búsqueda/eval. Sube de aplazado sin fecha a candidato real para 0.26,
-  después del banco de pruebas.
+- **Syzygy** (Gemini 4.5, GPT 6.5). La premisa está **comprobada en disco**
+  (2026-09): `C:/Ajedrez/TB_syzygy/`, 1.014 ficheros, 150 GB, hasta 6
+  piezas (359 tablas de 6). No es una suposición heredada.
+
+  Lo que sí hay que corregir de la nota original: **Pyrrhic no vale aquí**.
+  Es una biblioteca en C, y el proyecto no admite dependencias externas ni
+  FFI, así que el sondeador habría que escribirlo en Rust puro desde cero
+  — decodificador WDL y DTZ, tablas comprimidas, indexación por simetría.
+  Del orden de 2.000 líneas de código denso, y sin implementación de
+  referencia enlazada contra la que compararse: la validación tendría que
+  apoyarse en posiciones de resultado conocido y en coherencia interna. Sin
+  `mmap` (que también pide FFI) se leería por `std::fs` con `seek`, que es
+  más lento pero perfectamente viable: un sondeo lee bloques por
+  desplazamiento, no la tabla entera.
+
+  **Antes de escribir una sola línea, una medición barata**: contar en
+  `banco/resultados/027-tt-quiescencia/parejas.jsonl` cuántas partidas
+  llegan de verdad a un final de ≤6 piezas *sin* que la adjudicación las
+  haya cortado antes (`resign_cp` 900, tablas a 12 cp desde la jugada 40).
+  Si la respuesta es "pocas", el Elo medible en el banco es pequeño por
+  construcción y la decisión pasa a ser por juego correcto en finales, no
+  por Elo de self-play — que es una decisión legítima, pero distinta y con
+  otro criterio de aceptación.
 
   **Efecto sobre el oráculo KPK** (§5 del documento técnico): con Syzygy
   disponible, el oráculo interno de K+P vs K deja de aportar cobertura que
@@ -106,13 +164,23 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
 ## Prioridad media — velocidad, evaluar coste/beneficio
 
-- **`MovePicker` por etapas** (Opus P4, GPT 6.2) y **legalidad por
-  clavadas en vez de make/unmake por jugada** (Opus P1). Ninguna de las
-  dos es una técnica que el usuario haya implementado antes en sus propios
-  motores, pero ambas vinieron de revisiones de Opus y GPT a máxima
-  potencia de razonamiento, y el objetivo declarado es velocidad, que
-  siempre suma. Quedan como reestructuraciones de varios días — se
-  abordan cuando haya hueco, no son bloqueantes de nada.
+- **`MovePicker` por etapas** (Opus P4, GPT 6.2). La legalidad por clavadas
+  que iba en este mismo punto está **hecha en 0.28.0** (ver "Hecho"), y eso
+  cambia el valor de lo que queda, a la baja: el filtro de legalidad ha
+  pasado del 27,9 % del tiempo de nodo a ~2 %, así que "no generar las
+  tranquilas hasta que hagan falta" ya no ahorra lo que ahorraba.
+
+  **Hay que volver a medir el reparto antes de comprometerse**, con el
+  mismo truco barato que se usó para la legalidad: duplicar a propósito el
+  trabajo que se quiere quitar y ver cuánto tarda de más el mismo árbol.
+  Dos compilaciones y dos minutos de una CPU, frente a los varios días que
+  cuesta la reestructuración.
+
+  Un aviso para cuando se aborde, porque es un fallo que este motor ya tuvo
+  y arregló: `quiescence_inner` distingue hoy "no hay capturas que valga la
+  pena leer" de "no hay ninguna jugada legal", y confundirlas hacía que un
+  **ahogado** se puntuara con la evaluación estática. El test que lo cubre
+  tiene que estar escrito *antes* de tocar la generación, no después.
 
 - **TT sin `Mutex` global** (Gemini 4.4, GPT P2-03, Opus). Cambio de diseño
   real (clusters atómicos o *sharding*). Su valor depende de cuánta
@@ -156,6 +224,35 @@ final recoge el estado y lo que el banco ya ha enseñado.
   0.27.0, ver arriba), ProbCut, multicut, gestión de tiempo adaptativa
   (Opus M5). Todas plausibles, todas importantes a medio plazo — se prueban
   de una en una, cada una contra el banco de pruebas, nunca en bloque.
+
+  **Aviso de resolución, añadido en 0.28 tras analizarlas contra el
+  código**: las cuatro primeras comparten un problema que esta lista no
+  decía. Su efecto esperado *en este motor* ronda +3/+5 Elo, porque lo que
+  ya hay solapa con ellas —la ordenación de tranquilas ya usa exactamente
+  `history + cont_history`, SEE ya está *sumado* dentro de la puntuación de
+  capturas y no solo como filtro, y LMP con `(3+d²)/2` ya cubre las
+  profundidades donde la poda SEE de tranquilas mordería—. Con `elo0=0,
+  elo1=5`, **un efecto de +4 Elo no cruza la frontera nunca**: el desenlace
+  más probable de cinco o seis horas de máquina es *sin decisión*. No
+  significa que no se hagan; significa que se entra sabiendo eso, y que
+  entre ellas van primero las dos que admiten un prefiltro barato con
+  `banco velocidad` (poda por SEE de tranquilas y ProbCut, que encogen el
+  árbol de forma observable en segundos) antes que las dos que no lo
+  admiten.
+
+- **LMR indexada por tranquilas buscadas en vez de por índice en la lista**
+  (hallazgo de 0.28, no venía de ninguna revisión). LMP se corrigió en su
+  día para contar `quiets_tried` en lugar del índice sobre la lista
+  ordenada completa, con un comentario explícito de por qué: "en una
+  posición táctica con ocho capturas plausibles, la forma antigua podaba
+  *todas* las tranquilas a profundidad ≤2". **LMR sigue usando
+  `move_index`** (`src/search.rs`, condición `move_index >=
+  LMR_FULL_DEPTH_MOVES`). En ese mismo nodo de ocho capturas, la primera
+  tranquila entra con índice 8 y se lleva una reducción grande sin ser
+  tardía en ningún sentido útil. Es la misma asimetría que el proyecto ya
+  identificó y arregló una vez, son unas cinco líneas, y merece ir por
+  delante de LMR-sensible-a-la-historia. Cambia nodos, así que se valida
+  con `sprt`.
 
 ## Fuera de planificación (no aplazado — descartado por ahora, con revisión futura)
 
@@ -228,10 +325,31 @@ Por orden de utilidad para lo que viene:
    únicas: con 2.000 no se baja de ±8,7 Elo por mucho tiempo que se le dé.
    Tabla completa en §7 de `docs/BancoPruebas.md`.
 
-1bis. **Libro de 20.000 posiciones**, que es lo que este techo pide de
-   verdad. La fuente tiene 3,8 millones y generar el libro cuesta 17
-   segundos, así que el trabajo no es hacerlo sino asumir las horas de
-   partidas que habilita.
+1bis. ~~**Libro de 20.000 posiciones**~~ → **hecho**:
+   `banco/libros/vigia-20000.epd`, y es el que decidió la tanda larga de
+   0.27. Lo que sigue vigente de este punto no es hacerlo sino asumir las
+   horas de partidas que habilita.
+
+1ter. ~~**`banco humo` no se podía ejecutar**~~ → **arreglado en 0.28**. Su
+   presupuesto por defecto de 25.000 nodos caía justo por debajo del 50 %
+   que exige el guardián de "no respeta el límite por nodos", y no solo con
+   el binario nuevo: 0.27 se planta en los mismos 8.310 nodos. El defecto
+   pasa a 50.000, medido. Detalle en §6 de `docs/BancoPruebas.md`. Merece
+   quedar anotado porque es el modo de fallo típico de una herramienta de
+   verificación: no avisa de que lleva tiempo sin poder correr, simplemente
+   nadie la corre.
+
+1quater. **`banco velocidad` debería intercalar A y B posición a posición**,
+   en vez de medir A entero y luego B entero. Hallazgo de 0.28: repitiendo
+   la misma comparación con la máquina ocupada salieron +41,2 %, +13,6 %,
+   +40,4 % y +49,9 % para el mismo par de binarios, con el nps absoluto de
+   la base oscilando un 30 %. Una carga que aparece a mitad de camino se
+   cobra entera contra uno de los dos bandos, y alternar el orden entre
+   pasadas lo *detecta* pero no lo arregla. Intercalando, una deriva lenta
+   afectaría a los dos por igual. Es poco código en
+   `src/bin/banco/velocidad.rs` y protege el único carril de validación que
+   no cuesta partidas.
+
 2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta,
    ya con el libro ancho.
 3. **Soporte de ponder en el árbitro** (`go ponder` / `ponderhit`), sin el
@@ -244,7 +362,15 @@ Sigue vigente: el usuario pone la máquina, pero suele tener otras cosas
 corriendo. **Antes de lanzar cualquier batería hay que decirle explícitamente
 cuántas CPUs se necesitan** para que libere sitio. `partidas.workers` es el
 número de partidas simultáneas y cada una ocupa una CPU; el comando lo
-imprime al arrancar. La máquina actual tiene 12.
+imprime al arrancar. La máquina es un AMD Ryzen 9 9950X: **16 núcleos
+físicos, 32 hilos lógicos** (comprobado; aquí ponía 12 y era falso). Para
+medir fuerza cuenta el número de físicos, porque dos partidas compartiendo
+un núcleo por SMT van cada una a su ritmo y ensucian el control por tiempo.
+
+Y el aviso vale también para lo que no son partidas: una recompilación en
+`--release` con LTO y `codegen-units = 1` ocupa la máquina un buen rato.
+Una batería de mutantes que recompila nueve veces seguidas hay que
+lanzarla con permiso, no de fondo.
 
 ### Cómo se usa esto a partir de ahora
 
