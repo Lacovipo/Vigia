@@ -225,13 +225,23 @@ fn cmd_humo(args: &Args) -> Result<ExitCode, String> {
     let motor = args.requerido("motor")?.to_string();
     let libro_ruta = args.opcional("libro").unwrap_or("banco/libros/humo.epd").to_string();
     let parejas = args.numero("parejas", 4)?;
-    // 25.000 y no 5.000: con un presupuesto pequeño el motor cierra una
-    // iteración de profundización y calcula que la siguiente no cabe, así que
-    // no la empieza y anuncia jugada al 42 % de los nodos pedidos. Es el
-    // límite blando funcionando bien, pero dispara el guardián de "no respeta
-    // el límite por nodos" de este mismo banco y la prueba de humo falla sin
-    // que haya nada roto. A partir de ~25.000 el margen sobra.
-    let nodos = args.numero("nodos", 25_000)?;
+    // El motor cierra una iteración de profundización y no empieza la
+    // siguiente si calcula que no cabe, así que anuncia jugada bastante por
+    // debajo de los nodos pedidos. Es el límite blando funcionando bien,
+    // pero dispara el guardián de "no respeta el límite por nodos" de este
+    // mismo banco y la prueba de humo falla sin que haya nada roto.
+    //
+    // Aquí ponía 25.000, con el argumento de que a partir de ahí sobraba
+    // margen. Es falso, y falso también para el binario que lo escribió:
+    // desde la posición inicial 0.27 se planta en 8.310 nodos tanto si se
+    // le piden 20.000 (42 %) como 25.000 (33 %), porque el punto de parada
+    // no crece con el presupuesto sino a saltos, cuando una iteración
+    // entera más pasa a caber. O sea que el defecto quedaba *justo por
+    // debajo* del 50 % que exige el guardián y la prueba de humo no se
+    // podía correr. Medido en 2026-09: a 30.000 ya pasa; 50.000 deja
+    // margen para que un cambio en el reparto de nodos no lo vuelva a
+    // dejar al borde.
+    let nodos = args.numero("nodos", 50_000)?;
     let salida = args
         .opcional("salida")
         .unwrap_or("banco/resultados/humo")
