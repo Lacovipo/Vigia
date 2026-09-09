@@ -1,0 +1,77 @@
+{
+  "_": "Segunda mitad del experimento 028-velocidad-en-elo. La primera decidio;",
+  "_2": "esta mide. Son dos experimentos distintos porque quieren disenos",
+  "_3": "distintos, y esa es la leccion de metodo que deja la tanda anterior.",
+
+  "_tanda1": "028-velocidad-en-elo cruzo acepta_h1 en la pareja 46, con +109,2 Elo",
+  "_tanda1_2": "e IC [+50,2, +175,1] sobre 92 partidas. La DECISION es firme y sus",
+  "_tanda1_3": "hipotesis (20 contra 60) se declararon antes de mirar nada. La MAGNITUD",
+  "_tanda1_4": "no vale: una prueba secuencial que para al cruzar para, por definicion,",
+  "_tanda1_5": "en un momento favorable, y ademas 46 parejas no son muestra para nada.",
+  "_tanda1_6": "docs/BancoPruebas.md §7 ya recoge ese sesgo; lo que no recogia es el",
+  "_tanda1_7": "corolario: si la cifra ES el objetivo, hace falta una tanda aparte que",
+  "_tanda1_8": "no pueda pararse sola.",
+
+  "esquema": 1,
+  "id": "028-velocidad-en-elo-estimacion",
+
+  "candidato": {
+    "nombre": "0.28-clavadas",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.27",
+    "ruta": "Release/Vigia 0.27.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla nueva otra vez: muestra independiente de la tanda 1, no una",
+  "_libro_2": "continuacion suya. Las 46 parejas de aquella NO se reaprovechan.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260911,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "8 workers autorizados. A 2,97 s por pareja, 6.072 parejas son",
+  "_partidas_2": "unas 5 horas. 6.072 es el numero que docs/BancoPruebas.md §7 tabula",
+  "_partidas_3": "para +-5 Elo, y con un efecto tan grande el intervalo saldra mas",
+  "_partidas_4": "estrecho que eso, porque la varianza por partida baja cuando el",
+  "_partidas_5": "marcador se desequilibra.",
+  "partidas": {
+    "max_parejas": 6072,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "AQUI LA PARADA SECUENCIAL ESTA DESACTIVADA A PROPOSITO, y el",
+  "_sprt_2": "veredicto de esta tanda se declara irrelevante de antemano: la decision",
+  "_sprt_3": "ya la tomo la tanda 1. El banco tiene un test, en stats.rs, llamado",
+  "_sprt_4": "'identical_hypotheses_give_zero_llr': con elo0 = elo1 el LLR es cero",
+  "_sprt_5": "exactamente, siempre. La configuracion exige elo0 < elo1, asi que se usa",
+  "_sprt_6": "la separacion mas pequena que sigue siendo legal, y el LLR hereda esa",
+  "_sprt_7": "pequenez. Cuenta: la tanda 1 acumulo 0,064 de LLR por pareja con una",
+  "_sprt_8": "separacion de 40 Elo; con 0,2 el ritmo cae a ~3,2e-4 y en 6.072 parejas",
+  "_sprt_9": "el LLR no pasa de ~1,9. Con alpha=beta=0,001 las fronteras estan en",
+  "_sprt_10": "+-6,9. No puede cruzar. La tanda agota su tope y entrega un intervalo",
+  "_sprt_11": "limpio, que es exactamente lo que se le pide.",
+  "_sprt_12": "El centro (100) casi da igual: lo que mueve el LLR es la separacion",
+  "_sprt_13": "entre hipotesis, no su distancia a la verdad.",
+  "sprt": { "elo0": 99.9, "elo1": 100.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/028-velocidad-en-elo-estimacion"
+}
