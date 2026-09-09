@@ -278,9 +278,31 @@ usados por la poda de *null move*.
   moverse por su clavada. Y una comprobación de las dos tablas contra la
   definición en prosa, barriendo los 4.096 pares de casillas.
 
-  Verificado además por mutación: quitar `occupied.clear(info.king_sq)` —el
-  error más probable de todos— lo cazan seis tests, el de equivalencia
-  entre ellos.
+  Verificado además **por mutación**: diez fallos plausibles introducidos a
+  propósito en `check_info`/`legal_by_pins`, uno a uno, para ver cuáles
+  cazan los tests. Siete caen, la mayoría por varios sitios a la vez. De
+  los tres que no caen, dos son **mutantes equivalentes** —no cambian el
+  comportamiento— y merece la pena dejar escrito por qué, porque explica
+  que esas dos líneas son atajos y no requisitos:
+
+  - *Marcar como clavadas también las piezas rivales* (`pinned | blockers`
+    en vez de `& ours`) no se puede observar: `mv.from` es siempre una
+    pieza nuestra, así que las casillas rivales añadidas al conjunto nunca
+    se consultan. La restricción está por claridad, no por corrección.
+  - *Quitar el atajo del enroque* y dejar que pase por la prueba de casilla
+    atacada tampoco cambia nada: `try_add_castle` ya comprobó e1 (y c1/g1),
+    y si e1 no está atacada no existe rayo por la primera fila que pueda
+    alcanzar g1 al retirar el rey de la ocupación. El atajo ahorra trabajo;
+    no tapa ningún caso.
+
+  El tercero **sí era un hueco real, y del test, no del motor**: no
+  detectar el jaque doble no lo cazaba nadie, porque la posición del test
+  dirigido no le dejaba al bando en jaque ninguna pieza aparte del rey y
+  "todas las jugadas salen de e8" se cumplía sola. Con una torre negra
+  añadida (`4k3/r7/5N2/8/8/8/8/4R1K1 b`), `Ra7-e7` responde a uno de los
+  dos jaques y sigue siendo ilegal — que es justo la jugada que dejaría
+  pasar un filtro que solo mirase el primer jaque. Cazado ahora por el test
+  dirigido y por el de equivalencia.
 - **Medición** (`banco velocidad --profundidad 12 --hash 32 --hilos 1`, tres
   pasadas alternando el orden de los binarios para que una carga de fondo
   no caiga siempre sobre el mismo): nodos **idénticos** en las 12

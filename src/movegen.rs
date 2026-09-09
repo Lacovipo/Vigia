@@ -1401,6 +1401,8 @@ mod tests {
             (POSITION6_FEN, 3),
             // En passant with both kings on the fourth rank's line of fire.
             ("8/8/8/8/k1pP3R/8/8/4K3 b - d3 0 1", 3),
+            // Double check with a piece that can answer one of the two.
+            ("4k3/r7/5N2/8/8/8/8/4R1K1 b - - 0 1", 4),
             // Four white pieces pinned at once, one per ray family: Re6 on
             // the file, Nd4 on the rank, Bf5 and the d3 pawn on the two
             // diagonals.
@@ -1439,15 +1441,28 @@ mod tests {
 
     #[test]
     fn a_double_check_leaves_only_king_moves() {
-        // Rook on e1 down the file, knight on f6: nothing blocks or
-        // captures both, so every legal move has to start on e8.
-        let mut board = Board::from_fen("4k3/8/5N2/8/8/8/8/4RK2 b - - 0 1").unwrap();
+        // Rook on e1 down the file, knight on f6: nothing blocks or captures
+        // both, so every legal move has to start on e8.
+        //
+        // The black rook on a7 is the whole point of the position. Without a
+        // piece that *can* answer one of the two checks, "every move starts
+        // on e8" holds for free and the test proves nothing: dropping the
+        // double-check rule entirely would still pass it. Here Ra7-e7 blocks
+        // the rook's check and stays illegal because the knight keeps
+        // checking — and it is exactly the move a filter that only looked at
+        // the first checker would let through.
+        let mut board = Board::from_fen("4k3/r7/5N2/8/8/8/8/4R1K1 b - - 0 1").unwrap();
         let moves = legal_moves_scratch(&mut board);
         let e8 = Square::new(4, 7);
+        let e7 = Square::new(4, 6);
         assert!(!moves.is_empty(), "the king still has squares to run to");
         assert!(
             moves.iter().all(|mv| mv.from == e8),
             "only the king may answer a double check: {moves:?}"
+        );
+        assert!(
+            !moves.iter().any(|mv| mv.to == e7),
+            "Ra7-e7 only answers one of the two checks: {moves:?}"
         );
         assert_eq!(moves, legal_moves_by_make_unmake(&mut board));
     }
