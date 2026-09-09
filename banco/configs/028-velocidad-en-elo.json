@@ -1,0 +1,81 @@
+{
+  "_": "0.28 contra 0.27: cuanto Elo compra el +32 % de nodos/segundo de la",
+  "_2": "legalidad por clavadas. Dos preguntas en una tanda.",
+
+  "_proposito": "PRIMERA: 0.28 se aprobo por el carril de velocidad, con nodos",
+  "_proposito_2": "identicos, asi que el banco nunca la ha medido como fuerza. A control de",
+  "_proposito_3": "tiempo esos nodos de mas son profundidad de mas, y esto lo cuantifica.",
+  "_proposito_4": "SEGUNDA, y la que de verdad justifica las cinco horas: este proyecto no",
+  "_proposito_5": "ha medido nunca el tipo de cambio entre velocidad y Elo. La regla de",
+  "_proposito_6": "'duplicar velocidad = +65 Elo' esta expresamente prohibida como cifra de",
+  "_proposito_7": "folleto en docs/Descartados.md. Con NNUE en el horizonte deja de ser",
+  "_proposito_8": "curiosidad: una red paga nps a cambio de mejor evaluacion, y sin el tipo",
+  "_proposito_9": "de cambio no se puede juzgar si compensa. Aqui se mide con un cambio que",
+  "_proposito_10": "es SOLO velocidad, que es el unico experimento limpio posible para eso.",
+
+  "esquema": 1,
+  "id": "028-velocidad-en-elo",
+
+  "_binarios": "Los dos congelados en Release/, y sus sha entran en el",
+  "_binarios_2": "manifiesto. 0.28 es el commit dde715a; 0.27, c40a6b5.",
+
+  "candidato": {
+    "nombre": "0.28-clavadas",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.27",
+    "ruta": "Release/Vigia 0.27.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla nueva, distinta de las de 0.27 y de la sonda de ritmo:",
+  "_libro_2": "muestra independiente. 20.000 posiciones no imponen techo a 6.072",
+  "_libro_3": "parejas.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260910,
+    "barajar": true
+  },
+
+  "_busqueda": "Tiempo y no nodos, obligatoriamente: por nodos las dos versiones",
+  "_busqueda_2": "visitan exactamente lo mismo y el experimento mediria cero por",
+  "_busqueda_3": "construccion. Es justo lo contrario de la trampa de 0.24: alli el control",
+  "_busqueda_4": "por nodos era injusto, aqui seria ciego.",
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "8 workers = 8 CPUs de las 16 fisicas, autorizado por el usuario.",
+  "_partidas_2": "Ritmo medido en una sonda previa de 32 parejas: 2,97 s por pareja a 8",
+  "_partidas_3": "workers. 6.072 parejas son unas 5 horas. El numero no es redondo a",
+  "_partidas_4": "proposito: es el que docs/BancoPruebas.md §7 tabula para +-5 Elo.",
+  "partidas": {
+    "max_parejas": 6072,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Hipotesis anchas y declaradas ANTES de mirar nada, y elegidas para",
+  "_sprt_2": "que esta tanda sea de ESTIMACION y no de decision. La sonda de 32",
+  "_sprt_3": "parejas dio +94,6 con IC [+23,4, +174,6], que no decide nada pero situa",
+  "_sprt_4": "la pregunta. Con elo0=0/elo1=5, las de siempre, esto cruzaria enseguida",
+  "_sprt_5": "y la cifra saldria sesgada al alza (§7: una prueba secuencial que para",
+  "_sprt_6": "al cruzar para, por definicion, en un momento favorable) — y la cifra es",
+  "_sprt_7": "justo lo que se busca. Con 20/60 el LLR se mueve despacio, la tanda",
+  "_sprt_8": "tiende a agotar su tope y el intervalo sale limpio. Si aun asi cruza, se",
+  "_sprt_9": "reporta con la reserva del sesgo.",
+  "sprt": { "elo0": 20.0, "elo1": 60.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/028-velocidad-en-elo"
+}
