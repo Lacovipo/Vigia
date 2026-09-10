@@ -773,6 +773,7 @@ desde los resultados) cada vez que se lee.
 | `027-tt-quiescencia-largo` | 0.27 vs 0.26 | `movetime` 100 ms | 1.313 parejas: **`acepta_h1`**, +20,4 Elo (sesgado al alza) |
 | `028-velocidad-en-elo` | 0.28 vs 0.27 | `movetime` 100 ms | 46 parejas: **`acepta_h1`** con H1=+60 frente a H0=+20; +109,2 Elo (sesgado) |
 | `028-velocidad-en-elo-estimacion` | 0.28 vs 0.27 | `movetime` 100 ms | 6.072 parejas, tope fijo: **+72,4 Elo** [+67,3, +77,6], +0,493 plies |
+| `028-velocidad-en-elo-300ms` | 0.28 vs 0.27 | `movetime` 300 ms | 2.000 parejas, tope fijo: **+69,1 Elo** [+60,6, +77,7], +0,553 plies |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba
@@ -784,14 +785,20 @@ lentitud pesa; el dato antiguo era a 300 y 800 ms.
 Pendiente: repetir a 300 y 800 ms. Ampliar el libro ya está hecho
 (`vigia-20000.epd`).
 
-Y desde 0.28 hay una razón mejor para lo de los 300 y 800 ms que cerrar
-aquella pregunta: el tipo de cambio entre velocidad y Elo está medido a 100
-ms (§8.7 del documento técnico) y **la curva se aplana con el tiempo**. Sin
-un segundo punto no se sabe cuánto de esos 180 Elo por doblar sobrevive a
-control de torneo, que es donde el motor se usa de verdad. Repetir 0.28
-contra 0.27 a 300 ms —el mismo par congelado, el mismo libro, semilla
-nueva— da ese punto por unas 5 horas de máquina a 8 workers con 2.000
-parejas (±9 Elo, de sobra para ver si el ritmo cae de 180 a 120).
+**Los 300 ms ya están hechos**, y con una versión mejor de la pregunta: en
+vez de 0.25 contra 0.24, el par congelado 0.28 contra 0.27, que es un
+cambio de solo velocidad y por tanto mide el tipo de cambio entre nodos y
+Elo. Resultado: +69,1 Elo frente a los +72,4 de 100 ms, o sea **172 Elo por
+doblar la velocidad frente a 180: indistinguibles**. La curva no se aplana
+en ese tramo, contra lo que aquí se predijo. Detalle en §8.7 del documento
+técnico.
+
+Queda el **tercer punto a 800 ms**, que es lo más rentable que le queda al
+banco por hacer. De 100 a 300 ms solo hay 1,6 duplicaciones de tiempo y la
+profundidad pasa de ~10,6 a ~12,6 plies; que no se aplane ahí no dice nada
+de lo que pasa a control de torneo de verdad. A 800 ms, 1.000 parejas
+(±12 Elo) son unas 4,5 horas a 8 workers, y basta para ver si el ritmo se
+mantiene o cae.
 
 ---
 

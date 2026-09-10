@@ -74,9 +74,12 @@ vez de en cinco horas de `sprt`. Un 10 % de nps vale ~+22 Elo, más que
 cualquier mejora de evaluación pendiente. Y al revés: una evaluación que
 cueste la mitad de los nps parte con 180 Elo en contra.
 
-**Reserva obligatoria al citarlo**: es a 100 ms y a esta fuerza. La curva se
-aplana con el tiempo, así que a control de torneo vale menos. Es un techo,
-no una constante.
+**Reserva al citarlo**: es a esta fuerza, y medido en dos puntos. A 300 ms
+el mismo contraste da 172 Elo por doblar frente a 180 a 100 ms —
+indistinguibles—, así que en ese tramo la curva **no** se aplana, contra lo
+que se predijo. Sigue siendo extrapolación corta: falta el punto de 800 ms.
+El factor de ramificación efectivo del motor es ≈ 1,71, y con él un +32 %
+de nodos/segundo compra ~0,52 plies.
 
 ## Trampas conocidas
 

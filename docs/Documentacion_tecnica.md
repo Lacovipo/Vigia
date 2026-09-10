@@ -1125,26 +1125,67 @@ iteración entera más, así que la ganancia no es continua sino a saltos, y
 un motor un tercio más rápido cruza ese umbral en bastantes más posiciones
 de las que la proporción sugiere.
 
-**Las tres reservas, que importan tanto como el número.**
+#### El segundo punto: a 300 ms el tipo de cambio no se mueve
 
-1. **Es a 100 ms.** La curva de Elo contra tiempo se aplana: a control de
-   torneo, que es donde el usuario juega de verdad, el mismo +32 % valdrá
-   bastante menos. Los 180 Elo por doblar son un techo, no una constante
-   universal, y repetir esto a 300 y 800 ms es trabajo pendiente del banco.
-2. **Es a esta fuerza.** Un motor más fuerte y más profundo saca menos de
-   cada ply nuevo.
-3. **El 70 % de las partidas terminan por abandono adjudicado** (`resign_cp`
-   900). La adjudicación recorta finales, así que este número describe la
-   fuerza en apertura y medio juego más que en final.
+La reserva más fuerte de todo lo anterior era que estaba medido a 100 ms, y
+que la curva de Elo contra tiempo se aplana, así que a control de torneo el
+mismo +32 % valdría bastante menos. **Esa predicción es mía y los datos la
+contradicen.** Se midió con `028-velocidad-en-elo-300ms`, idéntica a la
+anterior salvo el reloj: mismos binarios congelados, mismo libro, misma
+adjudicación, mismos 8 workers, un solo grado de libertad.
+
+| | 100 ms | 300 ms |
+|---|---:|---:|
+| Elo de 0.28 sobre 0.27 | +72,4 [+67,3, +77,6] | +69,1 [+60,6, +77,7] |
+| profundidad media, base | 10,632 | 12,649 |
+| profundidad media, candidato | 11,125 | 13,202 |
+| plies comprados por el +32,1 % | +0,493 | +0,553 |
+| **Elo por doblar la velocidad** | **180** | **172** |
+
+Los intervalos se solapan casi por completo. La diferencia es de 3,3 Elo
+con un error típico de 5,1: **0,65 sigmas, o sea nada**. Entre 100 y 300 ms
+el tipo de cambio es plano.
+
+Y hay una comprobación del modelo que salió de regalo. Triplicar el tiempo
+sube la profundidad en 2,02 plies (base) y 2,08 (candidato), lo que fija el
+**factor de ramificación efectivo del motor en ≈ 1,71**. Con ese EBF, un
++32,1 % de nodos debería comprar `ln(1,321)/ln(1,71) = 0,519` plies. Lo
+medido son 0,493 y 0,553. El modelo predice el dato que no se usó para
+construirlo, que es la única clase de acuerdo que significa algo.
+
+Por qué sale plano, en la medida en que se puede descomponer: el Elo por
+ply baja con la profundidad (de ~147 a ~125) mientras los plies que compra
+el mismo porcentaje se mantienen en ~0,52, y los dos efectos casi se
+cancelan. Conviene decir que **el producto está mejor medido que sus dos
+factores**: "Elo por ply" se obtiene dividiendo por una profundidad que
+tiene su propio ruido, mientras que los Elo por doblar velocidad salen
+directamente de la tanda.
+
+**Las reservas que quedan en pie.**
+
+1. **Sigue siendo una extrapolación corta.** De 100 a 300 ms hay 1,6
+   duplicaciones de tiempo y la profundidad solo pasa de ~10,6 a ~12,6
+   plies. Que no se aplane ahí no demuestra que no se aplane a 60 s por
+   jugada, que es control de torneo de verdad; demuestra que se aplana
+   **más despacio de lo que yo suponía**. Un tercer punto a 800 ms sigue
+   siendo el trabajo pendiente más rentable del banco.
+2. **Es a esta fuerza.** Un motor más fuerte saca menos de cada ply nuevo.
+3. **El 70 % de las partidas terminan por abandono adjudicado** a 100 ms, y
+   el 63,8 % a 300 ms (`resign_cp` 900). La adjudicación recorta finales,
+   así que esto describe la fuerza en apertura y medio juego más que en
+   final.
 
 **Consecuencia práctica, y no es pequeña**: a 2,26 Elo por punto porcentual
 de nodos/segundo, un 10 % de velocidad vale ~+22 Elo — más que cualquiera
 de las mejoras de evaluación o de poda que quedan en
 `docs/MejorasPendientes.md`, y validable en minutos con `banco velocidad`
 en vez de en horas con `sprt`. Y al revés: una evaluación que cueste la
-mitad de los nodos/segundo parte con ~180 Elo en contra antes de evaluar
-mejor ni una posición. Eso condiciona el tamaño de una futura red NNUE más
-que cualquier otra consideración.
+mitad de los nodos/segundo parte con ~175 Elo en contra antes de evaluar
+mejor ni una posición.
+
+Eso condiciona el tamaño de una futura red NNUE más que cualquier otra
+consideración, y el segundo punto de la curva lo endurece: la deuda no era
+un artefacto del control rápido en el que se midió. A 300 ms es la misma.
 
 ### 8.8 El harness antiguo
 

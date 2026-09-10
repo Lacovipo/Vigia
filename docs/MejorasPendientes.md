@@ -145,11 +145,15 @@ Tres consecuencias, y ninguna es menor:
    el trato no sale. Es la restricción de diseño más dura que tiene el
    proyecto por delante.
 
-**La reserva que hay que repetir cada vez que se cite el número**: está
-medido a 100 ms y a esta fuerza. La curva de Elo contra tiempo se aplana, y
-a control de torneo el mismo porcentaje valdrá menos. Los 180 por doblar
-son un techo. Medir un segundo punto a 300 ms es lo más rentable que le
-queda al banco por hacer, y está en su lista de pendientes.
+**La reserva, ya con un segundo punto medido**: a 300 ms el mismo contraste
+da +69,1 Elo, o sea **172 Elo por doblar frente a 180 a 100 ms —
+indistinguibles** (0,65 sigmas). Aquí se predijo que la curva se aplanaría
+y a control de torneo el porcentaje valdría bastante menos; en ese tramo,
+no ocurre. Sigue siendo una extrapolación corta —de 100 a 300 ms hay 1,6
+duplicaciones y la profundidad solo va de ~10,6 a ~12,6 plies—, así que un
+tercer punto a 800 ms sigue mereciendo la pena. Pero la conclusión operativa
+se refuerza en vez de debilitarse: **la deuda que paga una evaluación cara
+no era un artefacto del control rápido en el que se midió**.
 
 ## Prioridad alta
 
@@ -354,8 +358,9 @@ datos; mejorar la evaluación no, porque la evaluación es justo lo que se
 va a jubilar.**
 
 **El presupuesto, que es la parte dura.** A 2,26 Elo por punto porcentual
-de nodos/segundo, una red que deje la velocidad a la mitad parte con ~180
-Elo en contra. Objetivo de diseño: **que la red no cueste más de un 30 % de
+de nodos/segundo, una red que deje la velocidad a la mitad parte con ~175
+Elo en contra — y eso vale igual a 100 que a 300 ms, así que no es un
+artefacto del control rápido. Objetivo de diseño: **que la red no cueste más de un 30 % de
 los nodos/segundo** (≈ −68 Elo de deuda), lo que obliga a red pequeña,
 acumulador incremental y cuantización entera. Sin SIMD explícito, además,
 porque `std::simd` es inestable y aquí no hay dependencias: la red tiene
