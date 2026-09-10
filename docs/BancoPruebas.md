@@ -500,12 +500,70 @@ Se vio con claridad en la 0.27, que se midió dos veces:
 agregado, y di cuál estás citando. Lo que el `acepta_h1` certifica es el
 lado de la frontera, no el número.
 
+#### El corolario: decidir y medir son dos experimentos distintos (0.28)
+
+Lo de arriba dice qué cifra **no** citar. Lo que faltaba es qué hacer
+cuando la cifra *es* el objetivo, y 0.28 lo dejó claro midiendo el mismo
+contraste dos veces:
+
+| tanda | parejas | diseño | Elo |
+|---|---:|---|---:|
+| `028-velocidad-en-elo` | 46 | secuencial, hipótesis 20 contra 60 | +109,2 |
+| `028-velocidad-en-elo-estimacion` | 6.072 | tope fijo, sin parada | **+72,4** [+67,3, +77,6] |
+
+**37 Elo de sesgo**, con las dos tandas midiendo exactamente lo mismo. Y no
+fue por descuido: las hipótesis de la primera se eligieron anchas (20
+contra 60) precisamente para que no cruzara pronto, y cruzó en la pareja 46
+porque el efecto era mayor de lo previsto. **No se puede esquivar el sesgo
+adivinando el efecto de antemano**; si lo supieras, no harías el
+experimento.
+
+Así que: una tanda para decidir, con las hipótesis declaradas antes de
+mirar nada, y si hace falta la cifra, **otra tanda aparte que no pueda
+pararse sola**. La segunda no necesita hipótesis buenas, necesita no tener
+ninguna.
+
+**Cómo desactivar la parada**, sin trucar `alpha`: `stats.rs` tiene un test,
+`identical_hypotheses_give_zero_llr`, que fija que con `elo0 = elo1` el LLR
+es cero exactamente. La configuración exige `elo0 < elo1`, así que se usa
+una separación diminuta y el LLR hereda esa pequeñez — el LLR lo mueve la
+**separación entre hipótesis**, no su distancia a la verdad, de modo que
+esto funciona sin saber cuánto vale el cambio. Con `elo0=99,9, elo1=100,1`
+y `alpha=beta=0,001`, la tanda de 6.072 parejas terminó con el LLR en
+−0,77 y las fronteras en ±6,907: ni se acercó. Y `max_parejas` pasa a ser
+lo que de verdad decide cuándo termina, que es lo que se quería.
+
 Corolario para leer el progreso de una tanda en marcha: la puntuación de un
 tramo de 250 parejas tiene un error típico de ±1,75 puntos, así que verás
 tramos del 47 % y del 56 % en una tanda cuyo valor real es 51,7 %. En la
 0.27 un tramo del 55,9 % disparó el LLR a +2,68 y luego se corrigió solo.
 Con el harness viejo de 16 partidas, esa racha se habría cantado como
 "+40 Elo, mejora clara".
+
+### Las jugadas de índice par NO son de las blancas
+
+Trampa al analizar `parejas.jsonl` a mano, y ya ha mordido dos veces. Cada
+partida guarda `candidato_blancas` y una lista `jugadas`, y la tentación es
+atribuir las de índice par a las blancas. **Es falso**: la primera jugada
+la hace quien mueve en la posición del libro, y `vigia-20000.epd` tiene
+**10.920 posiciones con negras a mover** frente a 9.080 con blancas.
+
+Atribuir por paridad mezcla los dos motores en más de la mitad de las
+partidas y empuja las dos medias hacia el promedio común — con el aspecto
+tranquilizador de "los dos motores salen igual", que es justo lo que uno
+esperaría ver si el cambio no hiciera nada. La forma correcta:
+
+```python
+stm_blancas = pareja['fen'].split()[1] == 'w'
+mueven_blancas = (i % 2 == 0) == stm_blancas
+es_del_candidato = mueven_blancas == juego['candidato_blancas']
+```
+
+Le pasó a la medición de profundidad de 0.27, que quedó documentada con el
+signo invertido durante dos versiones (ver §6 de
+`docs/Documentacion_tecnica.md`), y volvió a pasar en 0.28 antes de que el
+resultado imposible —dos motores con un 32 % de diferencia de velocidad
+llegando exactamente igual de hondo— delatara el fallo.
 
 ### Cuántas parejas hacen falta de verdad
 
@@ -711,6 +769,10 @@ desde los resultados) cada vez que se lee.
 | `humo-A-contra-A` | 0.28 contra sí mismo | 50.000 nodos, libro de 2.000 | 32 parejas, `[0,0,32,0,0]`, 0,00 Elo |
 | `025dev-vs-024` (nodos) | 0.25-dev vs 0.24 | 25.000 nodos | **inválido**: 0.24 no respeta `go nodes`. Ver §3.4 |
 | `025dev-vs-024` | 0.25-dev vs 0.24 | `movetime` 100 ms | 128 parejas: **−17,7 Elo** (IC 95 % −53,7 … +18,0), LLR −0,30, **`continuar`** |
+| `027-tt-quiescencia` | 0.27 vs 0.26 | `movetime` 100 ms | 2.000 parejas, agotó el libro: **+11,4 Elo** [+2,5, +20,3], `continuar` |
+| `027-tt-quiescencia-largo` | 0.27 vs 0.26 | `movetime` 100 ms | 1.313 parejas: **`acepta_h1`**, +20,4 Elo (sesgado al alza) |
+| `028-velocidad-en-elo` | 0.28 vs 0.27 | `movetime` 100 ms | 46 parejas: **`acepta_h1`** con H1=+60 frente a H0=+20; +109,2 Elo (sesgado) |
+| `028-velocidad-en-elo-estimacion` | 0.28 vs 0.27 | `movetime` 100 ms | 6.072 parejas, tope fijo: **+72,4 Elo** [+67,3, +77,6], +0,493 plies |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba
@@ -719,8 +781,17 @@ no se reproduce a este control. Como `banco velocidad` muestra que 0.25-dev
 es un ~16 % más lento en nodos/segundo que 0.24, a 100 ms por jugada esa
 lentitud pesa; el dato antiguo era a 300 y 800 ms.
 
-Pendiente: repetir a 300 y 800 ms, y ampliar el libro por encima de 256
-posiciones para poder decidir diferencias pequeñas.
+Pendiente: repetir a 300 y 800 ms. Ampliar el libro ya está hecho
+(`vigia-20000.epd`).
+
+Y desde 0.28 hay una razón mejor para lo de los 300 y 800 ms que cerrar
+aquella pregunta: el tipo de cambio entre velocidad y Elo está medido a 100
+ms (§8.7 del documento técnico) y **la curva se aplana con el tiempo**. Sin
+un segundo punto no se sabe cuánto de esos 180 Elo por doblar sobrevive a
+control de torneo, que es donde el motor se usa de verdad. Repetir 0.28
+contra 0.27 a 300 ms —el mismo par congelado, el mismo libro, semilla
+nueva— da ese punto por unas 5 horas de máquina a 8 workers con 2.000
+parejas (±9 Elo, de sobra para ver si el ritmo cae de 180 a 120).
 
 ---
 

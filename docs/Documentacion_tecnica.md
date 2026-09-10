@@ -321,10 +321,15 @@ usados por la poda de *null move*.
   ve el efecto entero: los dos perft profundos bajan de 0,12–0,14 s a
   0,03–0,06 s.
 
-  **No se declara cifra de Elo**, igual que con los magic bitboards de
-  0.26: si los nodos no se mueven no hay diferencia de juego que medir, y
-  convertir nodos/segundo en Elo con la regla de "duplicar velocidad = +65
-  Elo" sería citar un número que este proyecto no ha medido nunca.
+  **Y después, por primera vez en el proyecto, la cifra de Elo de un cambio
+  de solo velocidad.** Con los magic bitboards de 0.26 se decidió no
+  declararla, con el argumento de que si los nodos no se mueven no hay
+  diferencia de juego que medir. Ese argumento es falso y conviene enterrarlo:
+  los nodos no se mueven **a profundidad fija**, que es como mide `banco
+  velocidad`, pero una partida se juega a **tiempo** fijo, y ahí el motor
+  rápido busca más hondo. Medido en `028-velocidad-en-elo-estimacion`
+  (§8.7): **+72,4 Elo, IC 95 % [+67,3, +77,6]** sobre 12.144 partidas, con
+  +0,493 plies de profundidad media.
 - **`gives_check(board, mv)`** (0.25.0): responde si una jugada da jaque
   *sin jugarla*, con la misma respuesta que `make_move` + `is_in_check` +
   `unmake_move`. Cubre jaque directo desde la casilla de destino (con la
@@ -839,8 +844,19 @@ partidas, IC95 [+2,5, +20,3]. Agregando las dos, 6.626 partidas, sale +15,0
 `acepta_h1` certifica es que supera +5, y eso sí es firme.
 
 Un dato que contradijo la hipótesis de partida: la profundidad media
-alcanzada **no sube** (10,763 plies el candidato frente a 10,797 la base,
-sobre 40.000 jugadas). La ganancia no es llegar más hondo sino acertar más a
+alcanzada **no sube** (10,751 plies el candidato frente a 10,705 la base,
+sobre las 194.886 jugadas de la tanda).
+
+Esas dos cifras están corregidas en 0.28. Aquí ponía 10,763 contra 10,797,
+o sea el candidato **por debajo** de la base, y el signo estaba invertido
+por un error de atribución al leer `parejas.jsonl`: las jugadas de índice
+par no son de las blancas, son **del bando que movía en la posición del
+libro**, y 10.920 de las 20.000 posiciones de `vigia-20000.epd` tienen
+negras a mover. Atribuir por paridad mezcla los dos motores y empuja las
+dos medias hacia el promedio común, que es justo el aspecto que tenían.
+La conclusión de 0.27 no cambia —la profundidad no sube de forma
+apreciable, y sigue siendo el dato que contradijo la hipótesis de
+partida—, pero el número sí. La ganancia no es llegar más hondo sino acertar más a
 la misma profundidad, porque un nodo de quiescencia que acierta en la tabla
 recupera una puntuación guardada por una búsqueda más profunda en vez de
 resolver el intercambio con su propia vista corta.
@@ -1070,7 +1086,67 @@ Otras tandas registradas:
 | `025dev-vs-024` por nodos | 0.25-dev vs 0.24, 25.000 nodos | **inválido**, ver §8.5 |
 
 
-### 8.7 El harness antiguo
+### 8.7 Cuánto Elo compra la velocidad
+
+La pregunta llevaba abierta desde 0.26 y `docs/Descartados.md` prohíbe
+expresamente contestarla con la regla de folleto de "duplicar velocidad =
++65 Elo". 0.28 permitió medirla, porque un cambio de **solo** velocidad es
+el único experimento limpio posible: no toca ninguna decisión de la
+búsqueda, así que todo lo que se mida es atribuible al reloj.
+
+Dos tandas, 0.28 contra 0.27 congeladas, `movetime` 100 ms, `Hash` 32, un
+hilo, libro de 20.000 y 8 workers:
+
+| tanda | parejas | qué contesta | resultado |
+|---|---:|---|---|
+| `028-velocidad-en-elo` | 46 | decisión | `acepta_h1` (H1 = +60 frente a H0 = +20), +109,2 Elo |
+| `028-velocidad-en-elo-estimacion` | 6.072 | magnitud | **+72,4 Elo, IC 95 % [+67,3, +77,6]** |
+
+**La primera decidió y la segunda midió, y hay 37 Elo de diferencia entre
+sus cifras.** Es la demostración empírica del sesgo que §7 de
+`docs/BancoPruebas.md` describía en abstracto: la tanda que cruzó paró en
+la pareja 46, en el instante favorable en que cruzó. La cifra buena es la
+de la segunda, que agotó su tope sin cruzar nada.
+
+El tipo de cambio que sale, **en este punto de operación y no en general**:
+
+| magnitud | valor |
+|---|---|
+| nodos/segundo | +32,1 % |
+| profundidad media | 11,125 contra 10,632 = **+0,493 plies** |
+| fuerza | **+72,4 Elo** |
+| Elo por doblar la velocidad | **180** |
+| Elo por ply | 147 |
+| Elo por cada 1 % de nodos/segundo | **2,26** |
+
+Los +0,493 plies superan los `log2(1,321) = 0,40` que predice la cuenta
+lisa, y tiene explicación: el presupuesto blando decide si **empieza** una
+iteración entera más, así que la ganancia no es continua sino a saltos, y
+un motor un tercio más rápido cruza ese umbral en bastantes más posiciones
+de las que la proporción sugiere.
+
+**Las tres reservas, que importan tanto como el número.**
+
+1. **Es a 100 ms.** La curva de Elo contra tiempo se aplana: a control de
+   torneo, que es donde el usuario juega de verdad, el mismo +32 % valdrá
+   bastante menos. Los 180 Elo por doblar son un techo, no una constante
+   universal, y repetir esto a 300 y 800 ms es trabajo pendiente del banco.
+2. **Es a esta fuerza.** Un motor más fuerte y más profundo saca menos de
+   cada ply nuevo.
+3. **El 70 % de las partidas terminan por abandono adjudicado** (`resign_cp`
+   900). La adjudicación recorta finales, así que este número describe la
+   fuerza en apertura y medio juego más que en final.
+
+**Consecuencia práctica, y no es pequeña**: a 2,26 Elo por punto porcentual
+de nodos/segundo, un 10 % de velocidad vale ~+22 Elo — más que cualquiera
+de las mejoras de evaluación o de poda que quedan en
+`docs/MejorasPendientes.md`, y validable en minutos con `banco velocidad`
+en vez de en horas con `sprt`. Y al revés: una evaluación que cueste la
+mitad de los nodos/segundo parte con ~180 Elo en contra antes de evaluar
+mejor ni una posición. Eso condiciona el tamaño de una futura red NNUE más
+que cualquier otra consideración.
+
+### 8.8 El harness antiguo
 
 `src/bin/selfplay.rs` sigue compilando, con sus 8 tests, y sirve como *smoke
 test* rápido. Está superado por `banco` para cualquier medición y no debe
@@ -1138,6 +1214,11 @@ usarse para aprobar un cambio.
   por jugada del filtro de legalidad por aritmética de rayos (§3).
   Aprobada por `banco velocidad` con nodos idénticos y ~+32 % de
   nodos/segundo; cero partidas gastadas, como 0.26.
+
+  Medida después como fuerza, ya con la versión cerrada: **+72,4 Elo**, IC
+  95 % [+67,3, +77,6] (§8.7). Es la mayor ganancia medida del proyecto, y
+  de paso contestó una pregunta que llevaba abierta desde 0.26 — cuánto
+  Elo compra la velocidad — con consecuencias para todo lo que viene.
 
   Se eligió entre diez candidatos, analizando cada uno contra el código en
   vez de contra la literatura, y el criterio que decidió fue **Elo por hora

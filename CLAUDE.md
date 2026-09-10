@@ -61,6 +61,23 @@ Al terminar una mejora hay que **actualizar la documentación**: el estado en
 `Documentacion_tecnica.md` y el punto correspondiente de
 `MejorasPendientes.md`, con el `id` del experimento y su decisión.
 
+## El número que ordena las prioridades
+
+**2,26 Elo por cada 1 % de nodos/segundo.** 180 Elo por doblar la
+velocidad, no los 65 del folclore. Medido en 0.28 con 12.144 partidas
+(§8.7 de `docs/Documentacion_tecnica.md`), a `movetime` 100 ms y con un
+cambio de **solo** velocidad, que es el único experimento limpio posible.
+
+Consecuencia: la velocidad es la mejor mejora por hora de máquina, y además
+se valida con `banco velocidad` en minutos exigiendo nodos idénticos, en
+vez de en cinco horas de `sprt`. Un 10 % de nps vale ~+22 Elo, más que
+cualquier mejora de evaluación pendiente. Y al revés: una evaluación que
+cueste la mitad de los nps parte con 180 Elo en contra.
+
+**Reserva obligatoria al citarlo**: es a 100 ms y a esta fuerza. La curva se
+aplana con el tiempo, así que a control de torneo vale menos. Es un techo,
+no una constante.
+
 ## Trampas conocidas
 
 - **Con presupuestos de nodos pequeños ningún Vigía agota `go nodes`**, ni
@@ -86,6 +103,16 @@ Al terminar una mejora hay que **actualizar la documentación**: el estado en
   hecho.
 - **`acepta_h0` con `elo0=0, elo1=5` no significa "empeora"**, significa "no
   llega a +5 Elo".
+- **Una tanda que cruza frontera da una cifra sesgada al alza.** Medido en
+  0.28: la misma comparación dio +109,2 Elo parando al cruzar en la pareja
+  46 y **+72,4** con tope fijo y 6.072 parejas. Si la cifra es el objetivo,
+  hace falta una segunda tanda que no pueda pararse sola; cómo se hace, en
+  §7 de `docs/BancoPruebas.md`.
+- **Las jugadas de índice par de `parejas.jsonl` NO son de las blancas.** La
+  primera la hace quien mueve en la posición del libro, y 10.920 de las
+  20.000 de `vigia-20000.epd` tienen negras a mover. Atribuir por paridad
+  mezcla los dos motores y da el resultado tranquilizador de "los dos salen
+  igual". Ya ha mordido dos veces.
 - El harness antiguo `src/bin/selfplay.rs` sigue compilando pero **no sirve
   para aprobar nada**: 16 partidas, ±150–200 Elo de error.
 

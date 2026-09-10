@@ -44,7 +44,14 @@ final recoge el estado y lo que el banco ya ha enseñado.
 
   Nodos **idénticos** en las 12 posiciones en las siete pasadas, que es el
   criterio duro que autoriza a saltarse `sprt`, y en las siete 0.28 salió
-  más rápido: la dirección nunca estuvo en duda, solo la magnitud. En perft puro, que es 100 %
+  más rápido: la dirección nunca estuvo en duda, solo la magnitud.
+
+  **Medida después también como fuerza**, aunque el carril de velocidad no
+  lo exigía: **+72,4 Elo, IC 95 % [+67,3, +77,6]** sobre 12.144 partidas
+  (`028-velocidad-en-elo-estimacion`), con +0,493 plies de profundidad
+  media. Es la mayor ganancia medida del proyecto. Se hizo porque contestaba
+  además una pregunta abierta desde 0.26, y lo que contestó reordena esta
+  lista entera — ver la sección siguiente. En perft puro, que es 100 %
   generación, los dos perft profundos bajan de 0,12–0,14 s a 0,03–0,06 s.
 
   Lo que enseñó y merece copiarse: **medir el techo antes de escribir el
@@ -108,6 +115,42 @@ final recoge el estado y lo que el banco ya ha enseñado.
   ejecutables congelados `../zzRelease/Vigia 0.26.exe` y
   `../zzRelease/Vigia 0.25.exe`.
 
+## Lo que 0.28 cambió sobre cómo se prioriza esta lista
+
+Hasta 0.28 esta lista se ordenaba por Elo esperado. Ahora hay un número
+medido que reordena casi todo (§8.7 del documento técnico):
+
+> **2,26 Elo por cada 1 % de nodos/segundo.** 180 Elo por doblar la
+> velocidad, no los 65 del folclore. Medido a 100 ms con un cambio de solo
+> velocidad, que es el único experimento limpio posible para esto.
+
+Tres consecuencias, y ninguna es menor:
+
+1. **La velocidad pasa a ser la mejor mejora por hora de máquina, con
+   diferencia.** Un 10 % de nodos/segundo vale ~+22 Elo, más que cualquier
+   mejora de evaluación o de poda de esta lista. Y se valida con `banco
+   velocidad` en **minutos**, exigiendo nodos idénticos, en vez de en cinco
+   o seis horas de `sprt` con un desenlace probable de *sin decisión*. La
+   asimetría es brutal: mejor premio, coste de validación mil veces menor y
+   un criterio de aceptación que no admite discusión.
+
+2. **Las mejoras de fuerza de +3/+5 Elo no es que sean difíciles de medir:
+   es que están batidas.** Un 3 % de velocidad las iguala y se comprueba
+   antes de comer. No se descartan, pero dejan de ir primero.
+
+3. **Una evaluación cara parte con una deuda enorme.** Una NNUE que deje
+   los nodos/segundo a la mitad empieza **180 Elo por debajo** antes de
+   evaluar mejor una sola posición. Esto no mata NNUE, pero fija su
+   presupuesto: la red tiene que ser pequeña y con acumulador incremental, o
+   el trato no sale. Es la restricción de diseño más dura que tiene el
+   proyecto por delante.
+
+**La reserva que hay que repetir cada vez que se cite el número**: está
+medido a 100 ms y a esta fuerza. La curva de Elo contra tiempo se aplana, y
+a control de torneo el mismo porcentaje valdrá menos. Los 180 por doblar
+son un techo. Medir un segundo punto a 300 ms es lo más rentable que le
+queda al banco por hacer, y está en su lista de pendientes.
+
 ## Prioridad alta
 
 - **Ponder con presupuesto real** (GPT P1-11, Opus M6). Hoy `go ponder`
@@ -147,20 +190,50 @@ final recoge el estado y lo que el banco ya ha enseñado.
   más lento pero perfectamente viable: un sondeo lee bloques por
   desplazamiento, no la tabla entera.
 
-  **Antes de escribir una sola línea, una medición barata**: contar en
-  `banco/resultados/027-tt-quiescencia/parejas.jsonl` cuántas partidas
-  llegan de verdad a un final de ≤6 piezas *sin* que la adjudicación las
-  haya cortado antes (`resign_cp` 900, tablas a 12 cp desde la jugada 40).
-  Si la respuesta es "pocas", el Elo medible en el banco es pequeño por
-  construcción y la decisión pasa a ser por juego correcto en finales, no
-  por Elo de self-play — que es una decisión legítima, pero distinta y con
-  otro criterio de aceptación.
+  **La medición barata que aquí se proponía ya está hecha**, sobre las
+  12.144 partidas de `028-velocidad-en-elo-estimacion`:
+
+  | cómo terminan las partidas | % |
+  |---|---:|
+  | abandono adjudicado | 70,0 |
+  | repetición triple | 17,1 |
+  | tablas adjudicadas | 6,1 |
+  | material insuficiente | 3,1 |
+  | cincuenta jugadas | 2,3 |
+  | mate | 1,1 |
+  | tope de plies / ahogado | 0,3 |
+
+  **El 70 % de las partidas se corta por abandono adjudicado** y otro 6 %
+  por tablas adjudicadas, así que la inmensa mayoría no llega nunca a un
+  final donde una tabla de 6 piezas cambiaría algo. El Elo medible en este
+  banco es pequeño **por construcción de la adjudicación**, no por falta de
+  valor de la técnica.
+
+  Conclusión: si algún día se hace Syzygy, no se justifica por Elo de
+  autojuego y no se valida con `sprt` — se justifica por juego correcto en
+  finales, y su criterio de aceptación tiene que ser otro (una suite de
+  finales con resultado conocido, por ejemplo). Mientras tanto, hay una
+  alternativa mucho más barata para lo mismo, abajo.
 
   **Efecto sobre el oráculo KPK** (§5 del documento técnico): con Syzygy
   disponible, el oráculo interno de K+P vs K deja de aportar cobertura que
   Syzygy no dé ya. Se mantiene como *fallback* barato para cuando las
   tablas no están montadas (no todo el mundo las tiene), pero deja de ser
   el camino principal para finales simples una vez Syzygy esté integrado.
+
+- **Oráculos de finales básicos por análisis retrógrado** (candidato nuevo
+  de 0.28, alternativa barata a Syzygy). `kpk.rs` ya construye su tabla de
+  K+P contra K por análisis retrógrado, y la técnica se extiende a KQK, KRK
+  y —con más trabajo, porque hay que arrinconar al rey en la esquina del
+  color correcto— KBNK. Tablas pequeñas, autocontenidas, construidas en el
+  propio binario sin depender de 150 GB en disco, y **verificables de forma
+  exhaustiva** porque el dominio entero cabe en memoria.
+
+  Da lo que Syzygy daría en los finales que de verdad aparecen, sin 2.000
+  líneas de decodificador ni un fichero externo. Y mejora las etiquetas de
+  final para un futuro entrenamiento de red, que es donde el conocimiento
+  exacto vale doble. Igual que Syzygy, no se valida con `sprt`: se valida
+  contra el dominio completo, que es una prueba mucho más fuerte.
 
 ## Prioridad media — velocidad, evaluar coste/beneficio
 
@@ -175,6 +248,15 @@ final recoge el estado y lo que el banco ya ha enseñado.
   trabajo que se quiere quitar y ver cuánto tarda de más el mismo árbol.
   Dos compilaciones y dos minutos de una CPU, frente a los varios días que
   cuesta la reestructuración.
+
+  **Pero el listón que tiene que superar bajó mucho con 0.28**: a 2,26 Elo
+  por punto porcentual de nodos/segundo, un 5 % ya vale ~+11 Elo, que es
+  más de lo que promete cualquier mejora de evaluación de esta lista y se
+  comprueba en minutos. Con ese cambio de escala, esto y cualquier otra
+  cosa que dé velocidad vuelven a la cabeza de la cola. Aquí se escribió
+  que el valor de esta mejora bajaba porque el filtro de legalidad pasó del
+  27,9 % al ~2 % del tiempo de nodo; sigue siendo verdad que el pastel es
+  más pequeño, pero cada trozo vale el triple de lo que se creía.
 
   Un aviso para cuando se aborde, porque es un fallo que este motor ya tuvo
   y arregló: `quiescence_inner` distingue hoy "no hay capturas que valga la
@@ -254,10 +336,53 @@ final recoge el estado y lo que el banco ya ha enseñado.
   delante de LMR-sensible-a-la-historia. Cambia nodos, así que se valida
   con `sprt`.
 
-## Fuera de planificación (no aplazado — descartado por ahora, con revisión futura)
+## NNUE — ya no está fuera de planificación (decisión del usuario, 2026-09)
 
-- **NNUE**. El criterio del usuario: hace falta primero un motor HCE de
-  3000+ CCRL antes de plantear NNUE. No se reconsidera hasta llegar ahí.
+El criterio anterior era que hacía falta un HCE de 3000+ CCRL antes de
+plantearlo. **Levantado.** Pasa a ser una opción más, y con el dato de
+0.28 encima de la mesa es probablemente *la* opción. Los datos salen de
+Vigía, no de fuera: es condición del usuario y define el proyecto.
+
+**Por qué no conviene pulir más la HCE antes.** Una red no se entrena
+contra la evaluación estática sino contra la **puntuación de una búsqueda**
+a profundidad 8-10, que contiene conocimiento táctico que la evaluación
+estática no tiene. La primera red no hereda el techo de la HCE: destila
+búsqueda en evaluación, y suele batir ya a la HCE de la que salieron sus
+etiquetas. De ahí el corolario que decide el dilema de "¿mejoro la HCE
+primero para tener mejores datos?": **mejorar la búsqueda sí mejora los
+datos; mejorar la evaluación no, porque la evaluación es justo lo que se
+va a jubilar.**
+
+**El presupuesto, que es la parte dura.** A 2,26 Elo por punto porcentual
+de nodos/segundo, una red que deje la velocidad a la mitad parte con ~180
+Elo en contra. Objetivo de diseño: **que la red no cueste más de un 30 % de
+los nodos/segundo** (≈ −68 Elo de deuda), lo que obliga a red pequeña,
+acumulador incremental y cuantización entera. Sin SIMD explícito, además,
+porque `std::simd` es inestable y aquí no hay dependencias: la red tiene
+que ser lo bastante pequeña para que Rust autovectorizado la mueva.
+
+**Decisiones ya tomadas** (el usuario las delegó explícitamente):
+
+- **Iterar ya, sin pulir más la HCE**, por el razonamiento de arriba.
+- **Entrenador en `tools/nnue/`**, en Python, como ya vive
+  `tools/calibration/`. La *generación* de datos, en cambio, en Rust dentro
+  del banco: son millones de posiciones. El motor sigue con
+  `[dependencies]` vacío — el entrenador no es el motor.
+- **Red empotrada con `include_bytes!`**, no en fichero aparte. Dos
+  razones, y manda la segunda: Vigía siempre ha sido un exe que se copia a
+  un directorio y funciona, y un `.nnue` suelto es un modo de fallo nuevo
+  justo en un torneo; y **la firma de todo experimento del banco incluye el
+  sha del binario**, así que con la red fuera dos tandas podrían ser "el
+  mismo binario" con redes distintas y se rompería en silencio la
+  reproducibilidad sobre la que se apoya el banco entero.
+
+**De Stockfish 19** conviene tomar las ideas baratas —entradas agrupadas
+por casilla de rey, *clipped ReLU*, cuantización int16 en el acumulador e
+int8 en los pesos, actualización incremental, cubos de salida por número de
+piezas— y sobre todo su receta de filtrado de datos, que es media
+victoria: descartar posiciones en jaque, descartar aquellas cuya mejor
+jugada es captura, mezclar puntuación con resultado. Lo que **no** se puede
+tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 
 ## El prerrequisito real: medir — HECHO
 
