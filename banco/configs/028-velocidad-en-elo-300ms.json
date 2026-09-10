@@ -1,0 +1,79 @@
+{
+  "_": "Segundo punto de la curva: el mismo par congelado que",
+  "_2": "028-velocidad-en-elo-estimacion, pero a 300 ms en vez de a 100.",
+
+  "_porque": "A 100 ms el tipo de cambio salio en 180 Elo por doblar la",
+  "_porque_2": "velocidad, y esa cifra viene con una reserva que la limita mucho: la",
+  "_porque_3": "curva de Elo contra tiempo se aplana, y el motor se usa de verdad a",
+  "_porque_4": "control de torneo, no a 100 ms. Con un solo punto no hay curva, hay un",
+  "_porque_5": "punto. Este es el segundo.",
+  "_porque_6": "La pregunta concreta: si el ritmo se mantiene, esta tanda deberia dar",
+  "_porque_7": "otra vez ~+72 Elo; si cae a 120 por doblar, daria ~+48. Son 24 Elo de",
+  "_porque_8": "separacion y el intervalo de 2.000 parejas (~+-8,7) los resuelve de",
+  "_porque_9": "sobra.",
+  "_porque_10": "Y el mecanismo del aplanamiento se puede ver directamente, no solo",
+  "_porque_11": "inferir: a mas profundidad cada ply nuevo cuesta mas nodos, asi que el",
+  "_porque_12": "mismo +32 % de nps deberia comprar MENOS de los +0,493 plies que compro",
+  "_porque_13": "a 100 ms. tools/analiza_tanda.py lo mide.",
+
+  "esquema": 1,
+  "id": "028-velocidad-en-elo-300ms",
+
+  "candidato": {
+    "nombre": "0.28-clavadas",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.27",
+    "ruta": "Release/Vigia 0.27.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla nueva: muestra independiente de las dos tandas de 100 ms.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260912,
+    "barajar": true
+  },
+
+  "_busqueda": "300 ms. Es lo unico que cambia respecto de la tanda de",
+  "_busqueda_2": "estimacion a 100 ms: mismos binarios, mismo libro, mismos workers,",
+  "_busqueda_3": "misma adjudicacion. Un solo grado de libertad, que es lo que hace",
+  "_busqueda_4": "comparables los dos resultados.",
+  "busqueda": { "movetime_ms": 300 },
+
+  "_partidas": "2.000 y no 6.072: a 300 ms cada partida cuesta unas tres veces",
+  "_partidas_2": "mas, asi que 2.000 parejas ya son del orden de cinco horas a 8",
+  "_partidas_3": "workers. El intervalo sale en ~+-8,7 Elo, que basta para la pregunta",
+  "_partidas_4": "que se hace. Si hiciera falta mas resolucion, se abre otra tanda con",
+  "_partidas_5": "semilla nueva; no se amplia esta.",
+  "partidas": {
+    "max_parejas": 2000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Tanda de ESTIMACION otra vez, con la parada secuencial desactivada",
+  "_sprt_2": "por el mismo procedimiento que la de 100 ms: separacion diminuta entre",
+  "_sprt_3": "hipotesis, apoyandose en que el LLR lo mueve la separacion y no la",
+  "_sprt_4": "distancia a la verdad (stats.rs, test identical_hypotheses_give_zero_llr).",
+  "_sprt_5": "Comprobado en la practica: la tanda de 6.072 parejas termino con el LLR",
+  "_sprt_6": "en -0,77 con la verdad 27,6 Elo por debajo del centro. Aqui son menos",
+  "_sprt_7": "parejas, asi que hay aun mas margen. El centro se pone en 50 porque es",
+  "_sprt_8": "lo que se espera si la curva se aplana; da igual, pero se lee mejor.",
+  "sprt": { "elo0": 49.9, "elo1": 50.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/028-velocidad-en-elo-300ms"
+}
