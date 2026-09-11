@@ -19,6 +19,10 @@ path = "src/bin/selfplay.rs"
 name = "banco"
 path = "src/bin/banco/main.rs"
 
+[[bin]]
+name = "generador"
+path = "src/bin/generador.rs"
+
 [profile.release]
 lto = true
 codegen-units = 1

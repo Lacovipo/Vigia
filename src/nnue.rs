@@ -973,4 +973,58 @@ mod tests {
         accumulators.refresh(net, &kpk, 0);
         assert_eq!(accumulators.evaluate_white(net, &kpk, 0), eval::kpk_exact_score(&kpk));
     }
+
+    #[test]
+    fn golden_vector_matches_the_python_forward_pass() {
+        // §7.1 of the plan, crossed in both directions. `generador indices`
+        // wrote the feature indices of every position with this engine's code
+        // (tools/nnue/golden.py checked them against its own implementation:
+        // sense A); golden.py then computed the output sum, the bucket and the
+        // centipawns with its own forward pass over golden-net.bin (sense B).
+        // The engine has to reproduce every one of them exactly, integer for
+        // integer. See golden.py for why that network is random.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools").join("nnue");
+        let read = |name: &str| {
+            std::fs::read(dir.join(name))
+                .unwrap_or_else(|e| panic!("tools/nnue/{name}: {e} (regenerate it with tools/nnue/golden.py)"))
+        };
+        let net = Net::from_bytes(&read("golden-net.bin")).expect("golden-net.bin must load");
+        let data = |bytes: Vec<u8>| -> Vec<String> {
+            String::from_utf8(bytes)
+                .unwrap()
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_owned)
+                .collect()
+        };
+        let positions = data(read("indices.txt"));
+        let expected = data(read("golden.txt"));
+        assert_eq!(positions.len(), expected.len(), "indices.txt and golden.txt must list the same positions");
+        assert!(positions.len() >= 4096, "only {} golden positions", positions.len());
+
+        let mut accumulators = Accumulators::new(1);
+        for (position, golden) in positions.iter().zip(&expected) {
+            let fields: Vec<&str> = position.split('|').collect();
+            let (category, fen) = (fields[0], fields[1]);
+            let board = Board::from_fen(fen).unwrap();
+
+            // indices.txt has to be the current engine's own output. If the
+            // indexing ever changes without regenerating it, this is where it
+            // shows, before sense A on the Python side can go stale unnoticed.
+            for (perspective, listed) in [(Color::White, fields[2]), (Color::Black, fields[3])] {
+                let listed: Vec<usize> = listed.split_whitespace().map(|n| n.parse().unwrap()).collect();
+                assert_eq!(active_features(&board, perspective), listed, "{category}: stale indices.txt for {fen}");
+            }
+
+            let numbers: Vec<i64> = golden.split_whitespace().map(|n| n.parse().unwrap()).collect();
+            accumulators.refresh(&net, &board, 0);
+            let bucket = net.bucket_for(&board);
+            let sum = accumulators.output_sum(&net, 0, board.side_to_move, bucket);
+            assert_eq!(
+                (sum as i64, bucket as i64, divide_rounding(sum) as i64),
+                (numbers[0], numbers[1], numbers[2]),
+                "{category}: {fen} (sum, bucket, cp) disagrees with Python"
+            );
+        }
+    }
 }
