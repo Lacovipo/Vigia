@@ -1,6 +1,7 @@
 # Plan de NNUE de Vigía
 
-**Estado:** decidido. **Versión de partida:** 0.28.0 (`dde715a`). **Base de todas las
+**Estado:** decidido y en ejecución: fase 0 hecha, fase 1 con los criterios 1–3 cumplidos
+(seguimiento en `docs/MejorasPendientes.md`). **Versión de partida:** 0.28.0 (`dde715a`). **Base de todas las
 comparaciones:** `Release/Vigia 0.28.exe` congelada.
 
 Las referencias a línea concreta son de 0.28 y se moverán; el nombre de la función es lo
@@ -825,7 +826,12 @@ la inferencia, la cuantización, el vector dorado en los dos sentidos, `uci eval
    evaluación medida (derivada del nps y del reparto) tiene que caer **entre 92 y 172
    ns/nodo**, es decir ±30 % de los 131,9 previstos. *Los nodos NO serán idénticos —la
    evaluación ha cambiado—, así que aquí solo se lee la línea de nps.*
-4. Una tanda corta de **256 parejas** contra 0.28 (`nodos: 25000`, 4 workers, sin parada
+
+   **Corrección tras ejecutarlo: así no se puede.** Con la red de material, el árbol a
+   profundidad 12 tiene la mitad de nodos que el de la HCE, y restar tiempos por nodo
+   entre árboles distintos da una ruta de evaluación negativa. La forma buena es duplicar
+   a propósito `evaluate` y `push` con nodos idénticos: ≈ 87 ns/nodo, criterio cumplido.
+4. Una tanda corta de **256 parejas** contra 0.28 (`nodos: 50000` —no 25.000, que dispara el guardián del banco—, 4 workers, sin parada
    secuencial, `sprt: {elo0: 99.9, elo1: 100.1, alpha: 0.001, beta: 0.001}` como en
    `028-velocidad-en-elo-estimacion.json`): el intervalo de Elo tiene que quedar **entero
    por debajo de −150**, sin una sola jugada ilegal, sin pérdidas por tiempo y sin

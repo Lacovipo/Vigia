@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 356 tests (226 motor, 122 banco, 8 harness viejo)
+cargo test --release                   # 374 tests (247 motor, 119 banco, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -55,6 +55,7 @@ minutos. A 25.000 nodos, unos 4.
 | `docs/Documentacion_tecnica.md` | estado actual del motor, módulo a módulo |
 | `docs/MejorasPendientes.md` | qué hacer a continuación, priorizado, con cómo validar cada cosa |
 | `docs/Descartados.md` | propuestas rechazadas y por qué (no volver a proponerlas) |
+| `docs/PlanNNUE.md` | el plan de la red NNUE, por fases, cada una con su criterio de aceptación |
 | `docs/_Info_humano.md` | recursos externos que el usuario pone a disposición. **Solo local**: no se publica porque lleva rutas de su equipo |
 
 Al terminar una mejora hay que **actualizar la documentación**: el estado en
@@ -116,6 +117,15 @@ de nodos/segundo compra ~0,52 plies.
   20.000 de `vigia-20000.epd` tienen negras a mover. Atribuir por paridad
   mezcla los dos motores y da el resultado tranquilizador de "los dos salen
   igual". Ya ha mordido dos veces.
+- **La red NNUE va apagada por defecto** (opción UCI `UseNNUE`), y la empotrada
+  hoy solo cuenta material: no es para jugar. `banco velocidad` la enciende con
+  `--uci UseNNUE=true`. Y el coste de la evaluación **no se saca restando nps
+  entre red y HCE**, porque los árboles son distintos (llega a salir negativo);
+  se saca duplicando la llamada con nodos idénticos.
+- **El ensamblador de la biblioteca sola engaña.** `cargo rustc --release --lib
+  -- --emit asm` saca `nnue.rs` completamente escalar, porque con `lto = true`
+  la vectorización ocurre al enlazar. Para comprobar las reglas R1–R3 de la red
+  hay que mirar el del binario (`--bin vigia`, fichero `deps/vigia.s`).
 - El harness antiguo `src/bin/selfplay.rs` sigue compilando pero **no sirve
   para aprobar nada**: 16 partidas, ±150–200 Elo de error.
 

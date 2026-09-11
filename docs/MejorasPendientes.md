@@ -389,6 +389,37 @@ victoria: descartar posiciones en jaque, descartar aquellas cuya mejor
 jugada es captura, mezclar puntuación con resultado. Lo que **no** se puede
 tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 
+### Estado de la NNUE
+
+| fase | estado |
+|---|---|
+| 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
+| 1 — cerrar el bucle con la red de material | criterios 1–3 **cumplidos**; el 4 **pendiente** de CPUs |
+| 2 — generador y corpus | pendiente |
+| 3 — entrenar, cuantizar y exportar | pendiente |
+| 4 a 7 | pendientes |
+
+La fase 1, criterio a criterio:
+
+1. **Tests y clippy**: 374 tests en verde y 0 avisos.
+2. **Vector dorado en los dos sentidos**: 4.096 posiciones, idéntico entero a
+   entero, con los 8 cubos de salida y todos los números de piezas de 2 a 32
+   representados.
+3. **Coste de la ruta de evaluación**: ≈ 87 ns por nodo, por debajo de la banda
+   de 92–172 del plan, del lado bueno. Medido con el método correcto y no con el
+   que escribía el plan (ver §4 de `BancoPruebas.md`: restar nps entre árboles
+   distintos no aísla nada). La vectorización está comprobada en el binario con
+   LTO.
+4. **Pendiente**: 256 parejas contra 0.28, con
+   `banco/configs/028-nnue-fase1-material.json`. Criterio decidido antes de
+   jugar: intervalo de Elo entero por debajo de −150, sin jugadas ilegales ni
+   desconexiones. A 50.000 nodos y no a los 25.000 del plan, que disparan el
+   guardián del banco.
+
+Dos correcciones al plan salieron por el camino y quedan anotadas en él: el
+criterio 3 no puede derivarse del nps, y el criterio 4 no puede ir a 25.000
+nodos.
+
 ## El prerrequisito real: medir — HECHO
 
 Los tres informes de 0.25.0 convergieron en que el punto más débil del

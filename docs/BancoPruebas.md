@@ -320,6 +320,42 @@ divergencia parezca inofensiva.
 
 ---
 
+### Medir la red NNUE: `--uci`, y lo que no se puede comparar
+
+La red va apagada por defecto, así que `banco velocidad` la mide con la opción
+que se añadió para eso:
+
+```bash
+./target/release/banco.exe velocidad --motor target/release/vigia.exe \
+  --profundidad 12 --hash 32 --hilos 1 --uci UseNNUE=true
+```
+
+`--uci Nombre=valor,...` se pasa a los dos motores, y uno que no conozca la
+opción la ignora. `Hash` y `Threads` se rechazan ahí: van con `--hash` y
+`--hilos`, para que no haya dos formas de fijar lo mismo.
+
+**Lo que NO se puede hacer: sacar el coste de la evaluación restando nps entre
+la red y la HCE.** Con la red de material de la fase 1, en el mismo binario, la
+red da +63 % de nodos/segundo; pero a profundidad 12 su árbol tiene la mitad de
+nodos que el de la HCE (2,67 M frente a 5,65 M) y otra forma, y el tiempo por
+nodo de dos árboles distintos no es comparable: restándolo sale una ruta de
+evaluación *negativa*, que es imposible. El criterio 3 de la fase 1 del plan
+pedía exactamente eso, una cifra "derivada del nps", y deja de funcionar en
+cuanto la evaluación cambia el árbol.
+
+Lo que sí funciona es el truco de siempre, con el árbol fijo: duplicar a
+propósito la llamada que se quiere medir (`evaluate` bajo `black_box`, o `push`
+dos veces seguidas), exigir **nodos idénticos** en todos los binarios y leer la
+diferencia de tiempo como coste puro. Así salieron los 43,1 + 43,6 ≈ 87 ns por
+nodo de la red.
+
+**Y antes de cada SPRT de la red, `banco velocidad` como guardián.** No para
+aprobar nada —los nodos cambian—, sino contra la desvectorización silenciosa:
+un `if` dentro del bucle, un *bounds check* que no se elimine o una subida de
+rustc pueden multiplicar el coste por cuatro sin que falle un solo test. Si el
+nps de la red cae sin motivo, se mira el ensamblador del binario, con la trampa
+que cuenta §4 de `docs/Documentacion_tecnica.md`.
+
 ## 5. `banco epd` — no-regresión táctica
 
 ```bash
@@ -787,12 +823,15 @@ desde los resultados) cada vez que se lee.
 | qué se comprobó | resultado |
 |---|---|
 | `banco velocidad` de 0.28 (legalidad por clavadas) contra 0.27 | nodos idénticos en las 12 posiciones; +29,7 / +34,1 / +32,5 % de nps con la máquina en reposo |
+| red NNUE apagada contra 0.28 | nodos idénticos en las 12 posiciones, −0,8 % de nps: la integración no toca la HCE |
+| coste de la ruta de evaluación de la red, duplicando `evaluate` y `push` | 43,1 + 43,6 ≈ 87 ns por nodo, con nodos idénticos en los 9 binarios |
+| vector dorado de la red, Rust contra Python | 4.096 posiciones: índices y pasada hacia delante idénticos entero a entero |
 | A/A determinista (`banco humo`, 8 parejas, 20.000 nodos) | pentanomial `[0,0,8,0,0]`, 0,00 Elo exacto |
 | Misma tanda A/A con 1 worker y con 4 | ficheros de partidas byte a byte idénticos |
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 356 tests (226 motor + 122 banco + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 374 tests (247 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 

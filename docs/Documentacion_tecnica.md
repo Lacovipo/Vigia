@@ -512,6 +512,106 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 ---
 
+### La red NNUE (`nnue.rs`) — integrada, apagada por defecto
+
+Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
+argumentada en `docs/PlanNNUE.md`. Va **apagada por defecto**
+(`setoption name UseNNUE value true` la enciende) y la red empotrada todavía es
+la de la fase 1 del plan: **construida a mano, sin entrenar, que solo cuenta
+material**. No es para jugar. Es para demostrar que el bucle entero funciona
+antes de gastar una hora en generar datos.
+
+**La arquitectura.** `772 → 2×256 → 1`: 768 rasgos planos de pieza y casilla
+vistos desde cada bando —propia o ajena, con la casilla espejada para las
+negras— más los 4 derechos de enroque; un acumulador `i16` por perspectiva;
+SCReLU cuantizada (`clamp(a, 0, 127)² >> 4`); y una capa de salida troceada en
+8 cubos por número de piezas, con el mapa de cubos en la cabecera del fichero.
+201.992 parámetros y 404.128 bytes, empotrados con `include_bytes!`.
+
+**La invariante que lo sostiene todo:** ningún rasgo depende de más de una
+pieza, así que una jugada cambia como mucho un puñado de rasgos y el acumulador
+**nunca se reconstruye durante una búsqueda**. Una jugada de rey cuesta lo mismo
+que una de peón. El único refresco completo es en la raíz, una vez por hilo.
+
+**Qué se conserva de la HCE**, porque es exacto y barato: el oráculo KPK
+*delante* de la red y la regla de material insuficiente *detrás* (escala 0).
+Los tres amortiguadores de final (4/64, 12/64 y 16/64) van **desactivados** con
+la red (`ENDGAME_DAMPERS`): se calibraron contra los errores de la HCE, y
+activarlos es un experimento propio (fase 6 del plan).
+
+**Dónde vive el estado.** En el `Context` de cada hilo, nunca en `Board`, y
+como un array de acumuladores indexado por ply, no como una pila. La ranura
+`ply+1` se escribe siempre desde la `ply` y la jugada que se va a hacer, así
+que no hay nada que deshacer y `unmake_move` no se entera de que existe una
+red. `push` va **justo antes de cada `make_move`** (raíz, negamax,
+quiescencia) y `copy_parent` antes del movimiento nulo: una vez por jugada,
+nunca una vez por llamada recursiva, porque una sola jugada alimenta hasta tres
+`negamax` (el scout de LMR y sus dos re-búsquedas).
+
+#### Las tres reglas de escritura
+
+**No son estilo.** Valen entre un 60 % y un 400 % de la velocidad de la
+evaluación, están medidas (§4.5 del plan) y **una refactorización que rompa
+cualquiera de ellas no hace fallar ni un solo test funcional**:
+
+- **R1.** Los bucles del acumulador se escriben con `zip` de iteradores, nunca
+  con índices, y la copia del padre al hijo va fundida con la primera
+  actualización.
+- **R2.** `HIDDEN` es constante de compilación y las rebanadas son
+  `&[i16; HIDDEN]`, no `&[i16]`, para que LLVM conozca la longitud.
+- **R3.** La reducción de salida se escribe `sum += (t as i32) * (w as i32)` con
+  `t` y `w` en `i16`: ese patrón exacto se convierte en `pmaddwd`. Con los
+  operandos ya en `i32` saldría `pmulld`, que es SSE4.1, y este binario no lo
+  tiene: LLVM lo emularía con `pmuludq` a tres o cuatro veces el coste.
+
+**Comprobado en el binario de verdad.** `push` usa `paddw` y `psubw` (128 y 448
+instrucciones), `refresh` usa `paddw` (320), y la salida de `evaluate_white`
+es exactamente `pmaxsw`/`pminsw` (el clamp), `pmullw` (el cuadrado) y `pmaddwd`
+(el producto escalar). **Cero `pmuludq`** en todo el binario.
+
+**Y una trampa en cómo comprobarlo.** El ensamblador que emite la *biblioteca*
+sola (`cargo rustc --release --lib -- --emit asm`) sale **completamente
+escalar**: `push` y `refresh` sin una sola instrucción `xmm`, sumando con
+`addw` elemento a elemento. Parece una desvectorización y no lo es: con
+`lto = true` la optimización que cuenta ocurre al enlazar, y esa sí vectoriza.
+Para comprobar R1–R3 hay que mirar el del **binario**:
+
+```bash
+CARGO_TARGET_DIR=<directorio aparte> cargo rustc --release --bin vigia -- --emit asm
+# el fichero queda en <directorio>/release/deps/vigia.s, sin sufijo
+```
+
+#### Cómo se evita que se rompa en silencio
+
+Todo dentro de `cargo test --release`:
+
+| test | qué atrapa |
+|---|---|
+| el cargador | cabecera contra la arquitectura compilada, sha256 de los pesos y las cotas de desbordamiento T1 (acumulador) y T2 (salida), comprobadas **al cargar** |
+| `the_incremental_accumulator_matches_a_refresh_at_every_node` | cualquier delta o signo erróneo, en cada nodo de árboles completos con enroque, al paso, promociones y torres capturadas en su esquina |
+| `the_evaluation_is_antisymmetric_under_a_colour_flip` | orientación de la perspectiva, propia/ajena, enroque y redondeo. Con una red aleatoria, porque se cumple para cualquier peso |
+| `the_material_network_scores_material_exactly_as_computed_by_hand` | la red empotrada contra la cuenta a mano, rehecha en Rust |
+| `golden_vector_matches_the_python_forward_pass` | **un desacuerdo entre Rust y Python**, el fallo que ningún otro test ve: 4.096 posiciones cuyos índices escribió Rust y comprobó Python (sentido A), y cuya pasada hacia delante calculó Python y reproduce el motor entero a entero (sentido B) |
+| `a_search_with_the_network_keeps_every_accumulator_in_step_with_the_board` | un `push` que falte en cualquiera de los cuatro enganches: en builds de test, **cada evaluación** de la búsqueda compara el acumulador con un refresco |
+
+#### Medido
+
+- **Con la red apagada, la búsqueda es exactamente la de 0.28**: nodos
+  idénticos en las 12 posiciones de `banco velocidad`, y −0,8 % de nps, que es
+  ruido.
+- **La ruta de evaluación de la red cuesta ≈ 87 ns por nodo** (43,1 de
+  `evaluate` y 43,6 de `push`), frente a ~248 de la HCE en la misma máquina.
+  Medido duplicando a propósito cada una de las dos llamadas, con nodos
+  idénticos en los tres binarios. Es un **suelo**, porque la segunda llamada
+  encuentra la caché caliente. El plan presupuestaba 131,9.
+- La red de material da **+63 % de nps** sobre la HCE en el mismo binario, pero
+  esa cifra **no mide el coste de la evaluación**: a profundidad 12 su árbol
+  tiene la mitad de nodos (2,67 M frente a 5,65 M) y otra forma, y restar
+  tiempos por nodo entre árboles distintos llega a dar costes negativos. Ver
+  §4 de `docs/BancoPruebas.md`.
+
+---
+
 ## 5. Oráculo Rey+Peón vs Rey (`kpk.rs`)
 
 Tablebase exacta para K+P vs K, autocontenida (solo depende de
@@ -1342,7 +1442,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 226 del motor + 122 del banco + 8 del harness antiguo
+cargo test --release              # 247 del motor + 119 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

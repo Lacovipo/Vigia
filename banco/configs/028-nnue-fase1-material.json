@@ -1,0 +1,69 @@
+{
+  "_": "Fase 1 de docs/PlanNNUE.md, criterio 4: la red de solo material contra",
+  "_2": "0.28. No es una prueba de fuerza, es la prueba de que el bucle entero",
+  "_3": "juega partidas de verdad sin romperse.",
+
+  "_criterio": "La red de la fase 1 solo cuenta material, con un peon a 128 cp",
+  "_criterio_2": "y sin saber nada de posicion, asi que TIENE que perder, y mucho: el",
+  "_criterio_3": "intervalo de Elo debe quedar entero por debajo de -150, sin una sola",
+  "_criterio_4": "jugada ilegal, sin perdidas por tiempo y sin desconexiones. Si empata",
+  "_criterio_5": "o gana, hay un fallo en algun sitio y se busca antes de seguir. Y se",
+  "_criterio_6": "decide asi, ANTES de jugar.",
+
+  "esquema": 1,
+  "id": "028-nnue-fase1-material",
+
+  "_binario": "Copia congelada del binario del commit que integra la red",
+  "_binario_2": "(514df20 y el vector dorado encima). La ruta es del scratchpad de la",
+  "_binario_3": "sesion y desaparecera: el manifiesto guarda su sha256, que es lo que",
+  "_binario_4": "identifica lo medido. Mismo precedente que 027-tt-quiescencia-largo.",
+
+  "candidato": {
+    "nombre": "0.28-red-material",
+    "ruta": "C:/Users/JOSECA~1/AppData/Local/Temp/claude/D--IA-Ajedrez-Claude/ab638e30-6c9b-43b8-8581-23ddd5df1955/scratchpad/vigia-fase1.exe",
+    "opciones": { "Hash": 32, "Threads": 1, "UseNNUE": true }
+  },
+
+  "base": {
+    "nombre": "0.28",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260913,
+    "barajar": true
+  },
+
+  "_busqueda": "Por nodos, como pide el plan, porque aqui interesa que el",
+  "_busqueda_2": "resultado no dependa de la carga de la maquina. Pero 50.000 y no los",
+  "_busqueda_3": "25.000 que dice el plan: con 25.000 el guardian del banco aborta, porque",
+  "_busqueda_4": "0.28 se planta en 8.310 nodos desde la inicial (33 %). Es el mismo",
+  "_busqueda_5": "defecto que se corrigio en banco humo en 0.28; a partir de 30.000 pasa.",
+  "busqueda": { "nodos": 50000 },
+
+  "_partidas": "256 parejas con 4 workers = 4 CPUs.",
+  "partidas": {
+    "max_parejas": 256,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Tanda de estimacion con la parada desactivada, igual que",
+  "_sprt_2": "028-velocidad-en-elo-estimacion: el criterio es sobre el intervalo",
+  "_sprt_3": "al terminar las 256 parejas, no sobre un veredicto secuencial.",
+  "sprt": { "elo0": -150.1, "elo1": -149.9, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/028-nnue-fase1-material"
+}
