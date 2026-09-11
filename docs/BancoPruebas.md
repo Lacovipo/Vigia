@@ -846,6 +846,7 @@ desde los resultados) cada vez que se lee.
 | `028-velocidad-en-elo` | 0.28 vs 0.27 | `movetime` 100 ms | 46 parejas: **`acepta_h1`** con H1=+60 frente a H0=+20; +109,2 Elo (sesgado) |
 | `028-velocidad-en-elo-estimacion` | 0.28 vs 0.27 | `movetime` 100 ms | 6.072 parejas, tope fijo: **+72,4 Elo** [+67,3, +77,6], +0,493 plies |
 | `028-velocidad-en-elo-300ms` | 0.28 vs 0.27 | `movetime` 300 ms | 2.000 parejas, tope fijo: **+69,1 Elo** [+60,6, +77,7], +0,553 plies |
+| `028-nnue-fase1-material` | red de solo material vs 0.28 | 50.000 nodos | 256 parejas, tope fijo: **−236,4 Elo** [−271,7, −204,9], ni una partida anómala. Fase 1 del plan de NNUE: tenía que perder por más de 150 |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba

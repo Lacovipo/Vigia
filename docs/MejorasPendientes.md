@@ -394,7 +394,7 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | fase | estado |
 |---|---|
 | 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
-| 1 — cerrar el bucle con la red de material | criterios 1–3 **cumplidos**; el 4 **pendiente** de CPUs |
+| 1 — cerrar el bucle con la red de material | **hecha**: los cuatro criterios cumplidos |
 | 2 — generador y corpus | pendiente |
 | 3 — entrenar, cuantizar y exportar | pendiente |
 | 4 a 7 | pendientes |
@@ -410,11 +410,17 @@ La fase 1, criterio a criterio:
    que escribía el plan (ver §4 de `BancoPruebas.md`: restar nps entre árboles
    distintos no aísla nada). La vectorización está comprobada en el binario con
    LTO.
-4. **Pendiente**: 256 parejas contra 0.28, con
-   `banco/configs/028-nnue-fase1-material.json`. Criterio decidido antes de
-   jugar: intervalo de Elo entero por debajo de −150, sin jugadas ilegales ni
-   desconexiones. A 50.000 nodos y no a los 25.000 del plan, que disparan el
-   guardián del banco.
+4. **Cumplido**: 256 parejas contra 0.28 (`028-nnue-fase1-material`, 50.000
+   nodos). **−236,4 Elo, IC 95 % [−271,7, −204,9]**: el intervalo entero por
+   debajo de −150, que era el criterio decidido antes de jugar. Y en 512
+   partidas ni una jugada ilegal, ni una pérdida por tiempo, ni una
+   desconexión: todas terminan por mate, tablas o adjudicación. A 50.000
+   nodos y no a los 25.000 del plan, que disparan el guardián del banco.
+
+   Un dato de propina: a igualdad de nodos la red de material busca **0,91
+   plies más hondo** que la HCE (9,93 frente a 9,03). Su evaluación plana corta
+   mucho más y su árbol es otro, que es la misma razón por la que comparar nps
+   entre las dos no mide el coste de la evaluación.
 
 Dos correcciones al plan salieron por el camino y quedan anotadas en él: el
 criterio 3 no puede derivarse del nps, y el criterio 4 no puede ir a 25.000
@@ -440,7 +446,9 @@ puntos que se habían identificado están cubiertos:
    dan partidas idénticas.
 3. ~~Libro de aperturas más ancho~~ → `banco/libros/vigia-256.epd`, 256
    posiciones equilibradas y deduplicadas, generadas con `banco libro` a
-   partir de un libro Polyglot y reproducibles desde su semilla.
+   partir de `C:/JC/Books/gm2001.epd` y reproducibles desde su semilla. Aquí
+   ponía "a partir de un libro Polyglot" y era falso: lo desmiente la cabecera
+   del propio libro, y `banco libro` solo lee EPD.
 4. ~~Salida PGN~~ → `partidas.pgn` en SAN, con puntuación y profundidad por
    jugada, para clasificar las derrotas en vez de solo contarlas.
 

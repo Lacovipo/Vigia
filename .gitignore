@@ -14,3 +14,11 @@ __pycache__/
 # Notas del usuario con rutas locales de su equipo: se consultan en local,
 # no se publican.
 /docs/_Info_humano.md
+
+# Ejecutables congelados de cada versión. Son artefactos: pesan, se
+# reconstruyen desde su etiqueta de git, y los manifiestos del banco ya
+# guardan el sha256 del que usó cada experimento.
+/Release/
+
+# Artefacto de Windows y OneDrive.
+desktop.ini

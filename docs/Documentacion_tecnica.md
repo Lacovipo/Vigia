@@ -27,44 +27,59 @@ referencia, no un sustituto.
 ## 1. Estructura del proyecto
 
 ```
-Cargo.toml          # crate "vigia", lib + 3 binarios, sin dependencias
+Cargo.toml          # crate "vigia", lib + 4 binarios, sin dependencias
 src/
   lib.rs             # re-exporta todos los módulos como pub mod
   main.rs            # fn main() { vigia::uci::run(); }  — el motor real
   types.rs           # Color, PieceType, Square, CastlingRights, Move, MoveFlag
-  bitboard.rs         # Bitboard(u64) + operaciones e iterador
+  bitboard.rs        # Bitboard(u64) + operaciones e iterador
   board.rs           # Board, FEN, make/unmake, hash Zobrist incremental
-  zobrist.rs          # claves Zobrist generadas en tiempo de compilación
-  movegen.rs           # generación de jugadas, gives_check, SEE, perft
-  magic.rs             # magic bitboards: ataques deslizantes por tabla
-  eval.rs              # evaluación (HCE, tapered), 2384 líneas
-  kpk.rs               # oráculo exacto Rey+Peón vs Rey
-  search.rs             # búsqueda: PVS/negamax, TT, poda, Lazy SMP
-  uci.rs                # protocolo UCI + comando extra "eval"
-  bin/selfplay.rs        # harness antiguo de autojuego (superado, ver §8)
-  bin/banco/              # banco de pruebas: SPRT, velocidad, EPD (ver §8)
+  zobrist.rs         # claves Zobrist generadas en tiempo de compilación
+  movegen.rs         # generación de jugadas, legalidad por clavadas, gives_check, SEE, perft
+  magic.rs           # magic bitboards: ataques deslizantes por tabla
+  eval.rs            # evaluación clásica (HCE, tapered), 2384 líneas
+  nnue.rs            # red NNUE Atalaya-256: cargador, acumulador e inferencia (§4)
+  kpk.rs             # oráculo exacto Rey+Peón vs Rey
+  search.rs          # búsqueda: PVS/negamax, TT, poda, Lazy SMP
+  sha256.rs          # SHA-256 sin dependencias: manifiestos del banco y cabecera de la red
+  uci.rs             # protocolo UCI + comando extra "eval"
+  bin/selfplay.rs    # harness antiguo de autojuego (superado, ver §8)
+  bin/banco/         # banco de pruebas: SPRT, velocidad, EPD (ver §8)
+  bin/generador.rs   # datos de la red NNUE; hoy, los índices del vector dorado
+nets/
+  material-256.bin   # la red empotrada: la de la fase 1, solo material, sin entrenar
 banco/
-  configs/                 # configuraciones de experimento (JSON)
-  libros/                   # libros de aperturas versionados
-  resultados/                # salidas de las tandas (fuera del repositorio)
-tools/calibration/            # pipeline Python de calibración del eval (ver §9)
-docs/                       # esta documentación + revisiones externas Rev_*.md
-../zzRelease/                 # binarios .exe congelados por versión, FUERA del repositorio
-book/komodo.bin                 # libro polyglot para GUIs externos (sin uso en código)
+  configs/           # configuraciones de experimento (JSON)
+  libros/            # libros de aperturas, versionados y congelados
+  resultados/        # salidas de las tandas (fuera del repositorio)
+tools/calibration/   # pipeline Python de calibración del eval (ver §9)
+tools/nnue/          # formato de la red, red de material y vector dorado (Python)
+tools/analiza_tanda.py  # profundidad por motor y finales de una tanda del banco
+docs/                # esta documentación y el plan de la red (PlanNNUE.md)
+Release/             # ejecutables congelados por versión, ignorados por git
 ```
 
 `lib.rs` existe para que `main.rs` (el binario UCI), `bin/banco/` (el
-banco de pruebas) y `bin/selfplay.rs` (el harness antiguo) reutilicen
+banco de pruebas), `bin/generador.rs` (los datos de la red) y
+`bin/selfplay.rs` (el harness antiguo) reutilicen
 exactamente las mismas reglas de tablero/generación/búsqueda/evaluación sin
 duplicar código. Que el árbitro del banco use el generador de jugadas del
 propio motor tiene una contrapartida asumida —un fallo en `movegen` lo
 tendría también el árbitro— y una ventaja demostrada: hubo tres copias
 distintas de la regla de material insuficiente y llegaron a discrepar.
 
-**Versionado:** no se usan tags de git; el histórico real de versiones
-se lleva con ejecutables numerados en `../zzRelease/`, hermana del repositorio
-y no versionada (comparte carpeta con los motores rivales). Cada versión publicada
-corresponde a un commit con mensaje `X.Y.Z: descripción`.
+**Versionado:** cada versión publicada es un commit `X.Y.Z: descripción`
+con su etiqueta de git (de `0.18` a `0.28`; no hay `0.23` porque es anterior
+a la mudanza del repositorio), y su ejecutable congelado va a `Release/`,
+que git ignora: se reconstruye desde la etiqueta, y cada manifiesto del banco
+guarda el sha256 del que se usó.
+
+Esta sección estaba caducada en cinco puntos y se corrigió en 0.28: decía que
+no se usaban etiquetas (se dejaron de poner en 0.22 y se completaron en 0.28),
+que los ejecutables vivían en `../zzRelease/` (ya no existe), que había un
+`book/komodo.bin` (no está ni en disco ni en la historia de git), que `docs/`
+contenía revisiones externas `Rev_*.md` (no están; §9 y §10 las siguen
+citando), y contaba tres binarios.
 
 ---
 
@@ -609,6 +624,10 @@ Todo dentro de `cargo test --release`:
   tiene la mitad de nodos (2,67 M frente a 5,65 M) y otra forma, y restar
   tiempos por nodo entre árboles distintos llega a dar costes negativos. Ver
   §4 de `docs/BancoPruebas.md`.
+- **Juega partidas de verdad sin romperse**: 256 parejas de la red de
+  material contra 0.28 dieron −236,4 Elo [−271,7, −204,9], que es lo que
+  tenía que dar una red que solo cuenta material, y en 512 partidas ni una
+  jugada ilegal ni una desconexión (`028-nnue-fase1-material`).
 
 ---
 

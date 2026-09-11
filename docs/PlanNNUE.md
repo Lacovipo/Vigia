@@ -1,7 +1,7 @@
 # Plan de NNUE de Vigía
 
-**Estado:** decidido y en ejecución: fase 0 hecha, fase 1 con los criterios 1–3 cumplidos
-(seguimiento en `docs/MejorasPendientes.md`). **Versión de partida:** 0.28.0 (`dde715a`). **Base de todas las
+**Estado:** decidido y en ejecución: fases 0 y 1 hechas (seguimiento en
+`docs/MejorasPendientes.md`). **Versión de partida:** 0.28.0 (`dde715a`). **Base de todas las
 comparaciones:** `Release/Vigia 0.28.exe` congelada.
 
 Las referencias a línea concreta son de 0.28 y se moverán; el nombre de la función es lo
@@ -837,6 +837,9 @@ la inferencia, la cuantización, el vector dorado en los dos sentidos, `uci eval
    por debajo de −150**, sin una sola jugada ilegal, sin pérdidas por tiempo y sin
    desconexiones. Una red de solo material tiene que perder mucho; si empata o gana, hay un
    bug en algún sitio y hay que encontrarlo antes de seguir.
+
+   **Resultado:** −236,4 Elo, IC 95 % [−271,7, −204,9], en 512 partidas sin una sola
+   anomalía (`028-nnue-fase1-material`). Criterio cumplido.
 
 **Si el criterio 3 falla por abajo** (la evaluación cuesta más de 172 ns/nodo), se para
 aquí: es el riesgo de caché materializándose, y se resuelve antes de generar un solo dato.
