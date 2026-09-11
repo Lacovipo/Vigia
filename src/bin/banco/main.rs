@@ -29,7 +29,10 @@ mod motor;
 mod pgn;
 mod run;
 mod san;
-mod sha256;
+// SHA-256 vive en la biblioteca desde 0.28: el cargador de la red NNUE
+// verifica con ella la cabecera del fichero empotrado, y una segunda copia
+// en el banco sería exactamente el tipo de duplicado que diverge.
+use vigia::sha256;
 mod stats;
 mod velocidad;
 
@@ -49,7 +52,9 @@ USO
   banco informe   --run <directorio>
   banco humo      --motor <exe> [--libro <epd>] [--parejas N] [--nodos N] [--salida <dir>]
   banco velocidad --motor <exe> [--contra <exe>] [--profundidad N] [--hash MB] [--hilos N]
+                  [--uci Nombre=valor,...]
   banco epd       --fichero <suite.epd> --motor <exe> [--movetime N | --nodos N] [--hash MB]
+                  [--uci Nombre=valor,...]
   banco libro     --fuente <origen.epd> --salida <libro.epd>
                   [--n N] [--semilla N] [--max-cp N] [--min-jugada N] [--max-jugada N]
                   [--min-piezas N]
@@ -177,10 +182,39 @@ impl Args {
 }
 
 fn opciones_uci(args: &Args) -> Result<Vec<(String, String)>, String> {
-    Ok(vec![
+    let mut opciones = vec![
         ("Hash".to_string(), args.numero("hash", 32)?.to_string()),
         ("Threads".to_string(), args.numero("hilos", 1)?.to_string()),
-    ])
+    ];
+    if let Some(lista) = args.opcional("uci") {
+        opciones.extend(parsear_opciones_uci(lista)?);
+    }
+    Ok(opciones)
+}
+
+/// `--uci "UseNNUE=true,Variety=false"`: cualquier otra opción UCI.
+///
+/// Existe para medir la red NNUE con el MISMO binario que la HCE, que es el
+/// A/B más limpio posible: mientras la red no esté aprobada va apagada por
+/// defecto, y sin esto `banco velocidad` no tendría forma de encenderla.
+/// `Hash` y `Threads` se rechazan aquí para que no haya dos formas de fijar
+/// lo mismo con un resultado que dependa de cuál de las dos gane.
+fn parsear_opciones_uci(lista: &str) -> Result<Vec<(String, String)>, String> {
+    let mut opciones = Vec::new();
+    for par in lista.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (nombre, valor) = par
+            .split_once('=')
+            .ok_or_else(|| format!("'--uci {par}': se esperaba Nombre=valor"))?;
+        let (nombre, valor) = (nombre.trim(), valor.trim());
+        if nombre.is_empty() {
+            return Err(format!("'--uci {par}': falta el nombre de la opción"));
+        }
+        if nombre.eq_ignore_ascii_case("Hash") || nombre.eq_ignore_ascii_case("Threads") {
+            return Err(format!("'--uci {par}': Hash y Threads se fijan con --hash y --hilos"));
+        }
+        opciones.push((nombre.to_string(), valor.to_string()));
+    }
+    Ok(opciones)
 }
 
 // --------------------------------------------------------------------- sprt
@@ -434,4 +468,29 @@ fn cmd_libro(args: &Args) -> Result<ExitCode, String> {
         .map_err(|e| format!("no se pudo escribir '{}': {e}", salida.display()))?;
     println!("Escrito {} con {} posiciones.", salida.display(), aceptadas.len());
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn las_opciones_uci_extra_se_leen_como_pares_nombre_valor() {
+        let opciones = parsear_opciones_uci(" UseNNUE=true , Variety = false,").unwrap();
+        assert_eq!(
+            opciones,
+            vec![
+                ("UseNNUE".to_string(), "true".to_string()),
+                ("Variety".to_string(), "false".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn las_opciones_uci_mal_formadas_o_que_duplican_hash_se_rechazan() {
+        assert!(parsear_opciones_uci("UseNNUE").is_err());
+        assert!(parsear_opciones_uci("=true").is_err());
+        assert!(parsear_opciones_uci("Hash=64").is_err());
+        assert!(parsear_opciones_uci("threads=4").is_err());
+    }
 }

@@ -1,0 +1,18 @@
+# Ficheros cuyo sha256 forma parte de un contrato, y que por tanto tienen que
+# ser los mismos bytes en cualquier clon.
+#
+# El repositorio tiene core.autocrlf=true. Sin estas lineas, un clon nuevo en
+# Windows convertiria los libros a CRLF y cambiaria su sha256 sin que nadie
+# tocara una sola posicion; y el sha del libro entra en la firma de todo
+# experimento del banco, asi que las tandas nuevas dejarian de poder compararse
+# con las viejas sin que nada lo avisara. Lo mismo, y peor, para el fichero de
+# la red NNUE: va empotrado con include_bytes! y su cabecera lleva el sha de los
+# pesos, que el cargador verifica.
+#
+# Anadirlas no cambia ningun byte existente: los libros ya estaban en LF tanto
+# en disco como en git (comprobado al congelarlos, fase 0 de docs/PlanNNUE.md).
+
+banco/libros/*.epd -text
+nets/*.bin binary
+tools/nnue/*.bin binary
+tools/nnue/*.txt -text

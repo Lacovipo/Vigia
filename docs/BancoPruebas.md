@@ -606,6 +606,39 @@ ese, y hay un test que lo vigila
 
 ---
 
+### Los libros están congelados (0.28, fase 0 del plan de NNUE)
+
+`banco libro` filtra las posiciones con la evaluación estática de Vigía
+(`|eval| <= max_cp`, en `libro.rs`). Mientras la evaluación fue siempre la
+misma HCE eso daba igual. Con la red dejará de serlo, y regenerar un libro
+cambiaría el conjunto de posiciones, luego su sha256, luego la firma de todo
+experimento que lo use: las tandas nuevas dejarían de ser comparables con las
+de 0.28 sin que nada lo avisara.
+
+**Decisión: ninguno de los cuatro libros se regenera nunca más.** Si hace
+falta uno nuevo, es un fichero nuevo con otro nombre. Los sha256 de los que
+hay, para poder comprobarlo con `sha256sum banco/libros/*.epd`:
+
+| libro | posiciones | sha256 |
+|---|---:|---|
+| `humo.epd` | 8 | `3086e0a3cad25e279c244c89c2a973f194aefd03d55a4daaf7eeb27e8842d896` |
+| `vigia-256.epd` | 256 | `89989eee884682f43c8538699b8e1cc7415d8439e4e014bb6c49cdfd4d12a7b7` |
+| `vigia-2000.epd` | 2.000 | `a8775cf6baef9cf8c94c051adc5b5ae41d3f305e692058d3e284556d29ba77ec` |
+| `vigia-20000.epd` | 20.000 | `6ad4b44faa1ec11b6848f3be72a414a9649d8dca081a480d44e6a20f8f8d480d` |
+
+El de `vigia-20000.epd` es el mismo que registró el manifiesto de
+`028-velocidad-en-elo-estimacion`.
+
+**Y una trampa latente que apareció al congelarlos.** El repositorio tiene
+`core.autocrlf=true` y no tenía `.gitattributes`. Los libros estaban en LF en
+disco y en git, así que nada se había roto todavía; pero un clon nuevo en
+Windows los habría convertido a CRLF y habría cambiado su sha256 sin tocar una
+sola posición. Desde 0.28, `.gitattributes` los declara `-text`, junto con el
+fichero de la red NNUE, que va empotrado y cuya cabecera lleva el sha de los
+pesos. Declararlo no cambió ningún byte.
+
+---
+
 ## 8. Decisiones de diseño y por qué
 
 ### El árbitro usa las reglas del propio motor

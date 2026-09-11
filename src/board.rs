@@ -423,29 +423,41 @@ impl Board {
         }
     }
 
-    fn update_castling_rights(&mut self, from: Square, to: Square, moving: Piece) {
-        let before = self.castling;
+    /// The castling rights left after `moving` travels `from` -> `to`: a king
+    /// move forfeits both of its side's rights, and anything leaving or
+    /// landing on a rook's home corner kills the right that rook stood for
+    /// (the rook moving away, or being captured there).
+    ///
+    /// Pure, and shared on purpose: the NNUE accumulator has to know which
+    /// rights a move is about to destroy *before* the move is made, and it
+    /// asks this same function rather than restating the rules. Two copies of
+    /// these rules is exactly where the network's view of the board and the
+    /// board itself would quietly drift apart.
+    pub(crate) fn next_castling_rights(rights: CastlingRights, from: Square, to: Square, moving: Piece) -> CastlingRights {
+        let mut rights = rights;
         if moving.kind == PieceType::King {
             match moving.color {
-                Color::White => self
-                    .castling
-                    .remove(CastlingRights::WHITE_KINGSIDE | CastlingRights::WHITE_QUEENSIDE),
-                Color::Black => self
-                    .castling
-                    .remove(CastlingRights::BLACK_KINGSIDE | CastlingRights::BLACK_QUEENSIDE),
+                Color::White => rights.remove(CastlingRights::WHITE_KINGSIDE | CastlingRights::WHITE_QUEENSIDE),
+                Color::Black => rights.remove(CastlingRights::BLACK_KINGSIDE | CastlingRights::BLACK_QUEENSIDE),
             }
         }
         for sq in [from, to] {
             if sq == Square::A1 {
-                self.castling.remove(CastlingRights::WHITE_QUEENSIDE);
+                rights.remove(CastlingRights::WHITE_QUEENSIDE);
             } else if sq == Square::H1 {
-                self.castling.remove(CastlingRights::WHITE_KINGSIDE);
+                rights.remove(CastlingRights::WHITE_KINGSIDE);
             } else if sq == Square::A8 {
-                self.castling.remove(CastlingRights::BLACK_QUEENSIDE);
+                rights.remove(CastlingRights::BLACK_QUEENSIDE);
             } else if sq == Square::H8 {
-                self.castling.remove(CastlingRights::BLACK_KINGSIDE);
+                rights.remove(CastlingRights::BLACK_KINGSIDE);
             }
         }
+        rights
+    }
+
+    fn update_castling_rights(&mut self, from: Square, to: Square, moving: Piece) {
+        let before = self.castling;
+        self.castling = Self::next_castling_rights(before, from, to, moving);
         self.hash ^= zobrist::castling_key(before) ^ zobrist::castling_key(self.castling);
     }
 

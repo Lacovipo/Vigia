@@ -130,7 +130,7 @@ fn pst_value(kind: PieceType, color: Color, sq: Square) -> i32 {
 const MAX_GAME_PHASE: i32 = 24;
 const PHASE_WEIGHTS: [i32; 6] = [0, 1, 1, 2, 4, 0]; // Pawn, Knight, Bishop, Rook, Queen, King
 
-fn game_phase(board: &Board) -> i32 {
+pub(crate) fn game_phase(board: &Board) -> i32 {
     let mut phase = 0;
     for kind in PieceType::ALL {
         let weight = PHASE_WEIGHTS[kind as usize];
@@ -270,7 +270,7 @@ const KPK_DECISIVE_BONUS: i32 = 2000;
 /// bounded shaping term (pawn advancement and king proximity) so the search
 /// still prefers the more efficient winning technique among several
 /// choices, without ever reading as anything less than certain.
-fn kpk_exact_score(board: &Board) -> i32 {
+pub(crate) fn kpk_exact_score(board: &Board) -> i32 {
     let (pawn_color, pawn_sq) = if let Some(sq) = board.pieces_of(Color::White, PieceType::Pawn).lsb() {
         (Color::White, sq)
     } else if let Some(sq) = board.pieces_of(Color::Black, PieceType::Pawn).lsb() {
@@ -673,7 +673,7 @@ pub fn is_insufficient_material(board: &Board) -> bool {
     false
 }
 
-fn is_drawn_by_insufficient_material(board: &Board) -> bool {
+pub(crate) fn is_drawn_by_insufficient_material(board: &Board) -> bool {
     is_insufficient_material(board)
 }
 
@@ -747,7 +747,7 @@ fn pawnless_drawish_scale(board: &Board, raw: i32) -> Option<i32> {
     Some(if strong_npm <= minor { PAWNLESS_LONE_MINOR_SCALE } else { PAWNLESS_SMALL_EDGE_SCALE })
 }
 
-fn endgame_scale_factor(board: &Board, raw: i32) -> i32 {
+pub(crate) fn endgame_scale_factor(board: &Board, raw: i32) -> i32 {
     if is_drawn_by_insufficient_material(board) {
         0
     } else if let Some(scale) = pawnless_drawish_scale(board, raw) {

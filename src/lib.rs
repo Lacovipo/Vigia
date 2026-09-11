@@ -14,6 +14,7 @@ pub mod kpk;
 mod magic;
 pub mod movegen;
 pub mod search;
+pub mod sha256;
 pub mod types;
 pub mod uci;
 pub mod zobrist;
