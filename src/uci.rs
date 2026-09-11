@@ -10,6 +10,7 @@ use crate::eval;
 use crate::kpk;
 use crate::movegen;
 use crate::search;
+use crate::nnue;
 
 /// Derived from Cargo.toml at compile time so the announced version can
 /// never drift from the crate's (it used to be retyped by hand here on
@@ -77,6 +78,9 @@ pub struct Engine {
     /// `SearchLimits::variety`. Off by default: strongest play, and
     /// reproducible node counts for the strength harness.
     variety: bool,
+    /// Persistent state behind `setoption name UseNNUE` — see
+    /// `SearchLimits::use_nnue` for why it is off by default for now.
+    use_nnue: bool,
 }
 
 impl Engine {
@@ -93,6 +97,7 @@ impl Engine {
             pondering: Arc::new(AtomicBool::new(false)),
             ponder_enabled: false,
             variety: false,
+            use_nnue: false,
         }
     }
 }
@@ -157,6 +162,7 @@ fn cmd_uci(out: &mut impl Write) {
     );
     let _ = writeln!(out, "option name Ponder type check default false");
     let _ = writeln!(out, "option name Variety type check default false");
+    let _ = writeln!(out, "option name UseNNUE type check default false");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
@@ -190,7 +196,22 @@ fn cmd_eval(engine: &Engine, out: &mut impl Write) {
     if scale != 64 {
         let _ = writeln!(out, "{:>16}: x{scale}/64", "endgame_scale");
     }
-    let cp = eval::evaluate(&engine.board);
+    // Both evaluators side by side, whichever one is active: comparing them on
+    // the same position is the point while the network is being brought in.
+    let hce = eval::evaluate(&engine.board);
+    let net = nnue::explain(nnue::embedded(), &engine.board);
+    let _ = writeln!(out, "{:>16}: {hce:+5}", "HCE");
+    let detail = if net.scale != 64 {
+        format!(", scale x{}/64 on {:+}", net.scale, net.network_white)
+    } else {
+        String::new()
+    };
+    let _ = writeln!(out, "{:>16}: {:+5}  ({}, bucket {}{detail})", "NNUE", net.total_white, net.path, net.bucket);
+    // Kept last and in its original format: tools/calibration/calibrate.py
+    // parses exactly this line to compare against four reference engines, so
+    // with the network on it becomes a regression check of the network for
+    // free. It reports the evaluator the engine would actually search with.
+    let cp = if engine.use_nnue { net.total_white } else { hce };
     let _ = writeln!(out, "Evaluation: {cp} (white side)");
     let _ = out.flush();
 }
@@ -240,6 +261,11 @@ fn cmd_setoption(engine: &mut Engine, tokens: SplitWhitespace) {
         "Variety" => {
             if let Some(v) = value {
                 engine.variety = v == "true";
+            }
+        }
+        "UseNNUE" => {
+            if let Some(v) = value {
+                engine.use_nnue = v == "true";
             }
         }
         _ => {}
@@ -380,6 +406,7 @@ fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
 
     let mut limits = parse_go_limits(tokens, &engine.board);
     limits.variety = engine.variety;
+    limits.use_nnue = engine.use_nnue;
     engine.stop_flag.store(false, Ordering::Relaxed);
     // Reset for this `go`, not just set on a ponder one: an ordinary `go`
     // right after a ponder search must not leave a stale `true` behind.
@@ -695,6 +722,29 @@ mod tests {
         assert!(out.contains("material:"));
         assert!(out.contains("tempo:"));
         assert!(keep_going);
+    }
+
+    #[test]
+    fn eval_shows_both_evaluators_and_ends_with_the_active_one() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("eval", &mut engine, &mut out);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("HCE:") && text.contains("NNUE:"), "{text}");
+        assert!(text.trim_end().ends_with("Evaluation: 12 (white side)"), "{text}");
+
+        let mut out = Vec::new();
+        handle_command("setoption name UseNNUE value true", &mut engine, &mut out);
+        handle_command("eval", &mut engine, &mut out);
+        let text = String::from_utf8(out).unwrap();
+        // The network embedded for integration only counts material: 0 at the start.
+        assert!(text.trim_end().ends_with("Evaluation: 0 (white side)"), "{text}");
+    }
+
+    #[test]
+    fn uci_advertises_use_nnue_off_by_default() {
+        let (out, _) = run_command("uci");
+        assert!(out.contains("option name UseNNUE type check default false"));
     }
 
     #[test]

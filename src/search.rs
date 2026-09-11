@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::board::Board;
 use crate::eval;
 use crate::movegen;
+use crate::nnue;
 use crate::types::{Color, Move, MoveFlag, PieceType, Square};
 use crate::zobrist;
 
@@ -186,6 +187,13 @@ pub struct SearchLimits {
     /// counts and match results stop being reproducible for the same
     /// position and depth, which is exactly what a strength harness needs.
     pub variety: bool,
+    /// Evaluate with the network compiled into the binary instead of the HCE
+    /// (UCI option `UseNNUE`). Off by default, and deliberately so while no
+    /// trained network has passed the bench: the one embedded during the
+    /// integration phase only counts material, and making it the default would
+    /// turn every build of `main` into a much weaker engine for nothing. Phase 5
+    /// of `docs/PlanNNUE.md` flips the default, and only on an `acepta_h1`.
+    pub use_nnue: bool,
     /// UCI `go mate N`: look for a forced mate in at most N moves. Sets the
     /// depth budget to `2*N` plies when no explicit `depth` was given —
     /// enough to see any mate in N, which takes `2*N - 1` plies with the
@@ -515,6 +523,21 @@ struct Context<'a> {
     /// Scratch buffer reused by `order_moves_full`, so ordering a node's
     /// moves doesn't allocate once per node.
     order_buffer: Vec<(i32, u16, Move)>,
+    /// The network and this thread's accumulators, when the search runs with
+    /// `SearchLimits::use_nnue`. `None` means the HCE exactly as before, which
+    /// is also what every test that builds a `Context` by hand gets.
+    ///
+    /// One per thread, inside the `Context` that Lazy SMP already builds per
+    /// thread: no locks, no `Arc`, no atomics. And an `Option` checked on a
+    /// branch the CPU predicts perfectly, rather than a `dyn` evaluator: at a
+    /// million and a half evaluations a second an indirect call per node is
+    /// not free.
+    nnue: Option<NnueState>,
+}
+
+struct NnueState {
+    net: &'static nnue::Net,
+    accumulators: nnue::Accumulators,
 }
 
 /// Number of PieceType variants, used to size/index `Context::cont_history`.
@@ -551,6 +574,49 @@ fn pawn_hash(board: &Board) -> u64 {
 }
 
 impl Context<'_> {
+    /// Static evaluation from the side to move's point of view, by whichever
+    /// evaluator this search runs with.
+    ///
+    /// In test builds, with the network on, it first checks that the
+    /// accumulator for `ply` holds exactly what a refresh of `board` would.
+    /// That turns every search a test runs into a check of every hook site at
+    /// once — root, negamax, quiescence and null move — which the network's own
+    /// unit tests cannot see, since they drive the accumulator directly rather
+    /// than through the search.
+    #[inline(always)]
+    fn evaluate(&self, board: &Board, ply: u32) -> i32 {
+        match &self.nnue {
+            Some(state) => {
+                #[cfg(test)]
+                assert!(
+                    state.accumulators.matches_refresh(state.net, board, ply as usize),
+                    "NNUE accumulator out of step with the board at ply {ply}: {}",
+                    board.to_fen()
+                );
+                state.accumulators.evaluate(state.net, board, ply as usize)
+            }
+            None => eval::evaluate_relative(board),
+        }
+    }
+
+    /// Updates the child's accumulator for `mv`. Must run immediately before
+    /// `board.make_move(mv)`, and once per move rather than once per recursive
+    /// call: see `nnue::Accumulators::push`.
+    #[inline(always)]
+    fn nnue_push(&mut self, board: &Board, mv: Move, ply: u32) {
+        if let Some(state) = &mut self.nnue {
+            state.accumulators.push(state.net, board, mv, ply as usize);
+        }
+    }
+
+    /// The null-move counterpart of `nnue_push`.
+    #[inline(always)]
+    fn nnue_null(&mut self, ply: u32) {
+        if let Some(state) = &mut self.nnue {
+            state.accumulators.copy_parent(ply as usize);
+        }
+    }
+
     fn should_stop(&mut self) -> bool {
         if self.aborted {
             return true;
@@ -873,7 +939,16 @@ pub(crate) fn search_inner(
         pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
         pv_len: vec![0; (MAX_PLY + 2) as usize],
         order_buffer: Vec::with_capacity(64),
+        nnue: limits.use_nnue.then(|| NnueState {
+            net: nnue::embedded(),
+            accumulators: nnue::Accumulators::new((MAX_PLY + 1) as usize),
+        }),
     };
+    // The only full refresh of the accumulators in the whole search, once per
+    // thread: every node below the root derives its own from its parent's.
+    if let Some(state) = &mut ctx.nnue {
+        state.accumulators.refresh(state.net, &working, 0);
+    }
 
     let mut result = SearchResult::default();
 
@@ -991,6 +1066,7 @@ fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &
 
     for (move_index, mv) in ordered.into_iter().enumerate() {
         let moved_piece = board.piece_at(mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
+        ctx.nnue_push(board, mv, 0);
         let undo = board.make_move(mv);
         ctx.path.push(board.hash);
         ctx.record_move_played(1, moved_piece, mv.to);
@@ -1218,7 +1294,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // the gap between the search result and the *raw* eval, not the
     // already-corrected one, or successive updates would partly correct
     // against themselves instead of converging on the true bias.
-    let raw_eval = node_pawn_hash.map(|_| eval::evaluate_relative(board));
+    let raw_eval = node_pawn_hash.map(|_| ctx.evaluate(board, ply));
     let static_eval = match (raw_eval, node_pawn_hash) {
         (Some(re), Some(ph)) => Some(re + ctx.correction_score(ph)),
         _ => None,
@@ -1280,9 +1356,11 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // `!ctx.null_at_ply[ply]`: never two nulls in a row. Two consecutive
     // passes reproduce the hash from two plies up exactly (the side-to-move
     // key cancels out), so with both pushed onto `path` the verification
-    // search used to see a repetition and score itself as a draw. The tempo
-    // term breaks the antisymmetry that would otherwise make the two null
-    // conditions mutually exclusive, so this really can happen.
+    // search used to see a repetition and score itself as a draw. It really
+    // can happen: something always breaks the antisymmetry that would
+    // otherwise make the two null conditions mutually exclusive — the HCE's
+    // tempo term, or with the network, which has none, the pawn correction
+    // history, whose key includes the side to move.
     if !in_check
         && !ctx.null_at_ply[ply as usize]
         && depth >= NULL_MOVE_MIN_DEPTH
@@ -1292,6 +1370,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     {
         let se = static_eval.expect("guarded by is_some_and above");
         let reduction = NULL_MOVE_REDUCTION + depth / 3 + (((se - beta) / 200) as u32).min(3);
+        ctx.nnue_null(ply);
         let undo = board.make_null_move();
         // Nothing below a null move is reachable by legal play from the
         // positions recorded so far, so the repetition window restarts here
@@ -1416,6 +1495,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
 
         let moved_piece = board.piece_at(mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
         let mv_child_depth = if Some(mv) == tt_move { child_depth + tt_move_extension } else { child_depth };
+        ctx.nnue_push(board, mv, ply);
         let undo = board.make_move(mv);
         ctx.path.push(board.hash);
         ctx.record_move_played(ply + 1, moved_piece, mv.to);
@@ -1649,7 +1729,7 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
     let stand_pat = if in_check {
         -MATE_SCORE + ply as i32
     } else {
-        eval::evaluate_relative(board)
+        ctx.evaluate(board, ply)
     };
     let mut best_score = stand_pat;
     let mut best_move: Option<Move> = None;
@@ -1689,6 +1769,7 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
             continue;
         }
 
+        ctx.nnue_push(board, mv, ply);
         let undo = board.make_move(mv);
         ctx.path.push(board.hash);
         let score = -quiescence(board, -beta, -alpha, ply + 1, ctx);
@@ -1901,6 +1982,7 @@ mod tests {
             pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
             pv_len: vec![0; (MAX_PLY + 2) as usize],
             order_buffer: Vec::new(),
+            nnue: None,
         }
     }
 
@@ -1910,6 +1992,43 @@ mod tests {
         let tt = Tt::new(1);
         let limits = SearchLimits { max_depth: Some(depth), ..Default::default() };
         search(&board, limits, &stop, &tt, &[], |_, _| {})
+    }
+
+    fn search_with_network(fen: &str, depth: u32) -> SearchResult {
+        let board = Board::from_fen(fen).unwrap();
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let limits = SearchLimits { max_depth: Some(depth), use_nnue: true, ..Default::default() };
+        search(&board, limits, &stop, &tt, &[], |_, _| {})
+    }
+
+    #[test]
+    fn a_search_with_the_network_keeps_every_accumulator_in_step_with_the_board() {
+        // In test builds `Context::evaluate` checks the accumulator against a
+        // refresh at every single evaluation, so these searches exercise every
+        // hook the search has, on real trees: the root loop, negamax with its
+        // LMR re-searches (where a double update would hide), quiescence, the
+        // null move, castling, en passant and promotions.
+        for (fen, depth) in [
+            ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 6),
+            ("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", 8),
+            ("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 6),
+            ("rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", 6),
+        ] {
+            let result = search_with_network(fen, depth);
+            assert!(result.best_move.is_some(), "{fen}");
+        }
+    }
+
+    #[test]
+    fn use_nnue_really_switches_the_evaluator() {
+        // The test above would pass trivially if the option never reached the
+        // search. At depth 1 from the start position every leaf is quiet with
+        // equal material, so the hand-built material network makes the whole
+        // search score exactly 0, while the HCE's tables and tempo do not.
+        let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        assert_eq!(search_with_network(start, 1).score, 0);
+        assert_ne!(search_to_depth(start, 1).score, 0);
     }
 
     #[test]

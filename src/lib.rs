@@ -13,6 +13,7 @@ pub mod eval;
 pub mod kpk;
 mod magic;
 pub mod movegen;
+pub mod nnue;
 pub mod search;
 pub mod sha256;
 pub mod types;
