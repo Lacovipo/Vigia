@@ -61,7 +61,12 @@ USO
       Corpus de entrenamiento: autojuego a nodos fijos, sin adjudicación.
       --excluir apunta a los libros del banco, cuyas posiciones no se usan.
       Cada hilo ocupa una CPU y escribe hilo-NN.bin y hce-NN.bin; con --fen si,
-      también fen-NN.txt con la FEN de cada registro, para verificar el formato.";
+      también fen-NN.txt con la FEN de cada registro, para verificar el formato.
+
+  generador evaluar --red <fichero.bin> --epd <posiciones>
+      Carga una red en el motor y escribe, por posición, la evaluación de la
+      HCE, la de la red y la salida cruda (suma, cubo, cp desde quien mueve).
+      tools/nnue/check_red.py la contrasta con Python entero a entero.";
 
 /// xorshift64*, para que la misma semilla dé siempre los mismos ficheros.
 struct Rng(u64);
@@ -601,11 +606,49 @@ fn datos(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+// ------------------------------------------------------------------ evaluar
+
+/// Carga una red cualquiera en el motor y la evalúa sobre un fichero de
+/// posiciones. Existe para cerrar el hueco que deja el vector dorado: aquel
+/// ata Rust y Python con una red aleatoria de 8 cubos, y una red entrenada trae
+/// menos cubos y una tabla de cubos de verdad. Así se comprueba, entero a
+/// entero, la red que de verdad va a jugar.
+fn evaluar(args: &[String]) -> Result<(), String> {
+    let pares = opciones(args)?;
+    comprobar_claves(&pares, &["red", "epd"])?;
+    let ruta_red = valor(&pares, "red").ok_or("falta --red")?;
+    let ruta_epd = valor(&pares, "epd").ok_or("falta --epd")?;
+    let bytes = std::fs::read(ruta_red).map_err(|e| format!("{ruta_red}: {e}"))?;
+    let red = nnue::Net::from_bytes(&bytes).map_err(|e| format!("{ruta_red}: {e}"))?;
+    let texto = std::fs::read_to_string(ruta_epd).map_err(|e| format!("{ruta_epd}: {e}"))?;
+
+    let mut salida = String::from("# fen|hce desde blancas|red desde blancas|suma|cubo|cp desde quien mueve\n");
+    for linea in texto.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let campos: Vec<&str> = linea.split_whitespace().collect();
+        let fen = match campos.len() {
+            4 | 5 => format!("{} 0 1", campos[..4].join(" ")),
+            n if n >= 6 => campos[..6].join(" "),
+            _ => return Err(format!("{ruta_epd}: no parece una posición: '{linea}'")),
+        };
+        let board = Board::from_fen(&fen).map_err(|e| format!("{fen}: {e}"))?;
+        let (suma, cubo, cp) = nnue::raw_output(&red, &board);
+        salida.push_str(&format!(
+            "{}|{}|{}|{suma}|{cubo}|{cp}\n",
+            board.to_fen(),
+            eval::evaluate(&board),
+            nnue::evaluate_position(&red, &board)
+        ));
+    }
+    print!("{salida}");
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let resultado = match args.first().map(String::as_str) {
         Some("indices") => indices(&args[1..]),
         Some("datos") => datos(&args[1..]),
+        Some("evaluar") => evaluar(&args[1..]),
         _ => Err(AYUDA.to_string()),
     };
     match resultado {

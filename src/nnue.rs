@@ -576,6 +576,28 @@ pub fn training_scale(board: &Board) -> u8 {
     scale_factor(board, 0) as u8
 }
 
+/// The full evaluation of `board` with `net`, from White's side: the KPK
+/// oracle, the network and the endgame scale, exactly what the search sees,
+/// computed from scratch. For tooling: it builds an accumulator per call.
+pub fn evaluate_position(net: &Net, board: &Board) -> i32 {
+    let mut accumulators = Accumulators::new(1);
+    accumulators.refresh(net, board, 0);
+    accumulators.evaluate_white(net, board, 0)
+}
+
+/// The raw network output for `board`, before the KPK shortcut and the endgame
+/// scale: the output sum, the bucket, and centipawns from the side to move.
+/// These are the three numbers `netfmt.forward` computes in Python, which is
+/// what lets a trained network be checked integer for integer against the
+/// trainer, and not only the random one the golden vector uses.
+pub fn raw_output(net: &Net, board: &Board) -> (i32, usize, i32) {
+    let mut accumulators = Accumulators::new(1);
+    accumulators.refresh(net, board, 0);
+    let bucket = net.bucket_for(board);
+    let sum = accumulators.output_sum(net, 0, board.side_to_move, bucket);
+    (sum, bucket, divide_rounding(sum))
+}
+
 /// What the UCI `eval` command reports about the network for one position.
 pub(crate) struct Explanation {
     /// Which path answered: `kpk_exact` or `network`.
@@ -1043,6 +1065,25 @@ mod tests {
                 (numbers[0], numbers[1], numbers[2]),
                 "{category}: {fen} (sum, bucket, cp) disagrees with Python"
             );
+        }
+    }
+
+    #[test]
+    fn the_tooling_api_gives_the_numbers_the_search_uses() {
+        // `evaluate_position` and `raw_output` are what `generador evaluar`
+        // prints for tools/nnue/check_red.py. Pinned to the material network's
+        // hand arithmetic, and to the accumulator path the search takes, so
+        // the tooling cannot quietly drift from what actually plays.
+        let net = embedded();
+        let start = Board::start_pos();
+        assert_eq!(raw_output(net, &start), (0, 7, 0));
+        let queen = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1").unwrap();
+        assert_eq!(raw_output(net, &queen), (64 * 2016 * 224, 0, 896));
+        assert_eq!(evaluate_position(net, &queen), 896);
+        let mut accumulators = Accumulators::new(1);
+        for board in [&start, &queen] {
+            accumulators.refresh(net, board, 0);
+            assert_eq!(evaluate_position(net, board), accumulators.evaluate_white(net, board, 0));
         }
     }
 }
