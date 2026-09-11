@@ -558,6 +558,24 @@ fn scale_factor(board: &Board, raw: i32) -> i32 {
     }
 }
 
+/// The endgame scale the engine applies to the network's output in `board`,
+/// out of 64, so the NNUE data generator can store it next to each position
+/// and the trainer applies exactly the engine's rule instead of restating it.
+///
+/// Only meaningful while `ENDGAME_DAMPERS` is off: then the scale depends on
+/// the board alone (0 with insufficient material, 64 otherwise). With the
+/// dampers on it depends on the sign of the network's own output, cannot be
+/// precomputed, and the trainer would have to work it out inside its forward
+/// pass. The assertion stops the build the day the switch is flipped without
+/// revisiting that contract.
+pub fn training_scale(board: &Board) -> u8 {
+    const _: () = assert!(
+        !ENDGAME_DAMPERS,
+        "with the endgame dampers on the scale depends on the network's output: revisit the generator/trainer contract"
+    );
+    scale_factor(board, 0) as u8
+}
+
 /// What the UCI `eval` command reports about the network for one position.
 pub(crate) struct Explanation {
     /// Which path answered: `kpk_exact` or `network`.
