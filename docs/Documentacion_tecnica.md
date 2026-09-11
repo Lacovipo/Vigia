@@ -39,13 +39,14 @@ src/
   magic.rs           # magic bitboards: ataques deslizantes por tabla
   eval.rs            # evaluación clásica (HCE, tapered), 2384 líneas
   nnue.rs            # red NNUE Atalaya-256: cargador, acumulador e inferencia (§4)
+  rules.rs           # reglas de fin de partida, compartidas por el árbitro y el generador
   kpk.rs             # oráculo exacto Rey+Peón vs Rey
   search.rs          # búsqueda: PVS/negamax, TT, poda, Lazy SMP
   sha256.rs          # SHA-256 sin dependencias: manifiestos del banco y cabecera de la red
   uci.rs             # protocolo UCI + comando extra "eval"
   bin/selfplay.rs    # harness antiguo de autojuego (superado, ver §8)
   bin/banco/         # banco de pruebas: SPRT, velocidad, EPD (ver §8)
-  bin/generador.rs   # datos de la red NNUE; hoy, los índices del vector dorado
+  bin/generador.rs   # datos de la red NNUE: corpus de autojuego, vector dorado y evaluar una red
 nets/
   material-256.bin   # la red empotrada: la de la fase 1, solo material, sin entrenar
 banco/
@@ -53,10 +54,11 @@ banco/
   libros/            # libros de aperturas, versionados y congelados
   resultados/        # salidas de las tandas (fuera del repositorio)
 tools/calibration/   # pipeline Python de calibración del eval (ver §9)
-tools/nnue/          # formato de la red, red de material y vector dorado (Python)
+tools/nnue/          # la red en Python: formato, vector dorado, lector del corpus, entrenador, cuantizador
 tools/analiza_tanda.py  # profundidad por motor y finales de una tanda del banco
 docs/                # esta documentación y el plan de la red (PlanNNUE.md)
 Release/             # ejecutables congelados por versión, ignorados por git
+datos/               # corpus de entrenamiento de la red, ignorado por git
 ```
 
 `lib.rs` existe para que `main.rs` (el binario UCI), `bin/banco/` (el
@@ -1461,7 +1463,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 247 del motor + 119 del banco + 8 del harness antiguo
+cargo test --release              # 254 del motor + 119 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

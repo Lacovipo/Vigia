@@ -1,6 +1,6 @@
 # Plan de NNUE de Vigía
 
-**Estado:** decidido y en ejecución: fases 0 y 1 hechas (seguimiento en
+**Estado:** decidido y en ejecución: fases 0 y 1 hechas, fase 2 en marcha (seguimiento en
 `docs/MejorasPendientes.md`). **Versión de partida:** 0.28.0 (`dde715a`). **Base de todas las
 comparaciones:** `Release/Vigia 0.28.exe` congelada.
 
@@ -546,6 +546,37 @@ proceso**. Un `Board` y una `Tt` por hilo, limpiada por partida.
   verdad con 32 hilos y 32 TT compitiendo por L3 está **por medir** (prueba de 2 minutos).
   **Hay que avisar al usuario antes de ocupar la máquina 10 horas.**
 
+#### Cambios al ejecutarlo (fase 2)
+
+El generador existe (`generador datos`) y difiere de lo escrito arriba en cuatro
+puntos, todos deliberados:
+
+- **Las aperturas salen de `C:/Ajedrez/Probon_Gem/apertura.txt`, no de jugadas al
+  azar.** Son 3.825.105 posiciones distintas y realistas, desde la segunda jugada
+  hasta el medio juego, así que cada partida del corpus empieza en una distinta.
+  Lo que da información a la red, según la medición de §5.5, es la variedad entre
+  partidas; y 8–16 jugadas al azar producen aperturas que no aparecen en ninguna
+  partida real, capacidad gastada en posiciones que la red nunca va a ver. Se
+  consideraron también los libros Polyglot del usuario: un libro con pesos repite
+  sus líneas principales, que es lo contrario de lo que se busca. Las etiquetas
+  siguen siendo búsquedas de Vigía; la apertura solo decide dónde empieza la
+  partida. Sobre cada posición se juegan además entre 0 y 2 jugadas al azar.
+- **Se excluyen las 22.247 posiciones de los libros del banco.** Se muestrearon de
+  ese mismo fichero, y entrenar sobre ellas sería entrenar sobre las aperturas con
+  las que después se mide la red.
+- **Una apertura que la primera búsqueda ya ve decidida (|puntuación| ≥ 400) se
+  descarta**, en lugar de filtrar por la evaluación estática, que habría heredado
+  el sesgo de la HCE.
+- **Las partidas terminan con `vigia::rules`**, las mismas reglas que usa el
+  árbitro del banco, subidas a la biblioteca para eso. Sin adjudicación, con tope
+  de 300 plies que cuenta como tablas.
+
+Cada hilo usa su propia subsemilla y una tabla de transposición de 16 MB que se
+vacía al empezar cada partida, así que **la misma semilla da los mismos ficheros
+byte a byte**: comprobado con dos tandas de 2 hilos. Ritmo medido en el primer
+trozo: **1,84 M de registros por hora con 8 hilos**, 230.000 por hilo (el plan
+estimaba 226.000).
+
 ### 5.3 Formato
 
 Registro fijo de **32 bytes**, `memmap` desde el entrenador:
@@ -568,6 +599,27 @@ nodos, semilla y número de registros — la doctrina de `manifiesto.json` aplic
 
 El byte de `resultado` va desde el principio aunque λ = 1,0 (§5.6): cuesta 1 B y evita
 regenerar 1,2 GB para probar el otro λ.
+
+#### Cambios al ejecutarlo (fase 2)
+
+- **Dos bits nuevos en `meta`**: el 6 marca que el que mueve está en jaque y el 7
+  que la búsqueda no terminó. Son dos filtros de §5.4 que no se pueden deducir
+  después sin reimplementar ajedrez, y el entrenador no reimplementa ajedrez.
+- **Todo se escribe en bruto y se filtra al entrenar** (`tools/nnue/dataset.py`),
+  para que probar otro filtro no obligue a regenerar horas de datos.
+- La jugada va como `origen | destino << 6 | tipo << 12`, con el tipo de
+  `MoveFlag`; y el anexo `hce-NN.bin` lleva la escala de final (0 ó 64, que es lo
+  único posible con los amortiguadores apagados) y el número de piezas. Una
+  aserción en compilación rompe el build si alguien activa los amortiguadores sin
+  revisar ese contrato.
+- Cabecera `VIGIADT1` de 128 bytes: versión, nodos, semilla, hilo, sha256 del
+  fichero de aperturas, sha256 del generador y número de registros.
+
+El formato está contrastado con **dos oráculos independientes** sobre un corpus de
+humo: Python reconstruye desde los registros exactamente las posiciones que
+escribió Rust, y las marcas del registro —jugada legal, captura, promoción, en
+jaque— coinciden con **python-chess**, otra implementación de las reglas, que se
+usa solo como oráculo de test.
 
 ### 5.4 Filtrado
 
@@ -709,6 +761,30 @@ incluye el sha del binario: con la red fuera, dos tandas podrían ser «el mismo
 redes distintas, rompiendo en silencio la reproducibilidad.
 
 ---
+
+### 6.1 Lo que existe (fase 3, antes de tener corpus)
+
+| fichero | qué hace |
+|---|---|
+| `dataset.py` | lee el corpus con `memmap`, decodifica a rasgos de cada perspectiva y aplica los filtros de §5.4 como máscaras |
+| `corpus_stats.py` | los criterios de la fase 2: supervivencia a cada filtro, tabla `CUBO[33]` con la regla del millón, partidas, autocorrelación y muestras efectivas (sustituye al `buckets.py` previsto) |
+| `fit_k.py` | ajusta K sobre el corpus, sin heredar el 140 del corpus del banco |
+| `train.py` | el modelo y el entrenamiento en PyTorch sobre la GPU (RTX 5060 Ti, 16 GB); validación por partidas enteras |
+| `quantize.py` | escribe `atalaya-256-<sha8>.bin` con las cotas comprobadas y mide el error de cuantización |
+| `check_red.py` | con `generador evaluar`: la red entrenada en el motor contra Python, entero a entero, y su escala frente a la HCE |
+
+**El modelo flotante es el motor sin redondear.** El acumulador vive en unidades
+de activación (1,0 son 127 enteros) y la salida es directamente centipeones, así
+que cuantizar es multiplicar y redondear. Los recortes de pesos (`|w_ft| ≤ 6`,
+`|w_out| ≤ 127` cp) son las cotas T1 y T2 garantizadas por construcción.
+
+Probado de punta a punta sobre un corpus de humo: 3 épocas en la GPU, error de
+cuantización de 0,29 cp de media y 0,9 cp de máximo, y la red cuantizada, con 7
+cubos y tabla real, idéntica entre el motor y Python en 200 posiciones.
+
+**`generador evaluar` cierra un hueco del §7**: el vector dorado ata Rust y Python
+con una red aleatoria de 8 cubos, y una red entrenada trae menos cubos y una tabla
+de cubos de verdad, que el motor no había comprobado nunca.
 
 ## 7. Cómo se verifica que Rust y el entrenador coinciden
 
@@ -872,6 +948,21 @@ aquí: es el riesgo de caché materializándose, y se resuelve antes de generar 
 
 **Coste:** ~10 h de máquina con 16 workers.
 
+**Cómo se está ejecutando.** El tope es de 8 CPUs, no 16, así que el corpus sale por
+trozos de 12 M, uno por semilla, de ~6,5 h cada uno:
+
+```bash
+datos/atalaya-v1/generador.exe datos --aperturas C:/Ajedrez/Probon_Gem/apertura.txt \
+    --excluir banco/libros --posiciones 12000000 --semilla 1 --hilos 8 \
+    --nodos 25000 --salida datos/atalaya-v1/semilla-1
+```
+
+Tres semillas dan las 36 M del criterio 1. El ejecutable se copia al directorio del
+corpus antes de lanzar: su sha256 va en cada cabecera, y tiene que ser el de un fichero que
+no cambie al recompilar. Los criterios 3 a 5 se miden ya sobre el primer trozo con
+`tools/nnue/corpus_stats.py`; si las muestras efectivas salen muy por debajo de lo
+previsto, se sabe antes de gastar los otros dos.
+
 ---
 
 ### Fase 3 — Entrenar, cuantizar, exportar
@@ -884,6 +975,11 @@ aquí: es el riesgo de caché materializándose, y se resuelve antes de generar 
    posiciones del libro congelado tiene que estar **dentro del ±15 %** de la de la HCE. Si
    se desvía, se corrige con **una sola constante de ganancia**, nunca re-sintonizando los
    ocho márgenes de poda.
+
+   **Corrección antes de ejecutarlo:** sobre posiciones del corpus, no sobre el libro
+   congelado. Ese libro se seleccionó con |eval HCE| ≤ 90, que comprime a propósito la
+   dispersión de la HCE y haría la comparación injusta. `check_red.py` mide la razón de
+   desviaciones típicas con |eval| < 1500.
 4. **Referencia** (no veto, §5.7): MSE en espacio sigmoide sobre las 815.632 posiciones a
    d = 10,66, comparada con la de la HCE y entre las tres semillas entrenadas. Si el error
    sobre el holdout profundo se estanca muy por encima del de entrenamiento, el cuello es la

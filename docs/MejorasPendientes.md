@@ -395,8 +395,8 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 |---|---|
 | 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
 | 1 — cerrar el bucle con la red de material | **hecha**: los cuatro criterios cumplidos |
-| 2 — generador y corpus | pendiente |
-| 3 — entrenar, cuantizar y exportar | pendiente |
+| 2 — generador y corpus | **en marcha**: generador hecho y verificado (reproducible byte a byte, formato contrastado con python-chess); primer trozo de 12 M generándose con 8 CPUs |
+| 3 — entrenar, cuantizar y exportar | herramientas hechas y probadas de punta a punta sobre un corpus de humo; falta el corpus |
 | 4 a 7 | pendientes |
 
 La fase 1, criterio a criterio:
