@@ -22,3 +22,8 @@ __pycache__/
 
 # Artefacto de Windows y OneDrive.
 desktop.ini
+
+# Corpus de entrenamiento de la red NNUE. Pesa gigas y se regenera con
+# `generador datos` desde su semilla: la cabecera de cada fichero guarda la
+# semilla, los nodos y el sha256 del generador y del fichero de aperturas.
+/datos/
