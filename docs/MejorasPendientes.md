@@ -395,7 +395,7 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 |---|---|
 | 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
 | 1 — cerrar el bucle con la red de material | **hecha**: los cuatro criterios cumplidos |
-| 2 — generador y corpus | **en marcha**: generador hecho y verificado (reproducible byte a byte, formato contrastado con python-chess); primer trozo de 12 M generándose con 8 CPUs |
+| 2 — generador y corpus | **en marcha**: primer trozo de 12 M hecho (6,43 h, 8 CPUs): 7,21 M útiles, 633 k muestras efectivas, 4 cubos, K = 160,7. Faltan dos trozos más para el volumen con el que se dimensionó la red |
 | 3 — entrenar, cuantizar y exportar | herramientas hechas y probadas de punta a punta sobre un corpus de humo; falta el corpus |
 | 4 a 7 | pendientes |
 

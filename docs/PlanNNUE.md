@@ -640,6 +640,25 @@ posición si:
 
 **Supervivencia: 69,16 %.** Hay que presupuestar en bruto y contar en útiles.
 
+**Medido sobre el corpus nuevo** (12.000.572 registros de la semilla 1): la
+supervivencia es del **60,05 %**, no del 69,16 %.
+
+| filtro | corpus viejo (adjudicado) | corpus nuevo |
+|---|---|---|
+| la mejor jugada es captura | 21,82 % | 20,23 % |
+| el que mueve está en jaque | 9,17 % | 12,23 % |
+| la puntuación es de mate | 0,77 % | **7,17 %** |
+| `\|cp\| ≥ 1500` | 0,81 % | **5,17 %** |
+| aplica el atajo KPK | 0,051 % | **1,24 %** |
+| la mejor jugada es promoción | 0,30 % | 0,75 % |
+| búsqueda incompleta | ~0 % | 0,00002 % (2 registros) |
+| `endgame_scale_factor == 0` | ~0 % | 0 % |
+
+Los cuatro que se disparan son los mismos cuatro: **las partidas ahora se juegan
+hasta el mate**. El corpus viejo cortaba por adjudicación en cuanto una partida
+estaba decidida, y por eso casi no tenía mates, ni finales de rey y peón, ni
+puntuaciones enormes. Hay que presupuestar el **60 %**.
+
 No se filtra por número de piezas ni se tiran finales (son justamente lo escaso), y **no se
 submuestrea un ply de cada dos**: la correlación se trata dimensionando, no tirando datos
 (§5.5).
@@ -685,6 +704,39 @@ en un corpus con el 70 % de partidas adjudicadas): **POR MEDIR**, en la fase 2. 
 longitud de partida sin adjudicación se estima en 125–140 plies frente a los 97,1 del
 banco: **POR MEDIR** también, y afecta directamente a las 10 horas.
 
+**Medido en la fase 2** (semilla 1: 12,00 M brutas, 7,21 M útiles, 104.972
+partidas):
+
+| | corpus viejo (adjudicado) | corpus nuevo |
+|---|---|---|
+| ρ a desfase 2 con `\|cp\| < 300` | 0,909 | **0,885** |
+| longitud de decorrelación | 14,5 plies | **11,4 plies** |
+| desviación típica de la etiqueta útil | 384,9 cp | **497,3 cp** |
+| … intra-partida | 270,4 cp | **494,2 cp** |
+| varianza que está entre partidas | 50,7 % | **1,2 %** |
+| longitud de partida | 97,1 plies | **114,3 plies** (mediana 109) |
+
+Las dos primeras filas salen algo mejor de lo previsto. Las otras dicen una cosa
+que no se esperaba: **sin adjudicación, una sola partida recorre casi todo el
+rango de puntuaciones**, así que la variedad ya no está entre partidas sino
+dentro de cada una. No cambia la cuenta de muestras efectivas, que solo usa la
+longitud de decorrelación, pero sí explica por qué la etiqueta dispersa más.
+
+**Muestras efectivas: 633.000 por trozo de 12 M**, o sea 0,053 por posición
+jugada. El dimensionado de §5.5 pide ~2,2 M (10,9 por parámetro):
+
+| trozos de 12 M | brutas | útiles | efectivas | por parámetro |
+|---|---|---|---|---|
+| 1 | 12 M | 7,2 M | 0,63 M | 3,1 |
+| **3** | 36 M | 21,6 M | **1,9 M** | **9,4** |
+| 4 | 48 M | 28,8 M | 2,5 M | 12,5 |
+
+**Acortar las partidas no compra nada**, contra lo que decía el criterio 4 de la
+fase 2: las muestras efectivas son útiles ÷ longitud de decorrelación, y al
+acortar bajan las dos a la vez; la cuenta da 0,053 por posición jugada se corte
+donde se corte. Y las aperturas más variadas que traería tampoco: la variedad
+entre partidas es el 1,2 % de la varianza. El único camino es **más trozos**.
+
 ### 5.6 Objetivo de entrenamiento
 
 **λ = 1,0: solo puntuación, peso cero al resultado de partida en la primera red.**
@@ -710,6 +762,12 @@ Tres decisiones, todas deliberadas:
    experimento v1.2, no el v1.
 
 **K se ajusta sobre el corpus nuevo.** No se hereda el 140, que es un artefacto.
+
+**Medido:** **K = 160,7** sobre 5 M etiquetas útiles de la semilla 1 (error
+0,08012; con K = 200 sale 0,08101 y con K = 100, 0,08410 — el mínimo es plano).
+El 140 heredado no estaba lejos en valor, pero venía de un corpus donde el
+resultado *era* la evaluación; este sale de partidas jugadas hasta el final, con
+un 25,1 % de tablas entre las posiciones útiles.
 
 ### 5.7 Validación que ya está pagada
 
@@ -957,11 +1015,31 @@ datos/atalaya-v1/generador.exe datos --aperturas C:/Ajedrez/Probon_Gem/apertura.
     --nodos 25000 --salida datos/atalaya-v1/semilla-1
 ```
 
-Tres semillas dan las 36 M del criterio 1. El ejecutable se copia al directorio del
+Tres semillas dan las 36 M brutas del criterio 1; las 24 M filtradas piden una cuarta,
+porque la supervivencia real es del 60 % y no del 69 % (§5.4). El ejecutable se copia al directorio del
 corpus antes de lanzar: su sha256 va en cada cabecera, y tiene que ser el de un fichero que
 no cambie al recompilar. Los criterios 3 a 5 se miden ya sobre el primer trozo con
 `tools/nnue/corpus_stats.py`; si las muestras efectivas salen muy por debajo de lo
 previsto, se sabe antes de gastar los otros dos.
+
+**Resultado del primer trozo (semilla 1, 12 M, 8 hilos, 6,43 h):**
+
+1. **Volumen y ritmo:** 12.000.572 registros en 104.972 partidas, 233.457 por
+   hora y hilo (el plan estimaba 226.000), 9.129 aperturas descartadas por venir
+   ya decididas. Supervivencia 60,05 % → **7,21 M útiles**. Con esta
+   supervivencia, las 24 M filtradas del criterio piden **cuatro** trozos, no
+   tres; tres bastan para las ~1,9 M efectivas con las que se dimensionó la red.
+2. **Reproducibilidad:** ✅, comprobada antes de lanzar con dos tandas de 2 hilos.
+3. **Cubos:** con la regla del millón salen **4 cubos**, no 8:
+   `CUBO[33] = [0]*9 + [1]*8 + [2]*8 + [3]*8`, o sea ≤ 8, 9–16, 17–24 y 25–32
+   piezas. La ocupación por número de piezas es plana (130 k–380 k por valor) con
+   un diente de sierra entre pares e impares —las recapturas: un número impar de
+   piezas suele durar una jugada— y los picos esperables en 30 y 28.
+4. **Autocorrelación y muestras efectivas:** en la tabla de §5.5. ρ = 0,885,
+   decorrelación 11,4 plies, **633 k efectivas por trozo**.
+5. **Longitud de partida sin adjudicación: 114,3 plies** (mediana 109, tope 300).
+   Queda por debajo de la horquilla estimada (125–140) y por encima de los 97,1
+   del banco. Ganan blancas el 38,8 %, negras el 38,5 %, tablas el 22,7 %.
 
 ---
 
