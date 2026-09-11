@@ -26,7 +26,7 @@
 use std::time::Duration;
 
 use vigia::board::Board;
-use vigia::eval;
+use vigia::rules::{self, GameEnd};
 use vigia::movegen;
 use vigia::types::{Color, Move};
 
@@ -205,28 +205,20 @@ impl Rachas {
     }
 }
 
+/// Las reglas duras de fin de partida, traducidas a resultado y final.
+///
+/// Las reglas en sí viven en la biblioteca (`vigia::rules`) desde 0.28: el
+/// generador de datos de la red NNUE juega partidas hasta el final igual que
+/// este árbitro, y si las terminara en otro punto etiquetaría sus posiciones
+/// con resultados que el banco nunca produciría. Aquí solo se traduce.
 fn estado_terminal(board: &Board, hashes: &[u64]) -> Option<(Resultado, Final)> {
-    if movegen::generate_legal_moves(board).is_empty() {
-        return Some(if movegen::is_in_check(board, board.side_to_move) {
-            let ganador = match board.side_to_move {
-                Color::White => Resultado::GananNegras,
-                Color::Black => Resultado::GananBlancas,
-            };
-            (ganador, Final::Mate)
-        } else {
-            (Resultado::Tablas, Final::Ahogado)
-        });
-    }
-    if board.halfmove_clock >= 100 {
-        return Some((Resultado::Tablas, Final::CincuentaJugadas));
-    }
-    if eval::is_insufficient_material(board) {
-        return Some((Resultado::Tablas, Final::MaterialInsuficiente));
-    }
-    if hashes.iter().filter(|&&h| h == board.hash).count() >= 3 {
-        return Some((Resultado::Tablas, Final::RepeticionTriple));
-    }
-    None
+    Some(match rules::game_end(board, hashes)? {
+        GameEnd::Checkmate => (perdedor(board.side_to_move), Final::Mate),
+        GameEnd::Stalemate => (Resultado::Tablas, Final::Ahogado),
+        GameEnd::FiftyMoves => (Resultado::Tablas, Final::CincuentaJugadas),
+        GameEnd::InsufficientMaterial => (Resultado::Tablas, Final::MaterialInsuficiente),
+        GameEnd::Repetition => (Resultado::Tablas, Final::RepeticionTriple),
+    })
 }
 
 fn adjudicar(board: &Board, rachas: &Rachas, adj: &Adjudicacion) -> Option<(Resultado, Final)> {

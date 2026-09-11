@@ -14,6 +14,7 @@ pub mod kpk;
 mod magic;
 pub mod movegen;
 pub mod nnue;
+pub mod rules;
 pub mod search;
 pub mod sha256;
 pub mod types;
