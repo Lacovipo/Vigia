@@ -195,6 +195,30 @@ def screlu(a):
     return (v * v) >> 4
 
 
+def accumulator_from_features(net, features):
+    acc = list(net['ft_b'])
+    for f in features:
+        row = net['ft_w'][f * HIDDEN:(f + 1) * HIDDEN]
+        acc = [a + w for a, w in zip(acc, row)]
+    assert all(-32768 <= a <= 32767 for a in acc), 'acumulador fuera de i16'
+    return acc
+
+
+def forward_features(net, us_features, them_features, pieces):
+    """(S, cubo, cp) a partir de las listas de rasgos del que mueve y del rival.
+
+    Es la misma cuenta que `forward`, para quien tiene los rasgos y no la FEN:
+    el cuantizador, que los lee del corpus.
+    """
+    us = accumulator_from_features(net, us_features)
+    them = accumulator_from_features(net, them_features)
+    bucket = net['bucket_of'][pieces]
+    row = net['out_w'][bucket * 2 * HIDDEN:(bucket + 1) * 2 * HIDDEN]
+    s = net['out_b'][bucket] + sum(screlu(a) * w for a, w in zip(us + them, row))
+    assert -2**31 <= s < 2**31, 'suma de salida fuera de i32'
+    return s, bucket, divide_rounding(s)
+
+
 def forward(net, fen):
     """(S, cubo, cp) de la red cruda, desde el bando que mueve.
 
@@ -202,10 +226,4 @@ def forward(net, fen):
     Esto es exactamente lo que el vector dorado compara entero a entero.
     """
     pieces, stm, _ = parse_fen(fen)
-    us = accumulator(net, fen, stm)
-    them = accumulator(net, fen, 1 - stm)
-    bucket = net['bucket_of'][len(pieces)]
-    row = net['out_w'][bucket * 2 * HIDDEN:(bucket + 1) * 2 * HIDDEN]
-    s = net['out_b'][bucket] + sum(screlu(a) * w for a, w in zip(us + them, row))
-    assert -2**31 <= s < 2**31, 'suma de salida fuera de i32'
-    return s, bucket, divide_rounding(s)
+    return forward_features(net, active_features(fen, stm), active_features(fen, 1 - stm), len(pieces))
