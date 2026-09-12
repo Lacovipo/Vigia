@@ -159,3 +159,20 @@ def filtros(datos, hce):
 def util(datos, hce):
     """True donde el registro sobrevive a todos los filtros."""
     return ~np.logical_or.reduce(list(filtros(datos, hce).values()))
+
+
+def partidas_de_validacion(indice_fragmento, datos, fraccion):
+    """True en los registros cuya partida cae del lado de validación.
+
+    Se reparte por **partidas enteras**, no por posiciones: las de una misma
+    partida están correlacionadas (§5.5 del plan) y mezclarlas daría una
+    validación optimista. Un hash del número de partida y del fragmento decide
+    el lado, así que es estable entre ejecuciones.
+
+    `datos` es el fragmento entero, porque el número de partida se cuenta desde
+    su primer registro. Lo usan train.py, holdout.py y check_red.py: vive aquí
+    y no copiado en cada uno porque check_red.py llegó a no aplicarlo, y midió
+    la escala de la red sobre posiciones con las que se había entrenado.
+    """
+    partida = np.cumsum(np.ascontiguousarray(datos['ply']) == 0) - 1
+    return ((partida * 2654435761 + indice_fragmento * 40503) % 10_000) < fraccion * 10_000

@@ -1223,8 +1223,12 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // past what `depth` alone would predict; bail out to a static eval
     // rather than recurse further, which both bounds worst-case recursion
     // and keeps `ctx.killers_at(ply)` in bounds (it's sized to MAX_PLY).
+    // Through `ctx.evaluate`, not the HCE directly: with the network on, this
+    // used to be one of the only two nodes where the HCE still answered. The
+    // accumulator slot is valid, since the parent pushed it before its
+    // `make_move`, and the slot vector is sized MAX_PLY + 1.
     if ply >= MAX_PLY {
-        return eval::evaluate_relative(board);
+        return ctx.evaluate(board, ply);
     }
     ctx.clear_pv(ply);
 
@@ -1651,8 +1655,10 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
     if ctx.should_stop() {
         return 0;
     }
+    // Same bail-out as negamax's, and through the same evaluator for the same
+    // reason.
     if ply >= MAX_PLY {
-        return eval::evaluate_relative(board);
+        return ctx.evaluate(board, ply);
     }
     ctx.clear_pv(ply);
     // Quiescence only plays captures (material strictly drops each time) or,
@@ -2018,6 +2024,29 @@ mod tests {
             let result = search_with_network(fen, depth);
             assert!(result.best_move.is_some(), "{fen}");
         }
+    }
+
+    #[test]
+    fn at_the_ply_limit_the_network_still_evaluates() {
+        // Both bail-outs at MAX_PLY, in negamax and in quiescence, used to call
+        // the HCE directly even with the network on. Out of reach of a normal
+        // search, but reachable through a long enough chain of checks, which is
+        // exactly where a score decides a game. Found by the adversarial review
+        // of the network before 0.29.
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let shared_nodes = AtomicU64::new(0);
+        let mut board = Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1").unwrap();
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
+        let net = nnue::embedded();
+        let mut accumulators = nnue::Accumulators::new((MAX_PLY + 1) as usize);
+        accumulators.refresh(net, &board, MAX_PLY as usize);
+        ctx.nnue = Some(NnueState { net, accumulators });
+
+        let network = ctx.evaluate(&board, MAX_PLY);
+        assert_ne!(network, eval::evaluate_relative(&board), "the test needs a position where the evaluators disagree");
+        assert_eq!(negamax(&mut board, 3, MAX_PLY, -INF, INF, &mut ctx, None), network);
+        assert_eq!(quiescence(&mut board, -INF, INF, MAX_PLY, &mut ctx), network);
     }
 
     #[test]

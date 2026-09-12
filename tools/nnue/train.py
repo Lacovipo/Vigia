@@ -100,9 +100,7 @@ class Corpus:
             util = np.zeros(n, dtype=bool)
             for a in range(0, n, TROZO):
                 util[a:a + TROZO] = ds.util(f.datos[a:a + TROZO], f.hce[a:a + TROZO])
-            partida = np.cumsum(np.ascontiguousarray(f.datos['ply']) == 0) - 1
-            # Un hash de la partida decide su lado, estable entre ejecuciones.
-            es_validacion = ((partida * 2654435761 + i * 40503) % 10_000) < fraccion_validacion * 10_000
+            es_validacion = ds.partidas_de_validacion(i, f.datos, fraccion_validacion)
             filas = np.flatnonzero(util).astype(np.int64)
             globales = (np.int64(i) << 32) | filas
             entrenamiento.append(globales[~es_validacion[filas]])

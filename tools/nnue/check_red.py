@@ -6,7 +6,8 @@
     ./target/release/generador.exe evaluar --red <red.bin> --epd muestra.fen > evals.txt
     python tools/nnue/check_red.py comprobar <red.bin> evals.txt
 
-**`muestra`** saca posiciones útiles del corpus como FEN, con semilla fija.
+**`muestra`** saca posiciones útiles del corpus como FEN, con semilla fija, y
+solo de partidas del lado de validación del entrenador.
 
 **`comprobar`** hace dos cosas:
 
@@ -70,7 +71,12 @@ def muestra(args):
     frags = ds.fragmentos(args.directorios)
     candidatos = []
     for i, f in enumerate(frags):
-        filas = np.flatnonzero(ds.util(f.datos, f.hce))
+        # Solo partidas apartadas del entrenamiento. Sobre las posiciones con
+        # las que se entrenó, la dispersión de la red se parece a la de las
+        # etiquetas más de lo que se parecerá en partida, y el criterio de la
+        # escala saldría aprobado de más.
+        validas = ds.util(f.datos, f.hce) & ds.partidas_de_validacion(i, f.datos, args.validacion)
+        filas = np.flatnonzero(validas)
         candidatos.append(np.stack([np.full(len(filas), i), filas], axis=1))
     candidatos = np.concatenate(candidatos)
     elegidos = candidatos[rng.choice(len(candidatos), min(args.n, len(candidatos)), replace=False)]
@@ -121,6 +127,7 @@ def main():
     m.add_argument('directorios', nargs='+')
     m.add_argument('--n', type=int, default=2000)
     m.add_argument('--semilla', type=int, default=1)
+    m.add_argument('--validacion', type=float, default=0.02, help='la misma fracción que train.py')
     m.add_argument('--salida', required=True)
     c = sub.add_parser('comprobar')
     c.add_argument('red')

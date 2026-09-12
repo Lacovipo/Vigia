@@ -42,11 +42,10 @@ def muestra(args):
         util = np.zeros(n, dtype=bool)
         for a in range(0, n, TROZO):
             util[a:a + TROZO] = ds.util(f.datos[a:a + TROZO], f.hce[a:a + TROZO])
-        # El mismo reparto que train.py, con la misma aritmética: si aquí se
+        # El mismo reparto que train.py, y con la misma función: si aquí se
         # calculara de otra forma, la comparación se haría sobre posiciones que
         # la red sí ha visto y saldría un número halagador y falso.
-        partida = np.cumsum(np.ascontiguousarray(f.datos['ply']) == 0) - 1
-        es_validacion = ((partida * 2654435761 + i * 40503) % 10_000) < args.validacion * 10_000
+        es_validacion = ds.partidas_de_validacion(i, f.datos, args.validacion)
         filas = np.flatnonzero(util & es_validacion)
         candidatos.append(np.stack([np.full(len(filas), i), filas], axis=1))
     candidatos = np.concatenate(candidatos)
