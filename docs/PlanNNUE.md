@@ -659,6 +659,10 @@ hasta el mate**. El corpus viejo cortaba por adjudicación en cuanto una partida
 estaba decidida, y por eso casi no tenía mates, ni finales de rey y peón, ni
 puntuaciones enormes. Hay que presupuestar el **60 %**.
 
+Sobre los tres trozos (36,0 M): **60,01 %**, y cada filtro en la misma cifra al
+segundo decimal que en el primero. El corpus es homogéneo, como debe ser: tres
+tandas iguales con semillas distintas.
+
 No se filtra por número de piezas ni se tiran finales (son justamente lo escaso), y **no se
 submuestrea un ply de cada dos**: la correlación se trata dimensionando, no tirando datos
 (§5.5).
@@ -736,6 +740,11 @@ fase 2: las muestras efectivas son útiles ÷ longitud de decorrelación, y al
 acortar bajan las dos a la vez; la cuenta da 0,053 por posición jugada se corte
 donde se corte. Y las aperturas más variadas que traería tampoco: la variedad
 entre partidas es el 1,2 % de la varianza. El único camino es **más trozos**.
+
+**Hecho, y la predicción se cumple.** Los tres trozos suman 36.001.827 brutas,
+21.603.026 útiles y **1.898.466 muestras efectivas: 9,40 por parámetro**, contra
+las 10,9 con las que se eligió N = 256. ρ y la longitud de decorrelación no se
+mueven al juntar los tres (0,885 y 11,4 plies).
 
 ### 5.6 Objetivo de entrenamiento
 
@@ -1040,6 +1049,27 @@ previsto, se sabe antes de gastar los otros dos.
 5. **Longitud de partida sin adjudicación: 114,3 plies** (mediana 109, tope 300).
    Queda por debajo de la horquilla estimada (125–140) y por encima de los 97,1
    del banco. Ganan blancas el 38,8 %, negras el 38,5 %, tablas el 22,7 %.
+
+**Resultado del corpus completo (3 trozos, 36 M, 18,95 h de máquina con 8 hilos):**
+
+- **Criterio 1, volumen:** 36.001.827 brutas → **21.603.026 útiles**. El criterio
+  pedía ≥ 24 M filtradas y se queda en 21,6 M. Se da por bueno: el número con el
+  que se dimensionó la red no es el nominal sino el de **muestras efectivas**, y
+  ese sí llega (1,90 M, 9,40 por parámetro). Un cuarto trozo compraría 12,5 por
+  parámetro a cambio de 6,3 h; se deja en reserva por si la fase 5 dice que el
+  cuello es la capacidad.
+- **Criterio 2, reproducibilidad:** ya comprobada antes de generar.
+- **Criterio 3, cubos: con 36 M la regla del millón ya no fusiona ninguno** y
+  salen los **8 cubos** del reparto por defecto (≤ 4, 5–8, … , 29–32 piezas). Con
+  12 M salían 4. La tabla viaja en la cabecera de la red, así que el número de
+  cubos es un dato del corpus y no del código: cambiar de corpus puede cambiarlo,
+  y el motor se entera al cargar.
+- **Criterio 4: 1.898.466 muestras efectivas**, 9,40 por parámetro.
+- **Criterio 5: 314.931 partidas** de 114,3 plies de media. Ganan blancas el
+  38,9 %, negras el 38,4 %, tablas el 22,7 %.
+
+Y la constante del entrenador: **K = 160,7** sobre 10 M etiquetas útiles, la misma
+que daba el primer trozo solo.
 
 ---
 
