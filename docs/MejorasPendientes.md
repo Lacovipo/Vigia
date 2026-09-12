@@ -396,7 +396,9 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
 | 1 — cerrar el bucle con la red de material | **hecha**: los cuatro criterios cumplidos |
 | 2 — generador y corpus | **hecha**: 36 M brutas en 18,95 h con 8 CPUs → 21,6 M útiles y 1,90 M muestras efectivas (9,40 por parámetro), 8 cubos, K = 160,7 |
-| 3 — entrenar, cuantizar y exportar | **hecha**: `atalaya-256-6f8033fc` empotrada. Idéntica entero a entero entre el motor y Python, escala 1,044, y recorta el 22,9 % de la pérdida de la HCE sobre partidas apartadas |
+| 3 — entrenar, cuantizar y exportar | **hecha**: `atalaya-256-6f8033fc` empotrada. Idéntica entero a entero entre el motor y Python, escala 1,052 sobre partidas apartadas, y recorta el 22,9 % de la pérdida de la HCE |
+| 4 — el coste real | **hecha**: la red no cuesta nodos/segundo, los da: +53 % en vacío y +36 % con ocho procesos a la vez; +0,60 plies en partidas |
+| 5 — SPRT-A contra 0.28 | **hecha y aprobada**: `acepta_h1` en 213 parejas (`029-atalaya-256-A`) y **+250,4 Elo [+240,6, +260,6]** con 2.700 parejas de tope fijo (`029-atalaya-256-A-estimacion`). Publicada como 0.29, con la red encendida por defecto |
 | 4 a 7 | pendientes |
 
 La fase 1, criterio a criterio:

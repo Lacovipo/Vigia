@@ -824,6 +824,7 @@ desde los resultados) cada vez que se lee.
 |---|---|
 | `banco velocidad` de 0.28 (legalidad por clavadas) contra 0.27 | nodos idénticos en las 12 posiciones; +29,7 / +34,1 / +32,5 % de nps con la máquina en reposo |
 | red NNUE apagada contra 0.28 | nodos idénticos en las 12 posiciones, −0,8 % de nps: la integración no toca la HCE |
+| 0.29 con la corrección de `MAX_PLY` contra el binario que jugó la fase 5, los dos con la red | nodos idénticos en las 12 posiciones: la corrección no toca la búsqueda normal, y el +250 vale para lo que se publica |
 | coste de la ruta de evaluación de la red, duplicando `evaluate` y `push` | 43,1 + 43,6 ≈ 87 ns por nodo, con nodos idénticos en los 9 binarios |
 | vector dorado de la red, Rust contra Python | 4.096 posiciones: índices y pasada hacia delante idénticos entero a entero |
 | A/A determinista (`banco humo`, 8 parejas, 20.000 nodos) | pentanomial `[0,0,8,0,0]`, 0,00 Elo exacto |
@@ -831,7 +832,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 374 tests (247 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 384 tests (257 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -847,6 +848,9 @@ desde los resultados) cada vez que se lee.
 | `028-velocidad-en-elo-estimacion` | 0.28 vs 0.27 | `movetime` 100 ms | 6.072 parejas, tope fijo: **+72,4 Elo** [+67,3, +77,6], +0,493 plies |
 | `028-velocidad-en-elo-300ms` | 0.28 vs 0.27 | `movetime` 300 ms | 2.000 parejas, tope fijo: **+69,1 Elo** [+60,6, +77,7], +0,553 plies |
 | `028-nnue-fase1-material` | red de solo material vs 0.28 | 50.000 nodos | 256 parejas, tope fijo: **−236,4 Elo** [−271,7, −204,9], ni una partida anómala. Fase 1 del plan de NNUE: tenía que perder por más de 150 |
+| `029-atalaya-sonda` | primera red entrenada (`659345d5`) vs 0.28 | `movetime` 100 ms | 128 parejas, sonda: **+200,0 Elo** [+156,8, +249,7], +0,60 plies, 0 anómalas |
+| `029-atalaya-256-A` | red `6f8033fc` (0.29) vs 0.28 | `movetime` 100 ms | 213 parejas: **`acepta_h1`**, +266,7 Elo (sesgado al alza) |
+| `029-atalaya-256-A-estimacion` | red `6f8033fc` (0.29) vs 0.28 | `movetime` 100 ms | 2.700 parejas, tope fijo: **+250,4 Elo** [+240,6, +260,6] |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba

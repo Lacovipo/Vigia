@@ -78,8 +78,8 @@ pub struct Engine {
     /// `SearchLimits::variety`. Off by default: strongest play, and
     /// reproducible node counts for the strength harness.
     variety: bool,
-    /// Persistent state behind `setoption name UseNNUE` — see
-    /// `SearchLimits::use_nnue` for why it is off by default for now.
+    /// Persistent state behind `setoption name UseNNUE`. On by default since
+    /// 0.29: see `SearchLimits::use_nnue`.
     use_nnue: bool,
 }
 
@@ -97,7 +97,7 @@ impl Engine {
             pondering: Arc::new(AtomicBool::new(false)),
             ponder_enabled: false,
             variety: false,
-            use_nnue: false,
+            use_nnue: true,
         }
     }
 }
@@ -162,7 +162,7 @@ fn cmd_uci(out: &mut impl Write) {
     );
     let _ = writeln!(out, "option name Ponder type check default false");
     let _ = writeln!(out, "option name Variety type check default false");
-    let _ = writeln!(out, "option name UseNNUE type check default false");
+    let _ = writeln!(out, "option name UseNNUE type check default true");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
@@ -714,11 +714,15 @@ mod tests {
     #[test]
     fn eval_reports_the_static_score_of_the_current_position() {
         let (out, keep_going) = run_command("eval");
-        // Not 0 at startpos: White is to move, and the eval's tempo term
-        // credits that (see `eval::TEMPO_BONUS`). The total line stays last
-        // and in the original format (scripts parse it); the per-term
-        // breakdown precedes it.
-        assert!(out.trim_end().ends_with("Evaluation: 12 (white side)"));
+        // Not 0 at startpos: White is to move, and the HCE's tempo term
+        // credits that (see `eval::TEMPO_BONUS`). The per-term breakdown is
+        // the HCE's and is printed whichever evaluator is active. The total
+        // line stays last and in the original format (scripts parse it); since
+        // 0.29 it carries the network's score by default, which
+        // `eval_shows_both_evaluators_and_ends_with_the_active_one` pins.
+        assert!(out.contains("HCE:   +12"), "{out}");
+        let last = out.trim_end().lines().last().unwrap_or_default();
+        assert!(last.starts_with("Evaluation: ") && last.ends_with(" (white side)"), "{out}");
         assert!(out.contains("material:"));
         assert!(out.contains("tempo:"));
         assert!(keep_going);
@@ -726,20 +730,15 @@ mod tests {
 
     #[test]
     fn eval_shows_both_evaluators_and_ends_with_the_active_one() {
+        // Since 0.29 the active evaluator of a fresh engine is the network. Its
+        // score is not pinned to a number -- the embedded network changes when
+        // a better one is trained. What has to hold is that the last line
+        // reports the network's own score, and that it is not the HCE's.
         let mut engine = Engine::new();
         let mut out = Vec::new();
         handle_command("eval", &mut engine, &mut out);
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("HCE:") && text.contains("NNUE:"), "{text}");
-        assert!(text.trim_end().ends_with("Evaluation: 12 (white side)"), "{text}");
-
-        let mut out = Vec::new();
-        handle_command("setoption name UseNNUE value true", &mut engine, &mut out);
-        handle_command("eval", &mut engine, &mut out);
-        let text = String::from_utf8(out).unwrap();
-        // Not pinned to a number -- the embedded network changes when a better
-        // one is trained. What has to hold is that the last line now reports
-        // the network's own score, and that it is not the HCE's.
         let network: i32 = text
             .lines()
             .find_map(|line| line.trim().strip_prefix("NNUE:"))
@@ -749,12 +748,27 @@ mod tests {
             .expect("the NNUE score must be a number");
         assert!(text.trim_end().ends_with(&format!("Evaluation: {network} (white side)")), "{text}");
         assert_ne!(network, 12, "if both evaluators agree the test proves nothing");
+
+        // And with the network switched off, the HCE's: only the tempo, at the start.
+        let mut out = Vec::new();
+        handle_command("setoption name UseNNUE value false", &mut engine, &mut out);
+        handle_command("eval", &mut engine, &mut out);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.trim_end().ends_with("Evaluation: 12 (white side)"), "{text}");
     }
 
     #[test]
-    fn uci_advertises_use_nnue_off_by_default() {
+    fn uci_advertises_use_nnue_on_by_default() {
+        // What a GUI reads has to be what the engine does: a GUI that trusts
+        // the advertised default and never sends the option must get the
+        // network, which is what `a_new_engine_searches_with_the_network` pins.
         let (out, _) = run_command("uci");
-        assert!(out.contains("option name UseNNUE type check default false"));
+        assert!(out.contains("option name UseNNUE type check default true"));
+    }
+
+    #[test]
+    fn a_new_engine_searches_with_the_network() {
+        assert!(Engine::new().use_nnue);
     }
 
     #[test]

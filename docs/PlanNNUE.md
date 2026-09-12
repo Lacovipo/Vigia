@@ -902,7 +902,8 @@ un caso no está en el dorado, no está probado.
 
 ### 7.3 Herramienta de diagnóstico
 
-Opción UCI **`setoption name UseNNUE value true|false`** (por defecto `true`). Permite medir
+Opción UCI **`setoption name UseNNUE value true|false`** (por defecto `true` desde 0.29;
+hasta entonces fue `false`, mientras la red no estaba aprobada). Permite medir
 HCE contra red **con el mismo binario y el mismo sha**, que es el A/B más limpio posible.
 **No rompe la reproducibilidad del banco:** `calcular_firma`
 (`src/bin/banco/run.rs:256-268`) firma la configuración normalizada completa, `opciones`
@@ -1210,6 +1211,50 @@ lo que interesa, que es fuerza por segundo de reloj — que es donde vive el cr�
 Elo.
 
 **Coste:** ~3–6 h con 8 workers.
+
+**Resultado: aprobada.**
+
+| tanda | parejas | veredicto | Elo | IC 95 % |
+|---|---|---|---|---|
+| `029-atalaya-256-A` (decisión, para al cruzar) | 213 | **`acepta_h1`** | +266,7 (sesgado al alza) | [+231,6, +307,0] |
+| `029-atalaya-256-A-estimacion` (tope fijo) | 2.700 | `continuar`, a propósito | **+250,4** | **[+240,6, +260,6]** |
+
+Candidato `Release/Vigia 0.29-atalaya.exe` (sha256 `c721d6aa…`, red
+`atalaya-256-6f8033fc`, `UseNNUE=true` en las opciones), base
+`Release/Vigia 0.28.exe`, `movetime` 100 ms, 8 workers. En la tanda de la cifra:
+3.884 ganadas, 966 tablas y 550 perdidas, pentanomial `[27, 109, 474, 683, 1.407]`.
+
+Tres notas de método, las tres de las que conviene acordarse:
+
+- **Parar al cruzar infló la cifra otra vez**, +16 Elo sobre la de tope fijo. Menos
+  que en 0.28 (+37), porque con una ventaja tan grande la prueba cruza con más
+  partidas detrás.
+- **La sonda (+200) midió otra red**: `atalaya-256-659345d5`, la de 30 épocas,
+  jugada desde `target/release/`, un binario que ya no existe. Las dos tandas de
+  esta fase son del binario congelado con la red definitiva y son las únicas
+  cifras que describen lo que se publica. Los intervalos de las dos redes se
+  solapan: no hay evidencia de que una juegue mejor que la otra.
+- **«La mejor de cuatro» no está avalada por su diferencia.** Las cuatro corridas
+  comparten semilla y muestra de validación, y las tres primeras se separan un
+  0,3 %: son indistinguibles. Lo que avala a la elegida es su propia tanda de
+  2.700 parejas, no haber quedado primera.
+
+#### Revisión adversarial antes de publicar
+
+Cinco lentes independientes buscaron por qué el resultado podría no ser real
+(banco injusto, contaminación entre corpus y libro, motor con la red, entrenador,
+cifras mal citadas), y cada sospecha la revisó otro agente intentando refutarla.
+**Ninguna explica el resultado.** Lo que salió:
+
+| hallazgo | qué se hizo |
+|---|---|
+| al tocar `MAX_PLY`, `negamax` y la quiescencia evaluaban con la HCE aunque la red estuviera encendida | **corregido**: pasan por `ctx.evaluate`, con test. Sin efecto medible —esos nodos no aparecen en partidas normales—, pero era el único sitio donde «la red está encendida» era falso |
+| `check_red.py muestra` sacaba posiciones de entrenamiento, así que el criterio 3 se midió sobre posiciones que la red había visto | **corregido**: el reparto de validación vive en `dataset.py` y lo usan los tres scripts (reproduce byte a byte el holdout anterior). Medida de nuevo sobre partidas apartadas: razón **1,052**, dentro del ±15 % |
+| este plan decía `UseNNUE` «por defecto `true`» (§7.3) cuando era `false` | se vuelve cierto con 0.29, que la enciende por defecto |
+| con `movetime`, el banco no vigila el tiempo de cada jugada: no hay guardián como el de `go nodes` | comprobado a mano que no pasó: candidato 99,57 ms por jugada de media y 103 de máximo, base 99,86 y 106. Queda como mejora del banco |
+| el banco no comprueba que el motor anuncie las opciones UCI que se le mandan | una opción mal escrita se ignoraría en silencio. Mejora del banco |
+| `tablas_desde_jugada` se compara con el número de jugada del libro, que siempre es 1, así que la adjudicación de tablas casi nunca se dispara | medido: no cambia el resultado de ninguna de las 256 partidas de la sonda. Afecta igual a todas las tandas anteriores. Mejora del banco |
+| la exclusión de los libros del banco se anuncia con el tamaño del conjunto, no con un recuento | comprobado que muerde (las claves del libro están literales en `apertura.txt`), y aun con fallo total serían ~1.200 registros de 36 M |
 
 ---
 

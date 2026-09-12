@@ -188,11 +188,12 @@ pub struct SearchLimits {
     /// position and depth, which is exactly what a strength harness needs.
     pub variety: bool,
     /// Evaluate with the network compiled into the binary instead of the HCE
-    /// (UCI option `UseNNUE`). Off by default, and deliberately so while no
-    /// trained network has passed the bench: the one embedded during the
-    /// integration phase only counts material, and making it the default would
-    /// turn every build of `main` into a much weaker engine for nothing. Phase 5
-    /// of `docs/PlanNNUE.md` flips the default, and only on an `acepta_h1`.
+    /// (UCI option `UseNNUE`). The UCI engine turns it on by default since
+    /// 0.29, when the trained network passed phase 5 of `docs/PlanNNUE.md`
+    /// with +250 Elo over 0.28. `SearchLimits::default()` still leaves it off
+    /// on purpose: it is the library's neutral setting, the one the tests that
+    /// pin HCE scores are written against, and a caller that wants the network
+    /// asks for it.
     pub use_nnue: bool,
     /// UCI `go mate N`: look for a forced mate in at most N moves. Sets the
     /// depth budget to `2*N` plies when no explicit `depth` was given —

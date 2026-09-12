@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.28.0 (`Cargo.toml`).
+**Versión:** 0.29.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -529,7 +529,7 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 ---
 
-### La red NNUE (`nnue.rs`) — entrenada, y todavía apagada por defecto
+### La red NNUE (`nnue.rs`) — entrenada, y encendida por defecto desde 0.29
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
 argumentada en `docs/PlanNNUE.md`. La red empotrada es
@@ -539,9 +539,13 @@ el andamio para probar el bucle entero antes de gastar horas generando datos y
 que sigue en `nets/` porque dos tests la cargan del fichero: es la única red cuya
 salida se puede recalcular con lápiz.
 
-Va **apagada por defecto** (`setoption name UseNNUE value true` la enciende)
-mientras el SPRT de la fase 5 no la apruebe. El defecto es una decisión de
-versión, no de código.
+Va **encendida por defecto desde 0.29**, tras aprobar la fase 5 con +250 Elo
+sobre 0.28; `setoption name UseNNUE value false` vuelve a la HCE, que sigue entera
+en el binario. `SearchLimits::default()` la deja **apagada** a propósito: es el
+ajuste neutro de la biblioteca, y con él están escritos los tests que fijan
+puntuaciones de la HCE y **el generador de datos**, cuyas etiquetas siguen siendo
+búsquedas con la HCE. Una segunda generación de corpus con la red tendrá que
+pedirla explícitamente.
 
 #### De dónde salen los pesos
 
@@ -682,9 +686,14 @@ Y con la red entrenada:
 - **Y esa velocidad es profundidad**: +0,60 plies de media en partidas de verdad,
   contra los +0,52 que predice el factor de ramificación 1,71 para ese +36 %.
 - **Sonda de fuerza** (`029-atalaya-sonda`, 128 parejas a `movetime` 100 ms):
-  **+200 Elo** [+157, +250], 168-53-35, cero partidas anómalas. Es una sonda, no
-  un veredicto: la decisión es `029-atalaya-256-A` y la cifra,
-  `029-atalaya-256-A-estimacion`.
+  **+200 Elo** [+157, +250], 168-53-35, cero partidas anómalas. Con la primera red
+  entrenada (`659345d5`), no con la que se publica.
+- **Fase 5, con la red que se publica** (`Release/Vigia 0.29-atalaya.exe`):
+  **`acepta_h1`** en 213 parejas (`029-atalaya-256-A`), y en la tanda de tope fijo
+  de 2.700 parejas (`029-atalaya-256-A-estimacion`), **+250,4 Elo
+  [+240,6, +260,6]** sobre 0.28 a `movetime` 100 ms. Es, con diferencia, el mayor
+  salto de la historia del motor: 0.28 ganó +72 a 0.27, y eso ya era sobre todo
+  velocidad.
 
 ---
 
@@ -1451,6 +1460,22 @@ usarse para aprobar un cambio.
   referencia de la máquina, y un defecto real del banco — `banco humo` no
   se podía correr con su presupuesto de nodos por defecto, y tampoco con
   0.27. Está arreglado y contado en §6 de `docs/BancoPruebas.md`.
+- **0.29.0 — la red NNUE, encendida por defecto.** Atalaya-256 (`772 → 2×256 → 1`,
+  8 cubos), entrenada con 36 M de posiciones de autojuego del propio Vigía y
+  empotrada en el binario. **+250,4 Elo** [+240,6, +260,6] sobre 0.28 con 2.700
+  parejas de tope fijo, tras un `acepta_h1` en 213. Es el mayor salto del
+  proyecto con diferencia, y no es solo evaluación: la red es más barata que la
+  HCE (~87 ns por nodo frente a ~248), así que el motor va un 36 % más rápido
+  bajo carga y llega 0,6 plies más hondo.
+
+  El camino entero está en `docs/PlanNNUE.md`: el bucle cerrado primero con una
+  red de solo material para probar la integración, un generador de corpus
+  reproducible byte a byte, un entrenador cuyo modelo flotante es el motor sin
+  redondear, y cada paso atado al siguiente entero a entero entre Rust y Python.
+  Antes de publicar, una revisión adversarial buscó por qué el resultado podía no
+  ser real. No encontró nada que lo explique, y sí dos fallos, corregidos antes
+  de cerrar la versión: la HCE todavía respondía al tocar `MAX_PLY`, y la escala
+  de la red se había medido sobre posiciones de entrenamiento.
 
 ---
 
@@ -1518,7 +1543,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 254 del motor + 119 del banco + 8 del harness antiguo
+cargo test --release              # 257 del motor + 119 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```
