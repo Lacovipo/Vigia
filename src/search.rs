@@ -2023,12 +2023,14 @@ mod tests {
     #[test]
     fn use_nnue_really_switches_the_evaluator() {
         // The test above would pass trivially if the option never reached the
-        // search. At depth 1 from the start position every leaf is quiet with
-        // equal material, so the hand-built material network makes the whole
-        // search score exactly 0, while the HCE's tables and tempo do not.
+        // search. So: the same position, the same depth, the two evaluators,
+        // and the scores must differ. It is not pinned to a number, because
+        // the embedded network changes whenever a better one is trained -- but
+        // if this ever fails it means the option stopped reaching the search
+        // (or that a network agrees with the HCE to the centipawn, which is
+        // worth stopping to look at either way).
         let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-        assert_eq!(search_with_network(start, 1).score, 0);
-        assert_ne!(search_to_depth(start, 1).score, 0);
+        assert_ne!(search_with_network(start, 1).score, search_to_depth(start, 1).score);
     }
 
     #[test]

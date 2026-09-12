@@ -737,8 +737,18 @@ mod tests {
         handle_command("setoption name UseNNUE value true", &mut engine, &mut out);
         handle_command("eval", &mut engine, &mut out);
         let text = String::from_utf8(out).unwrap();
-        // The network embedded for integration only counts material: 0 at the start.
-        assert!(text.trim_end().ends_with("Evaluation: 0 (white side)"), "{text}");
+        // Not pinned to a number -- the embedded network changes when a better
+        // one is trained. What has to hold is that the last line now reports
+        // the network's own score, and that it is not the HCE's.
+        let network: i32 = text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("NNUE:"))
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("eval must print an NNUE line")
+            .parse()
+            .expect("the NNUE score must be a number");
+        assert!(text.trim_end().ends_with(&format!("Evaluation: {network} (white side)")), "{text}");
+        assert_ne!(network, 12, "if both evaluators agree the test proves nothing");
     }
 
     #[test]

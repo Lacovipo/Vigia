@@ -27,3 +27,6 @@ desktop.ini
 # `generador datos` desde su semilla: la cabecera de cada fichero guarda la
 # semilla, los nodos y el sha256 del generador y del fichero de aperturas.
 /datos/
+
+# Los checkpoints del entrenador: se regeneran, y lo que juega es el .bin
+nets/*.pt

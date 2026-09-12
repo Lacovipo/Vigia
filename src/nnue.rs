@@ -294,14 +294,19 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary.
+/// The network compiled into the binary: `atalaya-256-659345d5`, trained on
+/// 36 M positions of Vigia's own self-play (docs/PlanNNUE.md, phase 3).
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
 /// executable, and not for convenience: the bench signs every experiment with
 /// the sha256 of the binary, so with the network outside it two runs could be
 /// "the same binary" playing with different networks, and the bench's
 /// reproducibility would break without a single warning.
-static EMBEDDED: &[u8] = include_bytes!("../nets/material-256.bin");
+///
+/// It replaces `material-256.bin`, the hand-built network of phase 1, which
+/// stays in `nets/` because two tests below still pin its arithmetic: it is the
+/// only network whose every output can be recomputed by hand.
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-659345d5.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();
@@ -956,6 +961,16 @@ mod tests {
         }
     }
 
+    /// The phase-1 network, read from `nets/`. It stopped being the embedded
+    /// one when the trained network arrived, and the tests that pin its
+    /// arithmetic by hand are worth keeping: it is the only network whose
+    /// every output can be recomputed with a pencil.
+    fn material_net() -> Net {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets").join("material-256.bin");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        Net::from_bytes(&bytes).expect("material-256.bin must load")
+    }
+
     #[test]
     fn the_material_network_scores_material_exactly_as_computed_by_hand() {
         // Redoes, independently and in Rust, the arithmetic that
@@ -975,7 +990,7 @@ mod tests {
             (v * v) >> 4
         };
 
-        let net = embedded();
+        let net = &material_net();
         let mut accumulators = Accumulators::new(1);
         for fen in [
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -1002,7 +1017,10 @@ mod tests {
         let net = embedded();
         let mut accumulators = Accumulators::new(1);
 
-        // K+N vs K: the material network alone says a knight up, the rule says draw.
+        // K+N vs K: the network on its own says something other than zero (a
+        // knight up), and the rule says draw. Trained networks never see these
+        // positions -- the corpus filters out everything with scale zero -- so
+        // the postfilter is the only thing standing between them and nonsense.
         let knight = Board::from_fen("8/8/8/4k3/8/8/8/3NK3 w - - 0 1").unwrap();
         accumulators.refresh(net, &knight, 0);
         assert_ne!(accumulators.raw_white(net, &knight, 0), 0);
@@ -1074,7 +1092,7 @@ mod tests {
         // prints for tools/nnue/check_red.py. Pinned to the material network's
         // hand arithmetic, and to the accumulator path the search takes, so
         // the tooling cannot quietly drift from what actually plays.
-        let net = embedded();
+        let net = &material_net();
         let start = Board::start_pos();
         assert_eq!(raw_output(net, &start), (0, 7, 0));
         let queen = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1").unwrap();
@@ -1085,5 +1103,32 @@ mod tests {
             accumulators.refresh(net, board, 0);
             assert_eq!(evaluate_position(net, board), accumulators.evaluate_white(net, board, 0));
         }
+        // And the same three numbers, with the network that really plays.
+        let embedded = embedded();
+        for board in [&start, &queen] {
+            let (sum, bucket, cp) = raw_output(embedded, board);
+            assert_eq!(bucket, embedded.bucket_for(board));
+            assert_eq!(cp, divide_rounding(sum));
+            accumulators.refresh(embedded, board, 0);
+            assert_eq!(evaluate_position(embedded, board), accumulators.evaluate_white(embedded, board, 0));
+        }
+    }
+
+    #[test]
+    fn the_embedded_network_plays_like_something_that_was_trained() {
+        // Not a golden vector -- that is `golden_vector_matches_the_python_forward_pass`
+        // -- but the cheap guard against embedding a broken or random file: a
+        // trained network has to know that the start position is balanced, that
+        // a queen up is winning, and that both sides of the board are the same
+        // game. A random network fails all three.
+        let net = embedded();
+        assert_eq!(net.bucket_for(&Board::start_pos()), 7, "32 pieces is the last of the eight buckets");
+        let start = evaluate_position(net, &Board::start_pos());
+        assert!(start.abs() <= 75, "the start position should be near zero, and it is {start}");
+        let queen = Board::from_fen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1").unwrap();
+        let queen_score = evaluate_position(net, &queen);
+        assert!(queen_score >= 500, "a queen up should be winning, and it is {queen_score}");
+        let mirrored = Board::from_fen("3qk3/8/8/8/8/8/8/4K3 b - - 0 1").unwrap();
+        assert_eq!(evaluate_position(net, &mirrored), -queen_score, "colour flip must negate the score");
     }
 }
