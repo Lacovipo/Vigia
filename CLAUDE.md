@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 381 tests (254 motor, 119 banco, 8 harness viejo)
+cargo test --release                   # 382 tests (255 motor, 119 banco, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -117,11 +117,15 @@ de nodos/segundo compra ~0,52 plies.
   20.000 de `vigia-20000.epd` tienen negras a mover. Atribuir por paridad
   mezcla los dos motores y da el resultado tranquilizador de "los dos salen
   igual". Ya ha mordido dos veces.
-- **La red NNUE va apagada por defecto** (opción UCI `UseNNUE`), y la empotrada
-  hoy solo cuenta material: no es para jugar. `banco velocidad` la enciende con
-  `--uci UseNNUE=true`. Y el coste de la evaluación **no se saca restando nps
-  entre red y HCE**, porque los árboles son distintos (llega a salir negativo);
-  se saca duplicando la llamada con nodos idénticos.
+- **La red NNUE va apagada por defecto** (opción UCI `UseNNUE`), y eso ya no
+  es porque no valga: la empotrada es `atalaya-256`, entrenada con 36 M de
+  posiciones del propio motor, y en una sonda de 128 parejas dio +200 Elo sobre
+  0.28. El defecto se cambia cuando el SPRT de la fase 5 lo apruebe, no antes.
+  Se enciende con `--uci UseNNUE=true` en `banco velocidad` y con `"UseNNUE":
+  true` en las opciones del motor en un config de `sprt`. Y el coste de la
+  evaluación **no se saca restando nps entre red y HCE**, porque los árboles son
+  distintos (llega a salir negativo); se saca duplicando la llamada con nodos
+  idénticos.
 - **El ensamblador de la biblioteca sola engaña.** `cargo rustc --release --lib
   -- --emit asm` saca `nnue.rs` completamente escalar, porque con `lto = true`
   la vectorización ocurre al enlazar. Para comprobar las reglas R1–R3 de la red

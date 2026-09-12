@@ -1,0 +1,63 @@
+{
+  "_": "Sonda corta de la red Atalaya-256 contra 0.28, ANTES de pedir las horas",
+  "_2": "de maquina del SPRT de la fase 5. No decide nada: 128 parejas dan un",
+  "_3": "intervalo de +-60 Elo, que solo sirve para separar 'esto va bien' de",
+  "_4": "'esto esta roto'. La decision es 029-atalaya-256-A.",
+
+  "esquema": 1,
+  "id": "029-atalaya-sonda",
+
+  "_binario": "El binario del arbol de trabajo, con la red empotrada. La sonda no",
+  "_binario_2": "congela nada: el manifiesto guarda su sha256 y eso basta para saber que",
+  "_binario_3": "se midio.",
+
+  "candidato": {
+    "nombre": "0.29-atalaya-sonda",
+    "ruta": "target/release/vigia.exe",
+    "opciones": { "Hash": 32, "Threads": 1, "UseNNUE": true }
+  },
+
+  "base": {
+    "nombre": "0.28",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla propia: la tanda de decision usara otra, para que la sonda no",
+  "_libro_2": "contamine la muestra con la que se decide.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260912,
+    "barajar": true
+  },
+
+  "_busqueda": "Por tiempo, como la fase 5: el cambio de evaluacion mueve los nodos,",
+  "_busqueda_2": "asi que un control por nodos compararia cosas distintas. Y lo que se",
+  "_busqueda_3": "quiere saber es fuerza por segundo de reloj, que es donde vive el +36 %",
+  "_busqueda_4": "de nodos/segundo medido en la fase 4.",
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "4 workers = 4 CPUs, y unos 12 minutos.",
+  "partidas": {
+    "max_parejas": 128,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Las hipotesis de siempre, pero con 128 parejas de tope la tanda casi",
+  "_sprt_2": "seguro termina en 'continuar'. Lo que se lee es el intervalo, no el",
+  "_sprt_3": "veredicto, y con la reserva de que una tanda que cruza va sesgada al alza.",
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/029-atalaya-sonda"
+}

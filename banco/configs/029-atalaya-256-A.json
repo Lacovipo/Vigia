@@ -1,0 +1,67 @@
+{
+  "_": "Fase 5 del plan (SPRT-A): la aprobacion de la red Atalaya-256 contra 0.28.",
+  "_2": "Es la tanda que DECIDE. La cifra no se lee de aqui, sino de",
+  "_3": "029-atalaya-256-A-estimacion: una tanda que para al cruzar da una",
+  "_4": "magnitud sesgada al alza (docs/BancoPruebas.md §7).",
+
+  "_criterio": "Criterio de aceptacion declarado ANTES de jugar: acepta_h1. Con",
+  "_criterio_2": "elo0=0 y elo1=5, 'acepta_h0' no significaria 'empeora', significaria 'no",
+  "_criterio_3": "llega a +5 Elo'. La sonda 029-atalaya-sonda dio +200 [+157, +250] en 128",
+  "_criterio_4": "parejas, asi que se espera cruzar hacia la pareja 230; el tope de 1.000",
+  "_criterio_5": "esta para que la tanda termine igual si la sonda enganaba.",
+
+  "esquema": 1,
+  "id": "029-atalaya-256-A",
+
+  "_binarios": "Candidato congelado en Release/ y su sha en el manifiesto: sin eso,",
+  "_binarios_2": "'el mismo binario' podria ser dos redes distintas.",
+
+  "candidato": {
+    "nombre": "0.29-atalaya",
+    "ruta": "Release/Vigia 0.29-atalaya.exe",
+    "opciones": { "Hash": 32, "Threads": 1, "UseNNUE": true }
+  },
+
+  "base": {
+    "nombre": "0.28",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla nueva, distinta de la de la sonda (20260912): muestra",
+  "_libro_2": "independiente de la que sugirio el resultado.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260913,
+    "barajar": true
+  },
+
+  "_busqueda": "Por tiempo y no por nodos: el cambio de evaluacion mueve los nodos,",
+  "_busqueda_2": "asi que un control por nodos compararia cosas distintas. Con movetime se",
+  "_busqueda_3": "mide lo que interesa, fuerza por segundo de reloj, que es donde vive el",
+  "_busqueda_4": "+36 % de nodos/segundo medido bajo carga en la fase 4.",
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "8 workers = 8 CPUs de las 16 fisicas, el tope que autoriza el",
+  "_partidas_2": "usuario. A ese ritmo la sonda salio a ~2,2 s por pareja, asi que cruzar",
+  "_partidas_3": "deberia costar unos 10 minutos y el tope entero, unos 40.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/029-atalaya-256-A"
+}

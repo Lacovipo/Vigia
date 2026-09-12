@@ -1,0 +1,62 @@
+{
+  "_": "La CIFRA de la red Atalaya-256 contra 0.28. La decision la da",
+  "_2": "029-atalaya-256-A; esta tanda solo existe para que la magnitud no salga",
+  "_3": "sesgada.",
+
+  "_metodo": "Una prueba secuencial que para al cruzar para, por definicion, en un",
+  "_metodo_2": "momento favorable al candidato: en 0.28 la misma comparacion dio +109,2",
+  "_metodo_3": "Elo parando en la pareja 46 y +72,4 con tope fijo y 6.072 parejas. Aqui",
+  "_metodo_4": "se desactiva la parada poniendo las dos hipotesis pegadas alrededor de lo",
+  "_metodo_5": "que se espera (+200) y alpha/beta minusculos: el LLR se queda cerca de",
+  "_metodo_6": "cero, no cruza, y la tanda agota su tope. Mismo truco que",
+  "_metodo_7": "028-velocidad-en-elo-estimacion.",
+
+  "esquema": 1,
+  "id": "029-atalaya-256-A-estimacion",
+
+  "candidato": {
+    "nombre": "0.29-atalaya",
+    "ruta": "Release/Vigia 0.29-atalaya.exe",
+    "opciones": { "Hash": 32, "Threads": 1, "UseNNUE": true }
+  },
+
+  "base": {
+    "nombre": "0.28",
+    "ruta": "Release/Vigia 0.28.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Tercera semilla: ni la de la sonda (20260912) ni la de la decision",
+  "_libro_2": "(20260913).",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260914,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "2.700 parejas con 8 workers: unas 1,7 horas al ritmo de la sonda.",
+  "_partidas_2": "El numero sale de la sonda: con 128 parejas el intervalo fue de +-46",
+  "_partidas_3": "Elo, y el error cae con la raiz del numero de parejas, asi que 2.700",
+  "_partidas_4": "dejan el intervalo en +-10 Elo aproximadamente.",
+  "partidas": {
+    "max_parejas": 2700,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 199.9, "elo1": 200.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/029-atalaya-256-A-estimacion"
+}
