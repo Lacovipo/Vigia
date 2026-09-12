@@ -529,14 +529,45 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 ---
 
-### La red NNUE (`nnue.rs`) — integrada, apagada por defecto
+### La red NNUE (`nnue.rs`) — entrenada, y todavía apagada por defecto
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
-argumentada en `docs/PlanNNUE.md`. Va **apagada por defecto**
-(`setoption name UseNNUE value true` la enciende) y la red empotrada todavía es
-la de la fase 1 del plan: **construida a mano, sin entrenar, que solo cuenta
-material**. No es para jugar. Es para demostrar que el bucle entero funciona
-antes de gastar una hora en generar datos.
+argumentada en `docs/PlanNNUE.md`. La red empotrada es
+**`atalaya-256-6f8033fc`, entrenada con 36 millones de posiciones del propio
+Vigía**. Sustituye a la de la fase 1 —construida a mano, solo material—, que era
+el andamio para probar el bucle entero antes de gastar horas generando datos y
+que sigue en `nets/` porque dos tests la cargan del fichero: es la única red cuya
+salida se puede recalcular con lápiz.
+
+Va **apagada por defecto** (`setoption name UseNNUE value true` la enciende)
+mientras el SPRT de la fase 5 no la apruebe. El defecto es una decisión de
+versión, no de código.
+
+#### De dónde salen los pesos
+
+| | |
+|---|---|
+| corpus | 36.001.827 posiciones de autojuego a 25.000 nodos, 314.931 partidas, 18,95 h con 8 CPUs |
+| aperturas | una distinta por partida, de `apertura.txt`, excluidas las de los libros del banco, más 0–2 plies al azar |
+| partidas | hasta el final, **sin adjudicación**, con las reglas de `rules.rs` |
+| etiqueta | la puntuación de la búsqueda desde quien mueve; el resultado se guarda pero pesa cero (λ = 1) |
+| filtrado | 21.603.026 útiles (60,01 %): fuera capturas, jaques, mates, `\|cp\| ≥ 1500`, KPK y escala cero |
+| lo que valen | **1,90 M muestras efectivas** (ρ = 0,885 a desfase 2, decorrelación 11,4 plies): 9,40 por parámetro |
+| entrenamiento | PyTorch en la GPU, 60 épocas a `lr` 2e-3, lote 16.384, K = 160,7, ~45 min |
+| pérdida | `σ(pred/K)` contra `σ(cp/K)`, con la escala de final dentro de la pasada hacia delante |
+
+**El modelo flotante es el motor sin redondear**: el acumulador vive en unidades
+de activación (1,0 son 127 enteros) y la salida es directamente centipeones, así
+que cuantizar es multiplicar y redondear, y los recortes de pesos del entrenador
+son las cotas T1 y T2 por construcción. Todo el instrumental está en
+`tools/nnue/` y el procedimiento, en `docs/PlanNNUE.md` §5–§7.
+
+**Cuatro entrenamientos, no uno**: con el corpus fijo, lo único que quedaba por
+elegir era cuánto entrenamiento. 30 épocas a `lr` 1e-3 dan 0,008934 de pérdida de
+validación; 60 a 1e-3, 0,008770; 30 a 2e-3, 0,008774; 60 a 2e-3, **0,008750**, que
+es la empotrada. Que 30 épocas al doble de tasa igualen a 60 a la mitad dice que
+el límite eran los pasos de optimización; que a partir de ahí la mejora sea de
+décimas dice que el límite pasó a ser el tamaño del corpus.
 
 **La arquitectura.** `772 → 2×256 → 1`: 768 rasgos planos de pieza y casilla
 vistos desde cada bando —propia o ajena, con la casilla espejada para las
@@ -607,7 +638,9 @@ Todo dentro de `cargo test --release`:
 | el cargador | cabecera contra la arquitectura compilada, sha256 de los pesos y las cotas de desbordamiento T1 (acumulador) y T2 (salida), comprobadas **al cargar** |
 | `the_incremental_accumulator_matches_a_refresh_at_every_node` | cualquier delta o signo erróneo, en cada nodo de árboles completos con enroque, al paso, promociones y torres capturadas en su esquina |
 | `the_evaluation_is_antisymmetric_under_a_colour_flip` | orientación de la perspectiva, propia/ajena, enroque y redondeo. Con una red aleatoria, porque se cumple para cualquier peso |
-| `the_material_network_scores_material_exactly_as_computed_by_hand` | la red empotrada contra la cuenta a mano, rehecha en Rust |
+| `the_material_network_scores_material_exactly_as_computed_by_hand` | la red de material —cargada de `nets/`— contra la cuenta a mano, rehecha en Rust. Sigue siendo el único sitio donde la salida de una red se compara con una fórmula cerrada |
+| `the_embedded_network_plays_like_something_that_was_trained` | la guardia barata contra empotrar un fichero roto o aleatorio: inicial cerca de cero, dama de más ganando, simetría de color |
+| `the_tooling_api_gives_the_numbers_the_search_uses` | que `generador evaluar` —lo que comprueban `check_red.py` y `holdout.py`— use exactamente el camino del acumulador de la búsqueda |
 | `golden_vector_matches_the_python_forward_pass` | **un desacuerdo entre Rust y Python**, el fallo que ningún otro test ve: 4.096 posiciones cuyos índices escribió Rust y comprobó Python (sentido A), y cuya pasada hacia delante calculó Python y reproduce el motor entero a entero (sentido B) |
 | `a_search_with_the_network_keeps_every_accumulator_in_step_with_the_board` | un `push` que falte en cualquiera de los cuatro enganches: en builds de test, **cada evaluación** de la búsqueda compara el acumulador con un refresco |
 
@@ -630,6 +663,28 @@ Todo dentro de `cargo test --release`:
   material contra 0.28 dieron −236,4 Elo [−271,7, −204,9], que es lo que
   tenía que dar una red que solo cuenta material, y en 512 partidas ni una
   jugada ilegal ni una desconexión (`028-nnue-fase1-material`).
+
+Y con la red entrenada:
+
+- **Predice mejor que la HCE lo que va a decir la búsqueda.** Sobre 20.000
+  posiciones de **partidas apartadas** (el mismo reparto de validación que usó el
+  entrenador, `tools/nnue/holdout.py`), la red recorta el **22,9 %** de la pérdida
+  de la HCE en el espacio de la sigmoide: 0,008612 contra 0,011168, con un error
+  medio de 96,4 cp frente a 108,1. La HCE parte con desventaja —las etiquetas son
+  búsquedas de 25.000 nodos, no evaluaciones estáticas— y eso es justo lo que se
+  quería medir: cuánta de esa distancia recorta la red.
+- **Es más rápida que la HCE, no más lenta.** A profundidad 12 contra 0.28:
+  **+53 % de nodos/segundo** con la máquina libre y **+36 % con ocho procesos
+  simultáneos**, que es la carga del SPRT. La red sufre más que la HCE cuando
+  compiten por la caché (404 KB de pesos), y aun así la ventaja aguanta. El banco
+  avisa, con razón, de que los nodos difieren en las 12 posiciones y de que por
+  tanto esto no aprueba nada por sí solo.
+- **Y esa velocidad es profundidad**: +0,60 plies de media en partidas de verdad,
+  contra los +0,52 que predice el factor de ramificación 1,71 para ese +36 %.
+- **Sonda de fuerza** (`029-atalaya-sonda`, 128 parejas a `movetime` 100 ms):
+  **+200 Elo** [+157, +250], 168-53-35, cero partidas anómalas. Es una sonda, no
+  un veredicto: la decisión es `029-atalaya-256-A` y la cifra,
+  `029-atalaya-256-A-estimacion`.
 
 ---
 

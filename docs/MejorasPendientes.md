@@ -396,7 +396,7 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 0 — congelar los libros | **hecha**: sha256 anotados en `BancoPruebas.md`, y `.gitattributes` para que un clon no los convierta a CRLF |
 | 1 — cerrar el bucle con la red de material | **hecha**: los cuatro criterios cumplidos |
 | 2 — generador y corpus | **hecha**: 36 M brutas en 18,95 h con 8 CPUs → 21,6 M útiles y 1,90 M muestras efectivas (9,40 por parámetro), 8 cubos, K = 160,7 |
-| 3 — entrenar, cuantizar y exportar | **en marcha**: entrenando la primera red sobre el corpus completo |
+| 3 — entrenar, cuantizar y exportar | **hecha**: `atalaya-256-6f8033fc` empotrada. Idéntica entero a entero entre el motor y Python, escala 1,044, y recorta el 22,9 % de la pérdida de la HCE sobre partidas apartadas |
 | 4 a 7 | pendientes |
 
 La fase 1, criterio a criterio:

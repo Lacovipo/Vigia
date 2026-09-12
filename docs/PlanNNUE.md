@@ -1095,6 +1095,36 @@ que daba el primer trozo solo.
 
 **Coste:** horas de CPU, sin ocupar la máquina entera.
 
+**Resultado (red `atalaya-256-6f8033fc`, 60 épocas a `lr` 2e-3 sobre los 36 M):**
+
+- **Criterio 1, el vector dorado con la red entrenada:** el motor y Python dan los
+  mismos enteros en **2.000 posiciones del corpus** (`generador evaluar` +
+  `check_red.py`). Cubre lo que el dorado con red aleatoria no cubre: una tabla de
+  cubos de verdad. El dorado clásico sigue en verde dentro de `cargo test`.
+- **Criterio 2, T1 y T2:** comprobados en Python antes de escribir el fichero
+  (`quantize.py` → `netfmt.check_bounds`) y otra vez en Rust al cargar. Error de
+  cuantización: 0,80 cp de media, 4,2 de máximo.
+- **Criterio 3, la escala:** razón **1,044** frente a la HCE, dentro del ±15 %. No
+  hace falta constante de ganancia ni resintonizar ningún margen de poda. Medido
+  sobre posiciones del corpus, por la corrección de arriba.
+- **Criterio 4, la referencia:** sobre 20.000 posiciones de **partidas apartadas**,
+  la red recorta el **22,9 %** de la pérdida de la HCE (0,008612 contra 0,011168;
+  error medio 96,4 cp contra 108,1). Se mide con `tools/nnue/holdout.py`, que
+  reproduce el reparto de validación del entrenador, en vez de con las 815.632
+  posiciones a d = 10,66 que decía el plan: ese holdout profundo es del corpus
+  viejo, con otras etiquetas y otro origen, y comparar contra él habría mezclado
+  dos preguntas.
+
+**Cuánto entrenamiento:** cuatro combinaciones, comparadas por pérdida de
+validación y por el recorte sobre la HCE. 30 épocas a 1e-3 → 0,008934 (20,7 %);
+60 a 1e-3 → 0,008770 (21,5 %); 30 a 2e-3 → 0,008774 (22,1 %); **60 a 2e-3 →
+0,008750 (22,9 %)**. Que doblar la tasa iguale a doblar las épocas dice que el
+cuello eran los pasos de optimización; que a partir de ahí sean décimas, que pasó
+a serlo el corpus.
+
+**Coste real:** 45 min de GPU por entrenamiento, minutos para cuantizar y
+comprobar.
+
 ---
 
 ### Fase 4 — El coste real, antes de gastar partidas
@@ -1114,6 +1144,38 @@ que va a haber en el SPRT — ese número está **por medir** y esta es la prime
 existe.
 
 **Coste:** minutos.
+
+**Resultado:** el criterio se cumple con holgura, y por el lado bueno: la red no
+cuesta nps, los **da**.
+
+| | nodos/segundo del candidato | de 0.28 | razón |
+|---|---|---|---|
+| máquina libre | 2.097.758 | 1.375.373 | **1,53×** |
+| ocho medidas a la vez | ~1.756.000 | ~1.289.000 | **1,36×** |
+
+El presupuesto de §2 daba por bueno hasta −20,8 % y el criterio duro era 0 %.
+La explicación está medida desde la fase 1: la ruta de la red cuesta ~87 ns por
+nodo y la HCE ~248.
+
+**Corrección al método.** El plan mandaba repetir con `--hilos 16` «para ver el
+efecto de la presión de caché con los 16 procesos que va a haber en el SPRT», y
+esa opción no hace eso: fija la opción UCI `Threads` del motor, y Vigía no tiene
+búsqueda paralela. La presión de caché se mide como se ha hecho arriba, lanzando
+**ocho comparaciones simultáneas**, que es la carga real de la tanda. Y el efecto
+existe: la ventaja baja de 1,53× a 1,36×, porque los 404 KB de pesos compiten por
+la caché y la HCE, que casi no toca memoria, sufre menos.
+
+**Y esa velocidad se convierte en profundidad:** +0,60 plies de media en partidas
+de verdad (`tools/analiza_tanda.py` sobre la sonda), contra los +0,52 que predice
+el factor de ramificación 1,71 para un +36 %.
+
+#### Una sonda antes de la fase 5, que el plan no preveía
+
+128 parejas a `movetime` 100 ms (`029-atalaya-sonda`), 12 minutos con 4 CPUs:
+**+200 Elo** [+157, +250], 168-53-35, **cero partidas anómalas**. No decide nada
+—el intervalo es ancho a propósito— pero separa «esto va bien» de «esto está
+roto» antes de pedir horas de máquina, y de paso da la estimación con la que se
+dimensiona la tanda de la cifra.
 
 ---
 
