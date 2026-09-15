@@ -100,7 +100,7 @@ class Corpus:
             util = np.zeros(n, dtype=bool)
             for a in range(0, n, TROZO):
                 util[a:a + TROZO] = ds.util(f.datos[a:a + TROZO], f.hce[a:a + TROZO])
-            es_validacion = ds.partidas_de_validacion(i, f.datos, fraccion_validacion)
+            es_validacion = ds.partidas_de_validacion(f, fraccion_validacion)
             filas = np.flatnonzero(util).astype(np.int64)
             globales = (np.int64(i) << 32) | filas
             entrenamiento.append(globales[~es_validacion[filas]])

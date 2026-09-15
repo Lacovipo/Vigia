@@ -4,6 +4,7 @@
 //! generador indices --semilla N --salida tools/nnue/indices.txt
 //! generador datos   --aperturas <fichero> --excluir banco/libros --posiciones N
 //!                   --semilla N --salida <directorio> [--nodos 25000] [--hilos 1]
+//!                   [--evaluador hce]
 //! ```
 //!
 //! **`indices`** escribe el sentido A del vector dorado (§7.1 de
@@ -58,7 +59,10 @@ USO
 
   generador datos --aperturas <fichero> --excluir <directorio> --posiciones N
                   --semilla N --salida <directorio> [--nodos N] [--hilos N] [--fen si]
+                  [--evaluador hce|red]
       Corpus de entrenamiento: autojuego a nodos fijos, sin adjudicación.
+      --evaluador red etiqueta con búsquedas que evalúan con la red empotrada;
+      por defecto, hce, como el corpus v1. Queda escrito en la cabecera.
       --excluir apunta a los libros del banco, cuyas posiciones no se usan.
       Cada hilo ocupa una CPU y escribe hilo-NN.bin y hce-NN.bin; con --fen si,
       también fen-NN.txt con la FEN de cada registro, para verificar el formato.
@@ -308,7 +312,15 @@ fn registro_hce(board: &Board) -> [u8; 4] {
     [nnue::training_scale(board), board.occupied().count() as u8, 0, 0]
 }
 
-fn cabecera(nodos: u64, semilla: u64, hilo: usize, sha_aperturas: &[u8; 32], sha_generador: &[u8; 32], registros: u64) -> [u8; CABECERA] {
+fn cabecera(
+    nodos: u64,
+    semilla: u64,
+    hilo: usize,
+    red: bool,
+    sha_aperturas: &[u8; 32],
+    sha_generador: &[u8; 32],
+    registros: u64,
+) -> [u8; CABECERA] {
     let mut h = [0u8; CABECERA];
     h[0..8].copy_from_slice(MAGIA);
     h[8..12].copy_from_slice(&VERSION_FORMATO.to_le_bytes());
@@ -318,6 +330,10 @@ fn cabecera(nodos: u64, semilla: u64, hilo: usize, sha_aperturas: &[u8; 32], sha
     h[28..60].copy_from_slice(sha_aperturas);
     h[60..92].copy_from_slice(sha_generador);
     h[92..100].copy_from_slice(&registros.to_le_bytes());
+    // Banderas. Bit 0: las etiquetas son búsquedas que evalúan con la red, no
+    // con la HCE. Los ficheros escritos antes de que existiera tienen ceros
+    // aquí, y eso es exactamente lo que eran.
+    h[100..104].copy_from_slice(&u32::from(red).to_le_bytes());
     h
 }
 
@@ -393,7 +409,30 @@ fn identidades_excluidas(directorio: &Path) -> Result<HashSet<String>, String> {
 /// Registros, anexos de `hce` y, si se pidieron, las FEN de cada registro.
 type Partida = (Vec<[u8; REGISTRO]>, Vec<[u8; 4]>, Vec<String>);
 
-fn jugar_partida(mut board: Board, nodos: u64, tt: &Tt, stop: &AtomicBool, con_fen: bool) -> Option<Partida> {
+/// Reescribe el recuento de registros de la cabecera y deja el fichero listo
+/// para seguir escribiendo al final. Se llama después de cada partida, con los
+/// dos ficheros ya vaciados: así un trozo cortado a media tanda (un reinicio
+/// forzado de la máquina) conserva todo lo jugado hasta la última partida, en
+/// lugar de una cabecera que dice cero.
+fn anotar_registros(fichero: &mut File, registros: u64) -> std::io::Result<()> {
+    fichero.seek(SeekFrom::Start(92))?;
+    fichero.write_all(&registros.to_le_bytes())?;
+    fichero.seek(SeekFrom::End(0))?;
+    Ok(())
+}
+
+/// Una búsqueda de etiqueta: `nodos` de presupuesto, evaluando con la red o
+/// con la HCE. Su propia función para que un test compruebe que `--evaluador`
+/// llega de verdad a la búsqueda: un corpus etiquetado con el evaluador que no
+/// era no falla en nada, solo entrena una red peor, noches de máquina después.
+fn buscar(board: &Board, historia: &[u64], nodos: u64, red: bool, tt: &Tt, stop: &AtomicBool) -> search::SearchResult {
+    let limites = SearchLimits { max_nodes: Some(nodos), use_nnue: red, ..Default::default() };
+    // La búsqueda añade ella misma la posición actual a su camino, así que
+    // recibe la historia sin ella, igual que desde UCI.
+    search::search(board, limites, stop, tt, &historia[..historia.len() - 1], |_, _| {})
+}
+
+fn jugar_partida(mut board: Board, nodos: u64, red: bool, tt: &Tt, stop: &AtomicBool, con_fen: bool) -> Option<Partida> {
     let mut historia = vec![board.hash];
     if rules::game_end(&board, &historia).is_some() {
         return None;
@@ -407,10 +446,7 @@ fn jugar_partida(mut board: Board, nodos: u64, tt: &Tt, stop: &AtomicBool, con_f
     let mut fens = Vec::new();
     let mut fin = None;
     for ply in 0..MAX_PLIES_PARTIDA {
-        let limites = SearchLimits { max_nodes: Some(nodos), ..Default::default() };
-        // La búsqueda añade ella misma la posición actual a su camino, así que
-        // recibe la historia sin ella, igual que desde UCI.
-        let resultado = search::search(&board, limites, stop, tt, &historia[..historia.len() - 1], |_, _| {});
+        let resultado = buscar(&board, &historia, nodos, red, tt, stop);
         let jugada = resultado.best_move?;
         if ply == 0 && resultado.score.abs() >= LIMITE_APERTURA_CP {
             return None;
@@ -445,6 +481,7 @@ fn jugar_partida(mut board: Board, nodos: u64, tt: &Tt, stop: &AtomicBool, con_f
 
 struct Configuracion {
     nodos: u64,
+    red: bool,
     semilla: u64,
     cupo: u64,
     salida: PathBuf,
@@ -477,7 +514,7 @@ fn trabajador(
     let mut datos = abrir(&ruta_datos)?;
     let mut hce = abrir(&ruta_hce)?;
     let mut fens = if cfg.con_fen { Some(abrir(&cfg.salida.join(format!("fen-{hilo:02}.txt")))?) } else { None };
-    let provisional = cabecera(cfg.nodos, cfg.semilla, hilo, &cfg.sha_aperturas, &cfg.sha_generador, 0);
+    let provisional = cabecera(cfg.nodos, cfg.semilla, hilo, cfg.red, &cfg.sha_aperturas, &cfg.sha_generador, 0);
     let error = |e: std::io::Error| e.to_string();
     datos.write_all(&provisional).map_err(error)?;
 
@@ -495,7 +532,7 @@ fn trabajador(
             }
             board.make_move(jugadas[rng.menor_que(jugadas.len())]);
         }
-        match jugar_partida(board, cfg.nodos, &tt, &stop, cfg.con_fen) {
+        match jugar_partida(board, cfg.nodos, cfg.red, &tt, &stop, cfg.con_fen) {
             None => resumen.descartadas += 1,
             Some((registros, anexos, lineas)) => {
                 for (registro, anexo) in registros.iter().zip(&anexos) {
@@ -510,6 +547,9 @@ fn trabajador(
                 resumen.registros += registros.len() as u64;
                 resumen.partidas += 1;
                 contador.fetch_add(registros.len() as u64, Ordering::Relaxed);
+                datos.flush().map_err(error)?;
+                hce.flush().map_err(error)?;
+                anotar_registros(datos.get_mut(), resumen.registros).map_err(error)?;
             }
         }
     }
@@ -518,7 +558,7 @@ fn trabajador(
     let mut datos = datos.into_inner().map_err(|e| e.to_string())?;
     datos.seek(SeekFrom::Start(0)).map_err(error)?;
     datos
-        .write_all(&cabecera(cfg.nodos, cfg.semilla, hilo, &cfg.sha_aperturas, &cfg.sha_generador, resumen.registros))
+        .write_all(&cabecera(cfg.nodos, cfg.semilla, hilo, cfg.red, &cfg.sha_aperturas, &cfg.sha_generador, resumen.registros))
         .map_err(error)?;
     hce.flush().map_err(error)?;
     if let Some(mut f) = fens {
@@ -529,7 +569,7 @@ fn trabajador(
 
 fn datos(args: &[String]) -> Result<(), String> {
     let pares = opciones(args)?;
-    comprobar_claves(&pares, &["aperturas", "excluir", "posiciones", "semilla", "salida", "nodos", "hilos", "fen"])?;
+    comprobar_claves(&pares, &["aperturas", "excluir", "posiciones", "semilla", "salida", "nodos", "hilos", "fen", "evaluador"])?;
     let ruta_aperturas = PathBuf::from(valor(&pares, "aperturas").ok_or("falta --aperturas")?);
     let excluir = PathBuf::from(valor(&pares, "excluir").ok_or("falta --excluir")?);
     let posiciones = numero(&pares, "posiciones", None)?;
@@ -537,6 +577,11 @@ fn datos(args: &[String]) -> Result<(), String> {
     let salida = PathBuf::from(valor(&pares, "salida").ok_or("falta --salida")?);
     let nodos = numero(&pares, "nodos", Some(25_000))?;
     let hilos = numero(&pares, "hilos", Some(1))? as usize;
+    let red = match valor(&pares, "evaluador").unwrap_or("hce") {
+        "hce" => false,
+        "red" => true,
+        otro => return Err(format!("--evaluador {otro}: tiene que ser hce o red")),
+    };
     if hilos == 0 || posiciones == 0 {
         return Err("--hilos y --posiciones tienen que ser mayores que cero".into());
     }
@@ -547,11 +592,21 @@ fn datos(args: &[String]) -> Result<(), String> {
     let yo = std::env::current_exe().map_err(|e| e.to_string())?;
     let sha_generador = sha256(&std::fs::read(&yo).map_err(|e| format!("{}: {e}", yo.display()))?);
     std::fs::create_dir_all(&salida).map_err(|e| format!("{}: {e}", salida.display()))?;
-    let cfg = Configuracion { nodos, semilla, cupo: posiciones.div_ceil(hilos as u64), salida, sha_aperturas, sha_generador, con_fen: valor(&pares, "fen") == Some("si") };
+    let cfg = Configuracion {
+        nodos,
+        red,
+        semilla,
+        cupo: posiciones.div_ceil(hilos as u64),
+        salida,
+        sha_aperturas,
+        sha_generador,
+        con_fen: valor(&pares, "fen") == Some("si"),
+    };
     println!(
-        "{} aperturas, {} posiciones de los libros del banco excluidas, {hilos} hilos a {nodos} nodos, {} registros por hilo (cargado en {:.1} s)",
+        "{} aperturas, {} posiciones de los libros del banco excluidas, {hilos} hilos a {nodos} nodos evaluando con {}, {} registros por hilo (cargado en {:.1} s)",
         aperturas.len(),
         excluidas.len(),
+        if red { "la red" } else { "la HCE" },
         cfg.cupo,
         inicio.elapsed().as_secs_f64()
     );
@@ -657,5 +712,62 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn la_cabecera_dice_con_que_evaluador_se_etiqueto() {
+        let sha = [7u8; 32];
+        let con_red = cabecera(50_000, 11, 3, true, &sha, &sha, 42);
+        let con_hce = cabecera(50_000, 11, 3, false, &sha, &sha, 42);
+        assert_eq!(&con_red[..8], MAGIA);
+        assert_eq!(u32::from_le_bytes(con_red[100..104].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(con_hce[100..104].try_into().unwrap()), 0);
+        // Nada más se mueve: un lector que no conoce la bandera lee lo mismo que antes.
+        assert_eq!(con_red[..100], con_hce[..100]);
+        assert!(con_red[104..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn el_evaluador_pedido_llega_a_la_busqueda_que_etiqueta() {
+        // Contra búsquedas de referencia, y no solo "distintas entre sí": con la
+        // bandera invertida las dos seguirían siendo distintas, y la cabecera
+        // diría "red" sobre etiquetas de la HCE. Kiwipete, donde no coinciden.
+        let board = Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1").unwrap();
+        let historia = vec![board.hash];
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let referencia = |use_nnue: bool| {
+            tt.clear();
+            let limites = SearchLimits { max_nodes: Some(5_000), use_nnue, ..Default::default() };
+            search::search(&board, limites, &stop, &tt, &[], |_, _| {}).score
+        };
+        let (red, hce) = (referencia(true), referencia(false));
+        assert_ne!(red, hce, "si la red y la HCE coinciden al centipeón, el test no demuestra nada");
+        tt.clear();
+        assert_eq!(buscar(&board, &historia, 5_000, true, &tt, &stop).score, red, "--evaluador red etiquetó con la HCE");
+        tt.clear();
+        assert_eq!(buscar(&board, &historia, 5_000, false, &tt, &stop).score, hce, "--evaluador hce etiquetó con la red");
+    }
+
+    #[test]
+    fn anotar_registros_reescribe_el_recuento_y_deja_seguir_escribiendo_al_final() {
+        let ruta = std::env::temp_dir().join(format!("vigia-generador-anotar-{}.bin", std::process::id()));
+        let mut fichero = File::options().read(true).write(true).create(true).truncate(true).open(&ruta).unwrap();
+        let sha = [0u8; 32];
+        fichero.write_all(&cabecera(1, 2, 0, true, &sha, &sha, 0)).unwrap();
+        fichero.write_all(&[9u8; REGISTRO]).unwrap();
+        anotar_registros(&mut fichero, 1).unwrap();
+        fichero.write_all(&[8u8; REGISTRO]).unwrap();
+        drop(fichero);
+        let bytes = std::fs::read(&ruta).unwrap();
+        std::fs::remove_file(&ruta).ok();
+        assert_eq!(bytes.len(), CABECERA + 2 * REGISTRO, "el segundo registro va detrás del primero, no encima de la cabecera");
+        assert_eq!(u64::from_le_bytes(bytes[92..100].try_into().unwrap()), 1);
+        assert_eq!((bytes[CABECERA], bytes[CABECERA + REGISTRO]), (9, 8));
     }
 }

@@ -1285,6 +1285,53 @@ vez:
    v1 ya sabe lo que la búsqueda le enseñó. **Reentrenar con más posiciones a la misma
    profundidad no aporta casi nada.** Y aquí se cobra el crédito de velocidad: con +20,8 %
    de nps, `nodes 50000` cuesta en reloj casi lo que costaba `nodes 40000`.
+
+   **Preparación de la ejecución (antes de 0.31).** `generador datos` tiene la opción
+   `--evaluador hce|red`, que queda escrita en la cabecera (bytes 100–103, bit 0), y con
+   `hce` —el defecto— sigue escribiendo exactamente lo mismo que el binario del corpus v1
+   salvo su propio sha. Profundidad media a nodos fijos sobre 50 posiciones de partidas del
+   corpus:
+
+   | evaluador | nodos | profundidad |
+   |---|---|---|
+   | HCE (etiquetas v1) | 25.000 | 7,64 |
+   | red | 25.000 | 7,78 |
+   | red | **50.000** | **8,72** |
+   | red | 100.000 | 9,80 |
+
+   **Etiquetas de v2: la red a 50.000 nodos**, un ply más que v1 por el doble de nodos.
+   Ritmo calibrado con 2 hilos: 162.600 registros por hora por hilo; con 8 hilos y la
+   presión de caché que ya se midió en la fase 4, ~150.000.
+
+   Una revisión adversarial del plan cambió tres cosas antes de lanzarlo:
+
+   - **v2 cambia tres cosas a la vez** —el evaluador de las hojas, los nodos y las partidas,
+     que las juega otro motor—, así que un `acepta_h1` no diría que el cuello era la
+     profundidad, y el siguiente escalón (100.000 nodos) cuesta el doble. Se añade un
+     **control**: 6 M con la red a 25.000 nodos y la **misma semilla** que el primer trozo
+     de v2, que por construcción arranca sus partidas en las mismas aperturas. Una red
+     entrenada con el control contra otra entrenada con los primeros 6 M de ese trozo
+     aísla la profundidad.
+   - **Entre «solo v2» y «v1+v2» no se elige por pérdida ni por holdout**: los dos se miden
+     contra etiquetas de v2, que son el objetivo de «solo v2», y dependen de K. Se decide en
+     el banco, con una tanda directa entre las dos redes.
+   - **El reparto de validación dependía de la posición del fragmento en la lista**, así que
+     con v1+v2 la validación de v2 caía en otras partidas. Ahora depende de su identidad
+     (`(semilla − 1) · 8 + hilo`, de la cabecera), que reproduce exactamente el reparto de
+     v1: la muestra de holdout de v1 sale idéntica byte a byte. Y un trozo cortado a media
+     tanda —un reinicio forzado— ya se puede leer: el generador anota el recuento tras cada
+     partida y el lector usa lo que está en los tres sitios.
+
+   Orden de la ventana, con 8 CPUs y sin paradas:
+
+   | paso | qué | tiempo |
+   |---|---|---|
+   | 1 | v2, semilla 11, 12 M a 50.000 nodos | ~10 h |
+   | 2 | control, semilla 11, 6 M a 25.000 nodos | ~3 h |
+   | 3 | v2, semillas 12 y 13 | ~20 h |
+   | 4 | estadísticas, K y cuatro entrenamientos en la GPU (control, 6 M de v2, v2, v1+v2) | ~3 h |
+   | 5 | banco: control contra 6 M de v2; v2 contra v1+v2; la mejor contra 0.30, decisión y cifra | ~4 h |
+   | | **total** | **~40 h** |
 2. **λ = 0,75**, con el WDL del corpus sin adjudicación, que ahora sí es información
    independiente.
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.

@@ -62,7 +62,9 @@ def main():
     frags = ds.fragmentos(args.directorios)
     total = sum(len(f) for f in frags)
     nodos = sorted(set(f.cabecera['nodos'] for f in frags))
-    print('%d fragmentos, %d registros en bruto, a %s nodos' % (len(frags), total, nodos))
+    evaluadores = sorted(set(f.cabecera['evaluador'] for f in frags))
+    print('%d fragmentos, %d registros en bruto, a %s nodos, etiquetados con %s'
+          % (len(frags), total, nodos, evaluadores))
 
     descartes = {}
     utiles = 0

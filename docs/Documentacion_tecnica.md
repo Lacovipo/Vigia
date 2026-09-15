@@ -544,8 +544,8 @@ sobre 0.28; `setoption name UseNNUE value false` vuelve a la HCE, que sigue ente
 en el binario. `SearchLimits::default()` la deja **apagada** a propósito: es el
 ajuste neutro de la biblioteca, y con él están escritos los tests que fijan
 puntuaciones de la HCE y **el generador de datos**, cuyas etiquetas siguen siendo
-búsquedas con la HCE. Una segunda generación de corpus con la red tendrá que
-pedirla explícitamente.
+búsquedas con la HCE. Una generación de corpus con la red se pide con
+`generador datos --evaluador red`, que lo deja escrito en la cabecera.
 
 #### De dónde salen los pesos
 
@@ -1618,7 +1618,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 264 del motor + 119 del banco + 8 del harness antiguo
+cargo test --release              # 264 del motor + 119 del banco + 3 del generador + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

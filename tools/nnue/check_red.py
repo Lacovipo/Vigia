@@ -75,7 +75,7 @@ def muestra(args):
         # las que se entrenó, la dispersión de la red se parece a la de las
         # etiquetas más de lo que se parecerá en partida, y el criterio de la
         # escala saldría aprobado de más.
-        validas = ds.util(f.datos, f.hce) & ds.partidas_de_validacion(i, f.datos, args.validacion)
+        validas = ds.util(f.datos, f.hce) & ds.partidas_de_validacion(f, args.validacion)
         filas = np.flatnonzero(validas)
         candidatos.append(np.stack([np.full(len(filas), i), filas], axis=1))
     candidatos = np.concatenate(candidatos)

@@ -45,7 +45,7 @@ def muestra(args):
         # El mismo reparto que train.py, y con la misma función: si aquí se
         # calculara de otra forma, la comparación se haría sobre posiciones que
         # la red sí ha visto y saldría un número halagador y falso.
-        es_validacion = ds.partidas_de_validacion(i, f.datos, args.validacion)
+        es_validacion = ds.partidas_de_validacion(f, args.validacion)
         filas = np.flatnonzero(util & es_validacion)
         candidatos.append(np.stack([np.full(len(filas), i), filas], axis=1))
     candidatos = np.concatenate(candidatos)

@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 391 tests (264 motor, 119 banco, 8 harness viejo)
+cargo test --release                   # 394 tests (264 motor, 119 banco, 3 generador, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -120,8 +120,8 @@ de nodos/segundo compra ~0,52 plies.
 - **La red NNUE va encendida por defecto desde 0.29** (opción UCI `UseNNUE`),
   pero **`SearchLimits::default()` la deja apagada**: con ese defecto están
   escritos los tests que fijan puntuaciones de la HCE y el generador de datos,
-  así que `generador datos` sigue etiquetando con búsquedas de la HCE hasta que
-  se le pida la red. En `banco`, un binario de entre 0.28 y 0.29 necesita
+  así que `generador datos` sigue etiquetando con búsquedas de la HCE salvo que
+  se le pida `--evaluador red`, que queda escrito en la cabecera del corpus. En `banco`, un binario de entre 0.28 y 0.29 necesita
   `"UseNNUE": true` en sus opciones (o `--uci UseNNUE=true`) para jugar con la
   red. Y el coste de la evaluación **no se saca restando nps entre red y HCE**,
   porque los árboles son distintos (llega a salir negativo); se saca duplicando la

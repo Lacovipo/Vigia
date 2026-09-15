@@ -834,7 +834,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 391 tests (264 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 394 tests (264 motor + 119 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 

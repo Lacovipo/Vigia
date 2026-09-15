@@ -59,9 +59,12 @@ def leer_cabecera(ruta):
     semilla, = struct.unpack_from('<Q', h, 16)
     hilo, = struct.unpack_from('<I', h, 24)
     registros, = struct.unpack_from('<Q', h, 92)
+    # Bit 0 de las banderas: etiquetas con la red. Los ficheros anteriores a la
+    # bandera tienen un cero, y eran de la HCE.
+    banderas, = struct.unpack_from('<I', h, 100)
     return dict(version=version, nodos=nodos, semilla=semilla, hilo=hilo,
                 sha_aperturas=h[28:60].hex(), sha_generador=h[60:92].hex(),
-                registros=registros)
+                registros=registros, evaluador='red' if banderas & 1 else 'hce')
 
 
 class Fragmento:
@@ -71,15 +74,24 @@ class Fragmento:
         self.ruta = ruta
         self.cabecera = leer_cabecera(ruta)
         n = self.cabecera['registros']
-        tam = os.path.getsize(ruta)
-        if tam != CABECERA + 32 * n:
-            raise ValueError('%s: %d bytes, la cabecera promete %d registros' % (ruta, tam, n))
-        self.datos = np.memmap(ruta, dtype=DTYPE, mode='r', offset=CABECERA, shape=(n,))
         ruta_hce = os.path.join(os.path.dirname(ruta), os.path.basename(ruta).replace('hilo-', 'hce-'))
-        hce = np.memmap(ruta_hce, dtype=np.uint8, mode='r')
-        if hce.size != 4 * n:
-            raise ValueError('%s: %d bytes para %d registros' % (ruta_hce, hce.size, n))
-        self.hce = hce.reshape(n, 4)
+        en_datos = (os.path.getsize(ruta) - CABECERA) // 32
+        en_hce = os.path.getsize(ruta_hce) // 4
+        # Un trozo interrumpido (un reinicio de la máquina a media tanda) deja en
+        # la cabecera el recuento de la última partida completa, y en los
+        # ficheros lo que el sistema llegó a escribir, que puede ser más o menos.
+        # Se usan los registros que están en los tres. En un trozo terminado los
+        # tres coinciden, y cualquier discrepancia se avisa.
+        legibles = min(n, en_datos, en_hce)
+        if not (n == en_datos == en_hce):
+            print('aviso: %s: la cabecera anota %d registros, hay %d en los datos y %d en el anexo; se usan %d'
+                  % (ruta, n, en_datos, en_hce, legibles))
+        if legibles == 0:
+            self.datos = np.zeros(0, dtype=DTYPE)
+            self.hce = np.zeros((0, 4), dtype=np.uint8)
+        else:
+            self.datos = np.memmap(ruta, dtype=DTYPE, mode='r', offset=CABECERA, shape=(legibles,))
+            self.hce = np.memmap(ruta_hce, dtype=np.uint8, mode='r', shape=(4 * legibles,)).reshape(legibles, 4)
 
     def __len__(self):
         return len(self.datos)
@@ -89,7 +101,9 @@ def fragmentos(directorios):
     rutas = sorted(r for d in directorios for r in glob.glob(os.path.join(d, 'hilo-*.bin')))
     if not rutas:
         raise ValueError('ningún hilo-*.bin en %s' % ', '.join(directorios))
-    return [Fragmento(r) for r in rutas]
+    # Un fragmento sin nada legible (un hilo que no llegó a cerrar ni una
+    # partida antes de un corte) no aporta nada y rompería los índices.
+    return [f for f in (Fragmento(r) for r in rutas) if len(f)]
 
 
 def casillas_y_piezas(datos):
@@ -161,18 +175,28 @@ def util(datos, hce):
     return ~np.logical_or.reduce(list(filtros(datos, hce).values()))
 
 
-def partidas_de_validacion(indice_fragmento, datos, fraccion):
+def partidas_de_validacion(fragmento, fraccion):
     """True en los registros cuya partida cae del lado de validación.
 
     Se reparte por **partidas enteras**, no por posiciones: las de una misma
     partida están correlacionadas (§5.5 del plan) y mezclarlas daría una
-    validación optimista. Un hash del número de partida y del fragmento decide
-    el lado, así que es estable entre ejecuciones.
+    validación optimista. Un hash del número de partida y de la **identidad del
+    fragmento** (su semilla y su hilo, leídos de la cabecera) decide el lado.
 
-    `datos` es el fragmento entero, porque el número de partida se cuenta desde
-    su primer registro. Lo usan train.py, holdout.py y check_red.py: vive aquí
-    y no copiado en cada uno porque check_red.py llegó a no aplicarlo, y midió
-    la escala de la red sobre posiciones con las que se había entrenado.
+    La identidad y no la posición del fragmento en la lista: hasta la fase 7.1
+    era el índice, y al entrenar con v1+v2 los fragmentos de v2 se desplazaban
+    24 puestos, así que la validación de v2 cambiaba según con qué se entrenara
+    y las redes dejaban de poder compararse. La identidad es `(semilla - 1) * 8
+    + hilo`, que para los trozos de v1 (semillas 1 a 3, ocho hilos cada una) da
+    exactamente los índices 0 a 23 que tenían en la lista: el reparto de v1, y
+    con él todo lo medido sobre v1, no cambia. Dos fragmentos con la misma
+    identidad solo comparten qué números de partida caen en validación, no las
+    partidas, que son distintas.
+
+    Lo usan train.py, holdout.py y check_red.py: vive aquí y no copiado en cada
+    uno porque check_red.py llegó a no aplicarlo, y midió la escala de la red
+    sobre posiciones con las que se había entrenado.
     """
-    partida = np.cumsum(np.ascontiguousarray(datos['ply']) == 0) - 1
-    return ((partida * 2654435761 + indice_fragmento * 40503) % 10_000) < fraccion * 10_000
+    identidad = (int(fragmento.cabecera['semilla']) - 1) * 8 + int(fragmento.cabecera['hilo'])
+    partida = np.cumsum(np.ascontiguousarray(fragmento.datos['ply']) == 0) - 1
+    return ((partida * 2654435761 + identidad * 40503) % 10_000) < fraccion * 10_000
