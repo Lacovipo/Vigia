@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.29.0 (`Cargo.toml`).
+**Versión:** 0.30.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -613,13 +613,66 @@ cualquiera de ellas no hace fallar ni un solo test funcional**:
   `&[i16; HIDDEN]`, no `&[i16]`, para que LLVM conozca la longitud.
 - **R3.** La reducción de salida se escribe `sum += (t as i32) * (w as i32)` con
   `t` y `w` en `i16`: ese patrón exacto se convierte en `pmaddwd`. Con los
-  operandos ya en `i32` saldría `pmulld`, que es SSE4.1, y este binario no lo
-  tiene: LLVM lo emularía con `pmuludq` a tres o cuatro veces el coste.
+  operandos ya en `i32` saldría `pmulld`, que es SSE4.1: la copia portable de los
+  núcleos lo emularía con `pmuludq` a tres o cuatro veces el coste, y las copias
+  AVX2 y AVX-512 multiplicarían la mitad de carriles que con `vpmaddwd`.
 
-**Comprobado en el binario de verdad.** `push` usa `paddw` y `psubw` (128 y 448
+**Comprobado en el binario de verdad**, en la copia portable, que es la que corre
+en CPUs sin AVX2. `push` usa `paddw` y `psubw` (128 y 448
 instrucciones), `refresh` usa `paddw` (320), y la salida de `evaluate_white`
 es exactamente `pmaxsw`/`pminsw` (el clamp), `pmullw` (el cuadrado) y `pmaddwd`
 (el producto escalar). **Cero `pmuludq`** en todo el binario.
+
+**Y con AVX2 y AVX-512, desde 0.30.** Los dos núcleos calientes (`push` y la
+suma de salida) se compilan tres veces: el cuerpo portable de siempre y dos
+envolturas `#[target_feature]`, una con AVX2 (16 carriles de `i16`) y otra con
+AVX-512 (32). `Accumulators` elige al construirse, con `is_x86_feature_detected!`,
+la más ancha que tenga la CPU, así que **el mismo binario arranca en cualquier
+x86-64**. Los tres caminos calculan los mismos enteros —sumas `i16` que se
+desbordan a propósito y un producto `i32` no tienen redondeo en el que
+discrepar—, de modo que los nodos no cambian entre máquinas; solo la velocidad.
+Lo comprueban `every_instruction_set_this_cpu_has_computes_the_same_integers`
+(enteros, nodo a nodo) y `the_instruction_cap_of_the_network_only_changes_the_speed`
+(la búsqueda entera). Y como con cualquier tope el árbol es el mismo, esos dos
+pasarían igual si el tope no llegara a la búsqueda: lo vigilan aparte
+`go_limits_carry_every_option_set_with_setoption`, de `setoption` a los límites de
+`go`, y `the_instruction_cap_reaches_the_accumulators_the_search_evaluates_with`,
+de los límites a los acumuladores.
+
+La opción UCI **`NNUEInstructions`** (`auto`, `avx2`, `portable`) pone un **tope**:
+solo puede estrechar lo que tiene la CPU, nunca ensancharlo, y sus valores no
+distinguen mayúsculas. Existe para medir con
+el banco, en una máquina con AVX-512, los caminos que corren otras CPUs, y como
+salida en procesadores donde los vectores de 512 bits cuesten más de lo que dan.
+
+Medido a profundidad 12 contra 0.29, con el mismo binario bajo cada tope, tres
+pasadas alternadas y nodos idénticos en las nueve:
+
+| tope | nodos/segundo sobre 0.29 | media |
+|---|---|---|
+| `auto` (AVX-512 en esta máquina) | +13,9 / +14,8 / +12,0 % | **+13,6 %** |
+| `avx2` | +11,5 / +9,6 / +9,3 % | +10,1 % |
+| `portable` | +0,1 / +1,1 / −1,6 % | −0,2 % |
+
+La fila de `portable` dice que el despacho no le cuesta nada a una CPU sin AVX2. Y
+compilar el binario **entero** con AVX-512 de verdad solo saca un +0,5 % a este
+despacho (tres pasadas: +0,9 / +0,3 / +0,3): el resto del motor no gana nada con
+instrucciones más anchas, que es por lo que no se eligió `-C target-cpu` como
+proponía la fase 7.6 del plan. `x86-64-v4` ni siquiera sirve para probarlo: su
+ajuste hace que LLVM prefiera vectores de 256 bits, y apenas usa AVX-512.
+
+En el ensamblador del binario, `push_avx512` es entero de 512 bits y `push_avx2`
+entero de 256; el producto escalar LLVM lo deja en 256 bits con AVX-512 y en 128
+con AVX2, cosa que las cifras de arriba ya incluyen. En todo el binario sigue sin
+haber `pmuludq` ni `pmulld`.
+
+**Y son los primeros `unsafe` de `src/`**: las llamadas a las envolturas, cada una
+detrás de la comprobación de la CPU. Llamar a una función `#[target_feature]`
+desde código que no tiene esa característica no se puede hacer de otra forma en
+Rust estable. `Simd::Avx2` y `Simd::Avx512` solo salen de `Simd::detect`, justo
+después de comprobar cada característica con la que se compilan sus núcleos, y el
+constructor de los tests se niega a crear un juego de instrucciones que la CPU no
+tiene.
 
 **Y una trampa en cómo comprobarlo.** El ensamblador que emite la *biblioteca*
 sola (`cargo rustc --release --lib -- --emit asm`) sale **completamente
@@ -633,6 +686,12 @@ CARGO_TARGET_DIR=<directorio aparte> cargo rustc --release --bin vigia -- --emit
 # el fichero queda en <directorio>/release/deps/vigia.s, sin sufijo
 ```
 
+Y en ese fichero hay que mirar **las tres copias**: la portable sale inlineada en
+la búsqueda, y `push_avx2`, `output_sum_avx2`, `push_avx512` y `output_sum_avx512`
+salen como funciones propias, porque no se pueden inlinear en código sin esas
+instrucciones. Son las que corren en una CPU moderna: revisar solo la portable deja
+sin ver justo la que se ejecuta.
+
 #### Cómo se evita que se rompa en silencio
 
 Todo dentro de `cargo test --release`:
@@ -641,6 +700,9 @@ Todo dentro de `cargo test --release`:
 |---|---|
 | el cargador | cabecera contra la arquitectura compilada, sha256 de los pesos y las cotas de desbordamiento T1 (acumulador) y T2 (salida), comprobadas **al cargar** |
 | `the_incremental_accumulator_matches_a_refresh_at_every_node` | cualquier delta o signo erróneo, en cada nodo de árboles completos con enroque, al paso, promociones y torres capturadas en su esquina |
+| `every_instruction_set_this_cpu_has_computes_the_same_integers` | que los caminos portable, AVX2 y AVX-512 discrepen en un solo entero: los mismos árboles, recorridos con todos los que tenga la CPU, comparando cada acumulador y cada suma de salida |
+| `the_instruction_cap_only_ever_narrows_what_the_cpu_has` y `the_instruction_cap_of_the_network_only_changes_the_speed` | que `NNUEInstructions` ensanche lo que tiene la CPU, o que cambie algo más que la velocidad: mismos nodos, puntuación y jugada con cada tope |
+| `go_limits_carry_every_option_set_with_setoption` y `the_instruction_cap_reaches_the_accumulators_the_search_evaluates_with` | que el tope se pierda por el camino: los dos anteriores pasarían igual, porque todos los topes recorren el mismo árbol. Un tope ignorado haría que el banco midiera AVX-512 creyendo medir AVX2 |
 | `the_evaluation_is_antisymmetric_under_a_colour_flip` | orientación de la perspectiva, propia/ajena, enroque y redondeo. Con una red aleatoria, porque se cumple para cualquier peso |
 | `the_material_network_scores_material_exactly_as_computed_by_hand` | la red de material —cargada de `nets/`— contra la cuenta a mano, rehecha en Rust. Sigue siendo el único sitio donde la salida de una red se compara con una fórmula cerrada |
 | `the_embedded_network_plays_like_something_that_was_trained` | la guardia barata contra empotrar un fichero roto o aleatorio: inicial cerca de cero, dama de más ganando, simetría de color |
@@ -1129,6 +1191,8 @@ conservado por compatibilidad con scripts).
 | `Threads` | spin | 1–16, default 1 | Hilos ayudantes Lazy SMP |
 | `Ponder` | check | default false | Habilita `go ponder`/`ponderhit` |
 | `Variety` | check | **default false** | Desempate aleatorio en la raíz |
+| `UseNNUE` | check | **default true** desde 0.29 | Evalúa con la red; `false` vuelve a la HCE |
+| `NNUEInstructions` | combo | `auto`, `avx2`, `portable` (sin distinguir mayúsculas); default `auto` | Tope de instrucciones de los núcleos de la red; solo cambia la velocidad (§4) |
 
 `Variety` es nueva en 0.25.0 y recoge la que era conducta fija: entre las
 jugadas de raíz cuyo score exacto está a ≤4 cp de la mejor se elegía una al
@@ -1476,6 +1540,17 @@ usarse para aprobar un cambio.
   ser real. No encontró nada que lo explique, y sí dos fallos, corregidos antes
   de cerrar la versión: la HCE todavía respondía al tocar `MAX_PLY`, y la escala
   de la red se había medido sobre posiciones de entrenamiento.
+- **0.30.0 — la red con AVX-512 y AVX2, elegidos al arrancar.** Solo velocidad:
+  los núcleos de la red se compilan también para AVX2 y AVX-512 y el motor usa el
+  más ancho que tenga la CPU. **+13,6 % de nodos/segundo** en esta máquina, en tres
+  pasadas alternadas con nodos idénticos: aprobada por `banco velocidad`, como 0.26
+  y 0.28, sin gastar partidas. **Cuánto Elo vale no está medido**: el tipo de
+  cambio de §8.7 se midió con la HCE y bajo otra carga, y la red sufre más presión
+  de caché. El binario sigue arrancando en cualquier x86-64 (§4), y la opción
+  `NNUEInstructions` permite medir cada camino. Antes de cerrarla, una revisión
+  adversarial obligó a medir con más cuidado —la primera ronda, de una pasada por
+  variante, había descartado AVX-512 por error— y a hacer medible el camino
+  portable y a probar que el tope llega a la búsqueda.
 
 ---
 
@@ -1543,7 +1618,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 257 del motor + 119 del banco + 8 del harness antiguo
+cargo test --release              # 264 del motor + 119 del banco + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

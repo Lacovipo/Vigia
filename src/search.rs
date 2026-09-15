@@ -195,6 +195,12 @@ pub struct SearchLimits {
     /// pin HCE scores are written against, and a caller that wants the network
     /// asks for it.
     pub use_nnue: bool,
+    /// The widest instruction set the network's kernels may use (UCI option
+    /// `NNUEInstructions`; by default, whatever the CPU has). The kernels
+    /// compute the same integers on every set, so this can only change the
+    /// speed -- which is what lets the bench measure, on a machine with
+    /// AVX-512, the paths that other CPUs run.
+    pub nnue_instructions: nnue::InstructionCap,
     /// UCI `go mate N`: look for a forced mate in at most N moves. Sets the
     /// depth budget to `2*N` plies when no explicit `depth` was given —
     /// enough to see any mate in N, which takes `2*N - 1` plies with the
@@ -539,6 +545,17 @@ struct Context<'a> {
 struct NnueState {
     net: &'static nnue::Net,
     accumulators: nnue::Accumulators,
+}
+
+/// The network's state for one search thread, or `None` for the HCE. Its own
+/// function so a test can check that the instruction cap really reaches the
+/// accumulators the search evaluates with: searches under different caps visit
+/// the same tree, so nothing else would notice if it did not.
+fn nnue_state_for(use_nnue: bool, cap: nnue::InstructionCap) -> Option<NnueState> {
+    use_nnue.then(|| NnueState {
+        net: nnue::embedded(),
+        accumulators: nnue::Accumulators::with_cap((MAX_PLY + 1) as usize, cap),
+    })
 }
 
 /// Number of PieceType variants, used to size/index `Context::cont_history`.
@@ -940,10 +957,7 @@ pub(crate) fn search_inner(
         pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
         pv_len: vec![0; (MAX_PLY + 2) as usize],
         order_buffer: Vec::with_capacity(64),
-        nnue: limits.use_nnue.then(|| NnueState {
-            net: nnue::embedded(),
-            accumulators: nnue::Accumulators::new((MAX_PLY + 1) as usize),
-        }),
+        nnue: nnue_state_for(limits.use_nnue, limits.nnue_instructions),
     };
     // The only full refresh of the accumulators in the whole search, once per
     // thread: every node below the root derives its own from its parent's.
@@ -2061,6 +2075,52 @@ mod tests {
         // worth stopping to look at either way).
         let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
         assert_ne!(search_with_network(start, 1).score, search_to_depth(start, 1).score);
+    }
+
+    #[test]
+    fn the_instruction_cap_of_the_network_only_changes_the_speed() {
+        // `NNUEInstructions` picks which compiled copy of the kernels runs, and
+        // the copies compute the same integers, so the search must visit the
+        // same tree under every cap: same nodes, same score, same move. On a
+        // CPU without AVX2 every cap runs the portable kernels and this proves
+        // nothing new.
+        for fen in [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        ] {
+            let board = Board::from_fen(fen).unwrap();
+            let run = |cap: nnue::InstructionCap| {
+                let stop = AtomicBool::new(false);
+                let tt = Tt::new(1);
+                let limits =
+                    SearchLimits { max_depth: Some(6), use_nnue: true, nnue_instructions: cap, ..Default::default() };
+                search(&board, limits, &stop, &tt, &[], |_, _| {})
+            };
+            let widest = run(nnue::InstructionCap::Avx512);
+            for cap in [nnue::InstructionCap::Avx2, nnue::InstructionCap::Portable] {
+                let narrower = run(cap);
+                assert_eq!(narrower.nodes, widest.nodes, "{fen} under {cap:?}");
+                assert_eq!(narrower.score, widest.score, "{fen} under {cap:?}");
+                assert_eq!(narrower.best_move, widest.best_move, "{fen} under {cap:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_instruction_cap_reaches_the_accumulators_the_search_evaluates_with() {
+        // `the_instruction_cap_of_the_network_only_changes_the_speed` passes
+        // just as well if the cap never reaches the search, because every cap
+        // visits the same tree. This looks at the accumulators themselves.
+        assert!(nnue_state_for(false, nnue::InstructionCap::Portable).is_none());
+        for cap in [nnue::InstructionCap::Avx512, nnue::InstructionCap::Avx2, nnue::InstructionCap::Portable] {
+            let state = nnue_state_for(true, cap).expect("the network was asked for");
+            let expected = nnue::Accumulators::with_cap(1, cap).instruction_set();
+            assert_eq!(state.accumulators.instruction_set(), expected, "{cap:?}");
+        }
+        // And the one that fails if the cap is ignored on any CPU with AVX2.
+        let portable = nnue_state_for(true, nnue::InstructionCap::Portable).unwrap();
+        assert_eq!(portable.accumulators.instruction_set(), "portable");
     }
 
     #[test]

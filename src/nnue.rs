@@ -41,7 +41,9 @@ pub const MAX_BUCKETS: usize = 8;
 /// 127 and not 255: with 127 the square still fits a signed `i16`, so the
 /// whole activation stays eight lanes wide per SSE2 vector. With 255 it would
 /// have to be unpacked to `i32`, doubling the vectors in the hottest loop of
-/// the evaluation. That is an SSE2 decision; with AVX2 it must be re-measured.
+/// the evaluation. That is an SSE2 decision, and since 0.30 the kernels also
+/// run with AVX2 and AVX-512 where the CPU has them: QA = 255 is pending a
+/// re-measurement (docs/MejorasPendientes.md).
 const QA: i16 = 127;
 const QB_LOG2: u32 = 5;
 /// `QA² · QB / 16`: turns the output sum back into centipawns.
@@ -161,7 +163,9 @@ pub struct Net {
 /// Decoded one value at a time into a fresh heap allocation.
 ///
 /// Not a `transmute`: `include_bytes!` promises no alignment, so that would be
-/// undefined behaviour as well as the first `unsafe` in a `src/` that has none.
+/// undefined behaviour, and an `unsafe` with nothing to earn it: the only ones in
+/// `src/` are the four calls into the AVX2 and AVX-512 kernels (`push` and the
+/// output sum), each behind a CPU check.
 /// And not a `Box::new([[i16; 256]; 772])` either, which builds 386 KiB on the
 /// stack before moving it and overflows the stack in a debug build.
 fn decode_i16(bytes: &[u8]) -> Box<[i16]> {
@@ -328,9 +332,10 @@ pub fn embedded() -> &'static Net {
 //     not `&[i16]`, so LLVM knows the length and emits no scalar prologue.
 // R3. The output reduction is `sum += (t as i32) * (w as i32)` with `t` and `w`
 //     both `i16`. That exact shape becomes `pmaddwd`. With the operands
-//     already `i32` LLVM emits `pmulld`, which is SSE4.1 and this binary does
-//     not have it: it would be emulated with `pmuludq` and shuffles at three or
-//     four times the cost, and nothing would fail.
+//     already `i32` LLVM emits `pmulld`, which is SSE4.1: the portable copy of
+//     the kernels would emulate it with `pmuludq` and shuffles at three or four
+//     times the cost, and the AVX2 and AVX-512 copies would multiply half as
+//     many lanes as `vpmaddwd` does. Either way, nothing would fail.
 //
 // The additions wrap on purpose. The bounds only cover the final accumulator:
 // an intermediate sum inside one update may briefly count one feature too many
@@ -376,6 +381,102 @@ fn divide_rounding(sum: i32) -> i32 {
     }
 }
 
+// ------------------------------------------------------ the instruction set
+//
+// The kernels above are written once, portably, and compiled three times: as
+// they are, for any x86-64 (SSE2, 8 lanes of i16), and inlined into functions
+// marked `#[target_feature]` for AVX2 (16 lanes) and for AVX-512 (32 lanes).
+// The accumulators pick one when they are built, from what the CPU running the
+// binary reports.
+//
+// Not `-C target-cpu` for the whole binary, which would need no `unsafe` at
+// all: that binary dies with an illegal instruction on any CPU without the
+// chosen set, and the one in `Release/` has to run anywhere. And not
+// `x86-64-v4` in particular: its tuning makes LLVM prefer 256-bit vectors, so
+// it barely uses AVX-512 at all.
+//
+// The three paths compute the same integers -- wrapping i16 additions and an
+// i32 dot product have no rounding to disagree on -- so node counts stay
+// identical between machines, and only the speed changes.
+// `every_instruction_set_this_cpu_has_computes_the_same_integers` checks it,
+// and the UCI option `NNUEInstructions` can cap the set, which is what lets the
+// bench measure every path on one machine.
+//
+// Measured with `banco velocidad` at depth 12 against 0.29: one binary under
+// each cap, three alternated passes, identical nodes in all nine. AVX-512
+// +13.9 / +14.8 / +12.0 % nodes per second, AVX2 +11.5 / +9.6 / +9.3 %, and
+// portable +0.1 / +1.1 / -1.6 %, so the dispatch itself costs CPUs without AVX2
+// nothing. The whole binary built with real 512-bit codegen is only +0.5 % over
+// this dispatch: the rest of the engine gains nothing from wider instructions.
+// In the LTO binary `push_avx512` is entirely 512-bit; the dot product LLVM
+// keeps at 256 bits under AVX-512 and at 128 bits under AVX2, which the numbers
+// above already include.
+
+/// The instruction sets the kernels are compiled for, narrowest first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Simd {
+    Portable,
+    #[cfg(target_arch = "x86_64")]
+    Avx2,
+    #[cfg(target_arch = "x86_64")]
+    Avx512,
+}
+
+/// The widest instruction set the network's kernels may use (UCI option
+/// `NNUEInstructions`). A cap, never a request: it can only narrow what the CPU
+/// reports, so the default gets whatever the CPU has. It exists to measure the
+/// narrower paths on a machine that has the wider ones, and as a way out on
+/// CPUs where 512-bit vectors cost more than they give.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub enum InstructionCap {
+    Portable,
+    Avx2,
+    #[default]
+    Avx512,
+}
+
+impl Simd {
+    /// The widest set that this binary has kernels for, the CPU running it
+    /// supports, and `cap` allows. The only place an `Avx2` or an `Avx512` is
+    /// created outside the tests, each right after checking every feature its
+    /// kernels are compiled with, which is what makes the `unsafe` calls into
+    /// them sound. AVX-512 checks AVX2 as well: `avx512f` implies it for the
+    /// compiler, so its kernels may use it.
+    #[cfg(target_arch = "x86_64")]
+    fn detect(cap: InstructionCap) -> Simd {
+        use std::arch::is_x86_feature_detected;
+        if cap >= InstructionCap::Avx512
+            && is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && is_x86_feature_detected!("avx2")
+        {
+            Simd::Avx512
+        } else if cap >= InstructionCap::Avx2 && is_x86_feature_detected!("avx2") {
+            Simd::Avx2
+        } else {
+            Simd::Portable
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn detect(_cap: InstructionCap) -> Simd {
+        Simd::Portable
+    }
+
+    /// Every instruction set this CPU can run, narrowest first.
+    #[cfg(test)]
+    fn available() -> Vec<Simd> {
+        let mut sets = Vec::new();
+        for cap in [InstructionCap::Portable, InstructionCap::Avx2, InstructionCap::Avx512] {
+            let simd = Simd::detect(cap);
+            if !sets.contains(&simd) {
+                sets.push(simd);
+            }
+        }
+        sets
+    }
+}
+
 // ------------------------------------------------------- the accumulators
 
 const SLOT: usize = 2 * HIDDEN;
@@ -391,11 +492,39 @@ const SLOT: usize = 2 * HIDDEN;
 /// inconsistent, because every node overwrites its own slot from its parent's.
 pub(crate) struct Accumulators {
     slots: Box<[i16]>,
+    simd: Simd,
 }
 
 impl Accumulators {
     pub(crate) fn new(plies: usize) -> Accumulators {
-        Accumulators { slots: vec![0; plies * SLOT].into_boxed_slice() }
+        Accumulators::with_cap(plies, InstructionCap::default())
+    }
+
+    /// Like `new`, with the instruction set capped: see `InstructionCap`.
+    pub(crate) fn with_cap(plies: usize, cap: InstructionCap) -> Accumulators {
+        Accumulators { slots: vec![0; plies * SLOT].into_boxed_slice(), simd: Simd::detect(cap) }
+    }
+
+    /// The instruction set these accumulators run their kernels on, spelled as
+    /// the UCI option spells it. Tests only: nothing in the engine branches on it.
+    #[cfg(test)]
+    pub(crate) fn instruction_set(&self) -> &'static str {
+        match self.simd {
+            Simd::Portable => "portable",
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx2 => "avx2",
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx512 => "avx512",
+        }
+    }
+
+    /// Accumulators on a given instruction set instead of the detected one, for
+    /// the tests that compare them. It refuses a set the CPU cannot run: that
+    /// would not be a failing test but undefined behaviour.
+    #[cfg(test)]
+    fn with_simd(plies: usize, simd: Simd) -> Accumulators {
+        assert!(Simd::available().contains(&simd), "this CPU cannot run {simd:?}");
+        Accumulators { simd, ..Accumulators::new(plies) }
     }
 
     #[inline(always)]
@@ -433,6 +562,37 @@ impl Accumulators {
     /// re-search, the full-window re-search), and hooking the update into the
     /// recursion would apply it several times without anything noticing.
     pub(crate) fn push(&mut self, net: &Net, board: &Board, mv: Move, ply: usize) {
+        match self.simd {
+            // SAFETY: `Simd::Avx2` and `Simd::Avx512` only come out of
+            // `Simd::detect`, right after the CPU running this binary reported
+            // every feature their kernels are compiled with.
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx512 => unsafe { self.push_avx512(net, board, mv, ply) },
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx2 => unsafe { self.push_avx2(net, board, mv, ply) },
+            Simd::Portable => self.push_portable(net, board, mv, ply),
+        }
+    }
+
+    /// `push_portable` compiled with AVX2. The body is not written again: it is
+    /// the same `#[inline(always)]` function, inlined here, where LLVM may use
+    /// 16 lanes of i16 instead of 8.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    fn push_avx2(&mut self, net: &Net, board: &Board, mv: Move, ply: usize) {
+        self.push_portable(net, board, mv, ply)
+    }
+
+    /// `push_portable` compiled with AVX-512: 32 lanes of i16, which takes BW
+    /// on top of F.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f,avx512bw")]
+    fn push_avx512(&mut self, net: &Net, board: &Board, mv: Move, ply: usize) {
+        self.push_portable(net, board, mv, ply)
+    }
+
+    #[inline(always)]
+    fn push_portable(&mut self, net: &Net, board: &Board, mv: Move, ply: usize) {
         let moving = board.piece_at(mv.from).expect("nnue push: no piece on the origin square");
         let placed = Piece::new(moving.color, mv.flag.promotion_piece().unwrap_or(moving.kind));
         let captured = if mv.flag.is_capture() {
@@ -486,6 +646,33 @@ impl Accumulators {
     /// The raw output sum for slot `ply`, before dividing back to centipawns.
     #[inline(always)]
     fn output_sum(&self, net: &Net, ply: usize, side_to_move: Color, bucket: usize) -> i32 {
+        match self.simd {
+            // SAFETY: as in `push`, each variant means the CPU reported every
+            // feature its kernel is compiled with.
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx512 => unsafe { self.output_sum_avx512(net, ply, side_to_move, bucket) },
+            #[cfg(target_arch = "x86_64")]
+            Simd::Avx2 => unsafe { self.output_sum_avx2(net, ply, side_to_move, bucket) },
+            Simd::Portable => self.output_sum_portable(net, ply, side_to_move, bucket),
+        }
+    }
+
+    /// `output_sum_portable` compiled with AVX2: see `push_avx2`.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    fn output_sum_avx2(&self, net: &Net, ply: usize, side_to_move: Color, bucket: usize) -> i32 {
+        self.output_sum_portable(net, ply, side_to_move, bucket)
+    }
+
+    /// `output_sum_portable` compiled with AVX-512: see `push_avx512`.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx512f,avx512bw")]
+    fn output_sum_avx512(&self, net: &Net, ply: usize, side_to_move: Color, bucket: usize) -> i32 {
+        self.output_sum_portable(net, ply, side_to_move, bucket)
+    }
+
+    #[inline(always)]
+    fn output_sum_portable(&self, net: &Net, ply: usize, side_to_move: Color, bucket: usize) -> i32 {
         let (us, them) = net.output_row(bucket).split_at(HIDDEN);
         net.out_biases[bucket]
             + screlu_dot(self.half(ply, side_to_move), us.try_into().unwrap())
@@ -883,6 +1070,65 @@ mod tests {
             accumulators.refresh(&net, &board, 0);
             walk(&net, &mut board, &mut accumulators, &mut scratch, 0, depth);
         }
+    }
+
+    fn walk_every_instruction_set(net: &Net, board: &mut Board, per_set: &mut [Accumulators], ply: usize, depth: u32) {
+        let bucket = net.bucket_for(board);
+        let (first, rest) = per_set.split_first().unwrap();
+        for other in rest {
+            assert_eq!(other.slot(ply), first.slot(ply), "{:?} and {:?} disagree at {}", other.simd, first.simd, board.to_fen());
+            assert_eq!(
+                other.output_sum(net, ply, board.side_to_move, bucket),
+                first.output_sum(net, ply, board.side_to_move, bucket),
+                "{:?} and {:?} disagree on the output at {}",
+                other.simd,
+                first.simd,
+                board.to_fen()
+            );
+        }
+        if depth == 0 {
+            return;
+        }
+        for mv in movegen::legal_moves_scratch(board) {
+            for accumulators in per_set.iter_mut() {
+                accumulators.push(net, board, mv, ply);
+            }
+            let undo = board.make_move(mv);
+            walk_every_instruction_set(net, board, per_set, ply + 1, depth - 1);
+            board.unmake_move(mv, undo);
+        }
+    }
+
+    #[test]
+    fn every_instruction_set_this_cpu_has_computes_the_same_integers() {
+        // The AVX2 and AVX-512 kernels are the portable ones compiled with
+        // wider instructions, so all of them must agree integer for integer: every slot
+        // and every output sum, at every node of the trees the incremental test
+        // walks. On a CPU without AVX2 this compares the portable path with
+        // itself and proves nothing new; the search tests still run whatever
+        // the CPU picked, against a portable refresh.
+        let net = random_net(9);
+        for (fen, depth) in WALK_POSITIONS {
+            let mut board = Board::from_fen(fen).unwrap();
+            let mut per_set: Vec<Accumulators> =
+                Simd::available().into_iter().map(|simd| Accumulators::with_simd(8, simd)).collect();
+            for accumulators in &mut per_set {
+                accumulators.refresh(&net, &board, 0);
+            }
+            walk_every_instruction_set(&net, &mut board, &mut per_set, 0, depth);
+        }
+    }
+
+    #[test]
+    fn the_instruction_cap_only_ever_narrows_what_the_cpu_has() {
+        let widest = *Simd::available().last().unwrap();
+        assert_eq!(Accumulators::new(1).simd, widest, "by default, the widest set the CPU has");
+        assert_eq!(Accumulators::with_cap(1, InstructionCap::Avx512).simd, widest);
+        assert_eq!(Accumulators::with_cap(1, InstructionCap::Portable).simd, Simd::Portable);
+        let avx2 = Accumulators::with_cap(1, InstructionCap::Avx2).simd;
+        assert!(Simd::available().contains(&avx2));
+        #[cfg(target_arch = "x86_64")]
+        assert_ne!(avx2, Simd::Avx512, "an AVX2 cap must never run the AVX-512 kernels");
     }
 
     #[test]

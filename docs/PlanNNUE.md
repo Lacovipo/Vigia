@@ -292,7 +292,8 @@ cp = (S + signo(S) · 16.129) / 32.258   // división, NO desplazamiento
 i32, doblando el número de vectores en el bucle más caliente de la evaluación. Con 127 la
 cadena entera se queda en 8 carriles por vector. Se pierde un bit de resolución por
 elemento, promediado sobre 512 términos. Es una decisión específica de SSE2: si algún día
-se compila con AVX2, hay que volver a medir QA = 255.
+se compila con AVX2, hay que volver a medir QA = 255. **Desde 0.30 los núcleos corren con
+AVX2 y AVX-512**: queda pendiente en `docs/MejorasPendientes.md`.
 
 **El `>> 4`** acota `t ≤ 1.008` y deja el peor caso conservador de la salida tres órdenes
 de magnitud dentro de i32, sin recurrir a i64 (que partiría por la mitad el ancho SIMD).
@@ -367,7 +368,8 @@ líneas de descompresor y su riesgo. A Stockfish, con 98 MB, sí le compensa.
 
 **`include_bytes!` da un `&[u8]` sin alineación garantizada.** La decodificación es con
 `i16::from_le_bytes` a montículo (~1 ms al arrancar), **jamás con `transmute`**, que sería
-el primer `unsafe` de un `src/` que hoy no tiene ninguno. Y la estructura se arma en un
+el primer `unsafe` de un `src/` que entonces no tenía ninguno (los primeros llegaron en
+0.30: las llamadas a los núcleos AVX2 y AVX-512, detrás de la comprobación de la CPU). Y la estructura se arma en un
 `Vec` que se convierte a `Box<[i16]>`: `Box::new([[i16; 256]; 772])` materializa 386 KiB en
 la pila antes de moverlos al montículo y revienta en build de depuración.
 
@@ -1296,6 +1298,14 @@ vez:
    CPUs sin AVX2, y obligaría a fijar el target en `.cargo/config.toml` para que dos
    compilaciones en máquinas distintas sigan siendo comparables. Medido: `native` **no** es
    la respuesta; `x86-64-v3` sí.
+
+   **Hecho en 0.30, y no con `-C target-cpu`**: los dos núcleos calientes se compilan
+   también con AVX2 y con AVX-512 y el motor elige al arrancar. +13,6 % de nodos/segundo
+   con AVX-512 y +10,1 % con AVX2, en tres pasadas alternadas con nodos idénticos; el
+   binario entero con AVX-512 de verdad solo saca +0,5 % al despacho, y sigue
+   arrancando en cualquier x86-64. Una corrección a lo de arriba: `x86-64-v4` no sirve
+   para medir AVX-512, porque su ajuste hace que LLVM prefiera vectores de 256 bits. El
+   precio son los primeros `unsafe` de `src/`, detrás de la comprobación de la CPU.
 7. **HalfKP con cubos de rey y factorización**, cuando el corpus llegue a los 100 M.
 
 ---
@@ -1454,8 +1464,8 @@ compilada.
   salto indirecto por nodo es inaceptable. El conmutador es un booleano en `Context`, que es
   una rama perfectamente predicha.
 - **`-C target-cpu`** en el mismo cambio que la red: experimento aparte (fase 7.6). Que
-  Atalaya-256 **no lo necesite** —cabe con margen de ×8 en SSE2 puro, que es lo que hoy
-  produce el `Release/` que se distribuye— es una virtud de la propuesta, no una carencia.
+  Atalaya-256 **no lo necesite** —cabe con margen de ×8 en SSE2 puro, que es lo que producía el
+  `Release/` hasta 0.29; desde 0.30 usa AVX2 o AVX-512 si la CPU los tiene— es una virtud de la propuesta, no una carencia.
 - **Submuestrear un ply de cada dos** para combatir la correlación: tirar la mitad de los
   datos para arreglar un problema que se arregla dimensionando. La correlación se trata
   sabiendo cuántas muestras efectivas hay (§5.5), no descartando registros.

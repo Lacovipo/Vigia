@@ -81,6 +81,9 @@ pub struct Engine {
     /// Persistent state behind `setoption name UseNNUE`. On by default since
     /// 0.29: see `SearchLimits::use_nnue`.
     use_nnue: bool,
+    /// Persistent state behind `setoption name NNUEInstructions`: see
+    /// `SearchLimits::nnue_instructions`.
+    nnue_instructions: nnue::InstructionCap,
 }
 
 impl Engine {
@@ -98,6 +101,7 @@ impl Engine {
             ponder_enabled: false,
             variety: false,
             use_nnue: true,
+            nnue_instructions: nnue::InstructionCap::default(),
         }
     }
 }
@@ -163,6 +167,7 @@ fn cmd_uci(out: &mut impl Write) {
     let _ = writeln!(out, "option name Ponder type check default false");
     let _ = writeln!(out, "option name Variety type check default false");
     let _ = writeln!(out, "option name UseNNUE type check default true");
+    let _ = writeln!(out, "option name NNUEInstructions type combo default auto var auto var avx2 var portable");
     let _ = writeln!(out, "uciok");
     let _ = out.flush();
 }
@@ -266,6 +271,20 @@ fn cmd_setoption(engine: &mut Engine, tokens: SplitWhitespace) {
         "UseNNUE" => {
             if let Some(v) = value {
                 engine.use_nnue = v == "true";
+            }
+        }
+        "NNUEInstructions" => {
+            // A cap: `auto` is the widest set the CPU has, and an unknown value
+            // leaves the current one alone rather than guessing. Not case
+            // sensitive, as UCI asks: `AVX2` from a config file must not quietly
+            // leave the engine on AVX-512 while the bench believes it measures AVX2.
+            if let Some(v) = value {
+                match v.to_ascii_lowercase().as_str() {
+                    "auto" => engine.nnue_instructions = nnue::InstructionCap::Avx512,
+                    "avx2" => engine.nnue_instructions = nnue::InstructionCap::Avx2,
+                    "portable" => engine.nnue_instructions = nnue::InstructionCap::Portable,
+                    _ => {}
+                }
             }
         }
         _ => {}
@@ -401,12 +420,21 @@ fn parse_go_limits(tokens: SplitWhitespace, board: &Board) -> search::SearchLimi
     limits
 }
 
-fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
-    join_search_thread(engine);
-
+/// The limits for one `go`: what the command itself says, plus the options
+/// that persist between searches. Its own function so a test can check that
+/// every option set with `setoption` really reaches the search.
+fn go_limits(engine: &Engine, tokens: SplitWhitespace) -> search::SearchLimits {
     let mut limits = parse_go_limits(tokens, &engine.board);
     limits.variety = engine.variety;
     limits.use_nnue = engine.use_nnue;
+    limits.nnue_instructions = engine.nnue_instructions;
+    limits
+}
+
+fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
+    join_search_thread(engine);
+
+    let limits = go_limits(engine, tokens);
     engine.stop_flag.store(false, Ordering::Relaxed);
     // Reset for this `go`, not just set on a ponder one: an ordinary `go`
     // right after a ponder search must not leave a stale `true` behind.
@@ -769,6 +797,43 @@ mod tests {
     #[test]
     fn a_new_engine_searches_with_the_network() {
         assert!(Engine::new().use_nnue);
+    }
+
+    #[test]
+    fn go_limits_carry_every_option_set_with_setoption() {
+        let mut engine = Engine::new();
+        let mut out = Vec::new();
+        handle_command("setoption name Variety value true", &mut engine, &mut out);
+        handle_command("setoption name UseNNUE value false", &mut engine, &mut out);
+        handle_command("setoption name NNUEInstructions value portable", &mut engine, &mut out);
+        let limits = go_limits(&engine, "depth 3".split_whitespace());
+        assert!(limits.variety);
+        assert!(!limits.use_nnue);
+        assert_eq!(limits.nnue_instructions, nnue::InstructionCap::Portable);
+        assert_eq!(limits.max_depth, Some(3));
+    }
+
+    #[test]
+    fn uci_advertises_the_instruction_cap_of_the_network() {
+        let (out, _) = run_command("uci");
+        assert!(out.contains("option name NNUEInstructions type combo default auto var auto var avx2 var portable"));
+    }
+
+    #[test]
+    fn nnue_instructions_sets_the_cap_and_ignores_anything_else() {
+        let mut engine = Engine::new();
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Avx512, "auto by default");
+        let mut out = Vec::new();
+        handle_command("setoption name NNUEInstructions value portable", &mut engine, &mut out);
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Portable);
+        handle_command("setoption name NNUEInstructions value avx2", &mut engine, &mut out);
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Avx2);
+        handle_command("setoption name NNUEInstructions value avx9000", &mut engine, &mut out);
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Avx2, "an unknown value changes nothing");
+        handle_command("setoption name NNUEInstructions value Portable", &mut engine, &mut out);
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Portable, "values are not case sensitive");
+        handle_command("setoption name NNUEInstructions value auto", &mut engine, &mut out);
+        assert_eq!(engine.nnue_instructions, nnue::InstructionCap::Avx512);
     }
 
     #[test]

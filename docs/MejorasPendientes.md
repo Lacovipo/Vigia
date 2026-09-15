@@ -399,7 +399,10 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 3 — entrenar, cuantizar y exportar | **hecha**: `atalaya-256-6f8033fc` empotrada. Idéntica entero a entero entre el motor y Python, escala 1,052 sobre partidas apartadas, y recorta el 22,9 % de la pérdida de la HCE |
 | 4 — el coste real | **hecha**: la red no cuesta nodos/segundo, los da: +53 % en vacío y +36 % con ocho procesos a la vez; +0,60 plies en partidas |
 | 5 — SPRT-A contra 0.28 | **hecha y aprobada**: `acepta_h1` en 213 parejas (`029-atalaya-256-A`) y **+250,4 Elo [+240,6, +260,6]** con 2.700 parejas de tope fijo (`029-atalaya-256-A-estimacion`). Publicada como 0.29, con la red encendida por defecto |
-| 4 a 7 | pendientes |
+| 6 — amortiguadores de final | pendiente |
+| 7.6 — instrucciones anchas | **hecha en 0.30**: núcleos de la red con AVX-512, AVX2 o portables, elegidos al arrancar. +13,6 % de nodos/segundo con AVX-512 y +10,1 % con AVX2, nodos idénticos; el camino portable no pierde nada |
+| QA = 255 | pendiente: QA = 127 se eligió porque en SSE2 el cuadrado cabe en `i16`; con AVX2 y AVX-512 hay que volver a medir (§3.4 del plan) |
+| 7, el resto | pendiente. Lo siguiente es 7.1: un corpus nuevo etiquetado por la propia red |
 
 La fase 1, criterio a criterio:
 

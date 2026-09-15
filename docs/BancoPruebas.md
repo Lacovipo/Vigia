@@ -825,6 +825,8 @@ desde los resultados) cada vez que se lee.
 | `banco velocidad` de 0.28 (legalidad por clavadas) contra 0.27 | nodos idénticos en las 12 posiciones; +29,7 / +34,1 / +32,5 % de nps con la máquina en reposo |
 | red NNUE apagada contra 0.28 | nodos idénticos en las 12 posiciones, −0,8 % de nps: la integración no toca la HCE |
 | 0.29 con la corrección de `MAX_PLY` contra el binario que jugó la fase 5, los dos con la red | nodos idénticos en las 12 posiciones: la corrección no toca la búsqueda normal, y el +250 vale para lo que se publica |
+| 0.30 contra 0.29, el mismo binario con cada tope de `NNUEInstructions` | nodos idénticos en las 9 pasadas; `auto` (AVX-512) +13,9 / +14,8 / +12,0 %, `avx2` +11,5 / +9,6 / +9,3 %, `portable` +0,1 / +1,1 / −1,6 % |
+| binario entero compilado con AVX-512 real contra el despacho de 0.30 | nodos idénticos; +0,9 / +0,3 / +0,3 %: el despacho recoge toda la ganancia |
 | coste de la ruta de evaluación de la red, duplicando `evaluate` y `push` | 43,1 + 43,6 ≈ 87 ns por nodo, con nodos idénticos en los 9 binarios |
 | vector dorado de la red, Rust contra Python | 4.096 posiciones: índices y pasada hacia delante idénticos entero a entero |
 | A/A determinista (`banco humo`, 8 parejas, 20.000 nodos) | pentanomial `[0,0,8,0,0]`, 0,00 Elo exacto |
@@ -832,7 +834,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 384 tests (257 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 391 tests (264 motor + 119 banco + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 

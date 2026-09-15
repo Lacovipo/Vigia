@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 384 tests (257 motor, 119 banco, 8 harness viejo)
+cargo test --release                   # 391 tests (264 motor, 119 banco, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -129,7 +129,14 @@ de nodos/segundo compra ~0,52 plies.
 - **El ensamblador de la biblioteca sola engaña.** `cargo rustc --release --lib
   -- --emit asm` saca `nnue.rs` completamente escalar, porque con `lto = true`
   la vectorización ocurre al enlazar. Para comprobar las reglas R1–R3 de la red
-  hay que mirar el del binario (`--bin vigia`, fichero `deps/vigia.s`).
+  hay que mirar el del binario (`--bin vigia`, fichero `deps/vigia.s`), y en él
+  las tres copias: desde 0.30, `push_avx2`, `push_avx512` y sus `output_sum_*`
+  salen como funciones propias —no se pueden inlinear en código sin esas
+  instrucciones— y son las que corren en esta máquina.
+- **Desde 0.30 la red elige AVX-512, AVX2 o el camino portable al arrancar.** Los
+  nodos no cambian entre máquinas, la velocidad sí. Para medir en esta máquina un
+  camino más estrecho: `--uci NNUEInstructions=avx2` o `=portable`. Y para medir
+  AVX-512 no sirve compilar con `x86-64-v4`: su ajuste prefiere vectores de 256 bits.
 - El harness antiguo `src/bin/selfplay.rs` sigue compilando pero **no sirve
   para aprobar nada**: 16 partidas, ±150–200 Elo de error.
 
