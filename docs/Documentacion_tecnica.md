@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.30.0 (`Cargo.toml`).
+**Versión:** 0.31.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -533,8 +533,9 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
 argumentada en `docs/PlanNNUE.md`. La red empotrada es
-**`atalaya-256-6f8033fc`, entrenada con 36 millones de posiciones del propio
-Vigía**. Sustituye a la de la fase 1 —construida a mano, solo material—, que era
+**`atalaya-256-0bd21a25`, entrenada con 72 millones de posiciones del propio
+Vigía** (los corpus v1 y v2 juntos; desde 0.29 y hasta 0.30 fue
+`atalaya-256-6f8033fc`, con los 36 M de v1). Sustituye a la de la fase 1 —construida a mano, solo material—, que era
 el andamio para probar el bucle entero antes de gastar horas generando datos y
 que sigue en `nets/` porque dos tests la cargan del fichero: es la única red cuya
 salida se puede recalcular con lápiz.
@@ -559,6 +560,21 @@ búsquedas con la HCE. Una generación de corpus con la red se pide con
 | lo que valen | **1,90 M muestras efectivas** (ρ = 0,885 a desfase 2, decorrelación 11,4 plies): 9,40 por parámetro |
 | entrenamiento | PyTorch en la GPU, 60 épocas a `lr` 2e-3, lote 16.384, K = 160,7, ~45 min |
 | pérdida | `σ(pred/K)` contra `σ(cp/K)`, con la escala de final dentro de la pasada hacia delante |
+
+**Desde 0.31, dos corpus.** La red empotrada se entrena con **v1 + v2: 72 M de
+posiciones**, la mitad etiquetada por la HCE a 25.000 nodos (v1) y la mitad por la
+propia red a 50.000 (v2, 27,2 h de máquina con 8 CPUs). K = 159,7. La mezcla no es
+por cariño al corpus viejo: las etiquetas más profundas de v2 salen **más suaves**
+—ρ a desfase 2 de 0,910 contra 0,885, decorrelación de 14,8 plies contra 11,4—, así
+que sus 36 M valen 1,48 M de muestras efectivas frente a los 1,90 M de v1, y juntar
+los dos es lo que devuelve variedad. En el banco, la red de v1+v2 le gana a la de
+solo v2 por +8,7 Elo [−3,6, +21,0].
+
+**Y lo que no fue.** El plan sostenía que el cuello era la profundidad de la
+etiqueta. Un control con todo lo demás igual —6 M de posiciones, las mismas
+aperturas, el mismo evaluador, y solo el presupuesto cambiado de 25.000 a 50.000
+nodos— dio **+3,8 Elo [−8,7, +16,4]**: nada medible. Los +64,9 Elo de 0.31 salen del
+volumen y del evaluador que etiqueta, no de ese ply de más (§7.1 del plan).
 
 **El modelo flotante es el motor sin redondear**: el acumulador vive en unidades
 de activación (1,0 son 127 enteros) y la salida es directamente centipeones, así
@@ -750,6 +766,10 @@ Y con la red entrenada:
 - **Sonda de fuerza** (`029-atalaya-sonda`, 128 parejas a `movetime` 100 ms):
   **+200 Elo** [+157, +250], 168-53-35, cero partidas anómalas. Con la primera red
   entrenada (`659345d5`), no con la que se publica.
+- **0.31, la red de dos corpus**: sobre las mismas 20.000 posiciones apartadas de
+  v2, recorta el **46,1 %** de la pérdida de la HCE, contra el 43,9 % de la red de
+  solo v2 y el 39,2 % de la de 0.30. En el banco, **+64,9 Elo [+57,1, +72,7]** sobre
+  0.30 en 2.500 parejas.
 - **Fase 5, con la red que se publica** (`Release/Vigia 0.29-atalaya.exe`):
   **`acepta_h1`** en 213 parejas (`029-atalaya-256-A`), y en la tanda de tope fijo
   de 2.700 parejas (`029-atalaya-256-A-estimacion`), **+250,4 Elo
@@ -1551,6 +1571,17 @@ usarse para aprobar un cambio.
   adversarial obligó a medir con más cuidado —la primera ronda, de una pasada por
   variante, había descartado AVX-512 por error— y a hacer medible el camino
   portable y a probar que el tope llega a la búsqueda.
+- **0.31.0 — la red entrenada con dos corpus.** Un corpus v2 de 36 M de posiciones
+  etiquetadas por la propia red a 50.000 nodos (27,2 h con 8 CPUs) y una red
+  entrenada con v1 y v2 juntos, 72 M en total: **+64,9 Elo** [+57,1, +72,7] sobre
+  0.30, tras `acepta_h1` en 377 parejas. Lo único que cambia respecto de 0.30 son
+  los pesos.
+
+  **Y un control que desmonta la tesis del plan**: doblar los nodos de la etiqueta
+  (25.000 → 50.000, de 7,78 a 8,72 plies) compra +3,8 Elo [−8,7, +16,4], o sea
+  nada medible. La mejora viene del volumen y del evaluador que etiqueta, no de la
+  profundidad, así que el siguiente escalón que proponía el plan —100.000 nodos, el
+  doble de coste— queda desaconsejado (§7.1 de `docs/PlanNNUE.md`).
 
 ---
 

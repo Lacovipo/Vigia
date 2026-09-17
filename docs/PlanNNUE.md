@@ -1332,6 +1332,59 @@ vez:
    | 4 | estadísticas, K y cuatro entrenamientos en la GPU (control, 6 M de v2, v2, v1+v2) | ~3 h |
    | 5 | banco: control contra 6 M de v2; v2 contra v1+v2; la mejor contra 0.30, decisión y cifra | ~4 h |
    | | **total** | **~40 h** |
+
+   **Resultado (0.31): la red mejora +64,9 Elo, y no es por la profundidad.**
+
+   El corpus v2 salió en 27,2 h con 8 CPUs: 36.001.612 posiciones a 50.000 nodos con la
+   red, 21,8 M útiles (60,47 %), 302.259 partidas de 119,1 plies, 26,9 % de tablas (v1:
+   22,7 %). Y una sorpresa que cambia la lectura de todo lo demás:
+
+   | | v1 (HCE, 25.000 nodos) | v2 (red, 50.000) |
+   |---|---|---|
+   | ρ a desfase 2 con \|cp\| < 300 | 0,885 | **0,910** |
+   | longitud de decorrelación | 11,4 plies | **14,8 plies** |
+   | muestras efectivas | 1,90 M (9,40 por parámetro) | **1,48 M (7,31)** |
+   | K | 160,7 | 158,6 |
+
+   **Las etiquetas más profundas son más suaves**, así que se parecen más entre plies
+   vecinos y el mismo número de posiciones vale menos. Por eso «v1+v2» dejó de ser una
+   curiosidad y pasó a ser la candidata seria.
+
+   Cuatro redes, todas a 60 épocas y `lr` 2e-3, y cada una con la K de su corpus:
+
+   | red | corpus | validación |
+   |---|---|---|
+   | control | 6 M, red a 25.000 nodos | 0,009870 |
+   | prefijo | 6 M, red a 50.000 nodos (mismas aperturas) | 0,010031 |
+   | v2 | 36 M a 50.000 | 0,008487 |
+   | **v1+v2** | **72 M** | **0,008223** |
+
+   Las dos grandes pasan las comprobaciones: idénticas entero a entero entre el motor y
+   Python en 2.000 posiciones, y escala 1,077 y 1,066 frente a la HCE. Sobre 20.000
+   posiciones de partidas apartadas de v2, la red de 0.30 recorta el 39,2 % de la pérdida
+   de la HCE, la de v2 el 43,9 % y la de v1+v2 el 46,1 %.
+
+   Y en el banco, que es quien decide:
+
+   | tanda | qué compara | resultado |
+   |---|---|---|
+   | `031-profundidad-de-etiqueta` | etiquetas de 50.000 nodos contra 25.000, 6 M cada una | **+3,8 Elo** [−8,7, +16,4] en 1.000 parejas |
+   | `031-v2-contra-v1v2` | v1+v2 contra solo v2 | +8,7 Elo [−3,6, +21,0], LOS 92 % |
+   | `031-atalaya-v2-A` | v1+v2 contra 0.30 | **`acepta_h1`** en 377 parejas, +73,9 (sesgado al alza) |
+   | `031-atalaya-v2-A-estimacion` | lo mismo, tope fijo | **+64,9 Elo** [+57,1, +72,7] en 2.500 parejas |
+
+   **El control desmiente la tesis de este punto del plan.** Doblar el presupuesto de la
+   etiqueta sube la profundidad de 7,78 a 8,72 plies y compra, a este tamaño de corpus,
+   +3,8 Elo con el intervalo cruzando el cero. Lo que compró los +64,9 fue **más corpus y
+   mejor etiquetado**: el doble de posiciones que 0.30 y etiquetas de un evaluador que ya
+   era bueno. Consecuencias para lo que viene:
+
+   - **El escalón de 100.000 nodos queda desaconsejado**: costaría el doble por corpus para
+     ganar otro ply de etiqueta, y el ply que se acaba de comprar no se ha notado.
+   - Lo que sí se ha notado es el volumen. La vía barata es **más posiciones a 25.000 o
+     50.000 nodos**, que además salen al doble de velocidad.
+   - Y queda una pregunta abierta que este experimento no separa: cuánto de los +64,9 es
+     el evaluador de las hojas y cuánto son las partidas que juega una red mejor.
 2. **λ = 0,75**, con el WDL del corpus sin adjudicación, que ahora sí es información
    independiente.
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.

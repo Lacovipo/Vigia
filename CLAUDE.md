@@ -137,6 +137,11 @@ de nodos/segundo compra ~0,52 plies.
   nodos no cambian entre máquinas, la velocidad sí. Para medir en esta máquina un
   camino más estrecho: `--uci NNUEInstructions=avx2` o `=portable`. Y para medir
   AVX-512 no sirve compilar con `x86-64-v4`: su ajuste prefiere vectores de 256 bits.
+- **Doblar los nodos de la etiqueta del corpus no compró fuerza**: 25.000 → 50.000
+  nodos sube la profundidad de la etiqueta de 7,78 a 8,72 plies y dio +3,8 Elo
+  [−8,7, +16,4] en un control de 1.000 parejas con todo lo demás igual (0.31). Los
+  +64,9 Elo de 0.31 salen de **más corpus** (72 M contra 36 M) y de etiquetar con
+  una red mejor. No subir a 100.000 nodos sin una prueba nueva.
 - El harness antiguo `src/bin/selfplay.rs` sigue compilando pero **no sirve
   para aprobar nada**: 16 partidas, ±150–200 Elo de error.
 

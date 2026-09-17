@@ -853,6 +853,10 @@ desde los resultados) cada vez que se lee.
 | `029-atalaya-sonda` | primera red entrenada (`659345d5`) vs 0.28 | `movetime` 100 ms | 128 parejas, sonda: **+200,0 Elo** [+156,8, +249,7], +0,60 plies, 0 anómalas |
 | `029-atalaya-256-A` | red `6f8033fc` (0.29) vs 0.28 | `movetime` 100 ms | 213 parejas: **`acepta_h1`**, +266,7 Elo (sesgado al alza) |
 | `029-atalaya-256-A-estimacion` | red `6f8033fc` (0.29) vs 0.28 | `movetime` 100 ms | 2.700 parejas, tope fijo: **+250,4 Elo** [+240,6, +260,6] |
+| `031-profundidad-de-etiqueta` | etiquetas de 50.000 nodos vs 25.000, 6 M cada una | `movetime` 100 ms | 1.000 parejas, tope fijo: **+3,8 Elo** [−8,7, +16,4]. La profundidad de la etiqueta no compra fuerza medible |
+| `031-v2-contra-v1v2` | red de v1+v2 vs red de solo v2 | `movetime` 100 ms | 1.000 parejas, tope fijo: **+8,7 Elo** [−3,6, +21,0], LOS 92 % |
+| `031-atalaya-v2-A` | red de v1+v2 (0.31) vs 0.30 | `movetime` 100 ms | 377 parejas: **`acepta_h1`**, +73,9 Elo (sesgado al alza) |
+| `031-atalaya-v2-A-estimacion` | red de v1+v2 (0.31) vs 0.30 | `movetime` 100 ms | 2.500 parejas, tope fijo: **+64,9 Elo** [+57,1, +72,7] |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba

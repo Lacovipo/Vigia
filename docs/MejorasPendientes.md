@@ -402,7 +402,8 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 6 — amortiguadores de final | pendiente |
 | 7.6 — instrucciones anchas | **hecha en 0.30**: núcleos de la red con AVX-512, AVX2 o portables, elegidos al arrancar. +13,6 % de nodos/segundo con AVX-512 y +10,1 % con AVX2, nodos idénticos; el camino portable no pierde nada |
 | QA = 255 | pendiente: QA = 127 se eligió porque en SSE2 el cuadrado cabe en `i16`; con AVX2 y AVX-512 hay que volver a medir (§3.4 del plan) |
-| 7.1 — etiquetas de la red | **preparada**: `generador datos --evaluador red`, reproducible y compatible con v1; plan de la ventana (~40 h con 8 CPUs, con un control de profundidad) en el plan, fase 7 |
+| 7.1 — etiquetas de la red | **hecha y aprobada**: corpus v2 de 36 M etiquetado por la red a 50.000 nodos; la red entrenada con v1+v2 (72 M) gana **+64,9 Elo [+57,1, +72,7]** a 0.30 y se publica como 0.31 |
+| 7.1, el control | **medido y negativo**: doblar los nodos de la etiqueta (25.000 → 50.000, +0,94 plies) da +3,8 Elo [−8,7, +16,4]. La profundidad no era el cuello: el escalón de 100.000 nodos queda desaconsejado y la vía barata es más posiciones |
 | 7, el resto | pendiente |
 
 La fase 1, criterio a criterio:

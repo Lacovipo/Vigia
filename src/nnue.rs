@@ -298,7 +298,7 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary: `atalaya-256-6f8033fc`, trained on
+/// The network compiled into the binary: `atalaya-256-0bd21a25`, trained on
 /// 36 M positions of Vigia's own self-play (docs/PlanNNUE.md, phase 3).
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
@@ -310,7 +310,7 @@ impl Net {
 /// It replaces `material-256.bin`, the hand-built network of phase 1, which
 /// stays in `nets/` because two tests below still pin its arithmetic: it is the
 /// only network whose every output can be recomputed by hand.
-static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-6f8033fc.bin");
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-0bd21a25.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();

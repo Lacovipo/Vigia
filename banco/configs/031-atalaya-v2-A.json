@@ -1,0 +1,55 @@
+{
+  "_": "Fase 7.1, la decision: la red entrenada con el corpus nuevo contra 0.30.",
+  "_2": "La cifra no se lee de aqui, sino de 031-atalaya-v2-A-estimacion.",
+
+  "_criterio": "Criterio declarado ANTES de jugar: acepta_h1. Con elo0=0 y elo1=5,",
+  "_criterio_2": "'acepta_h0' no significaria que empeora, sino que no llega a +5 Elo. Y esta",
+  "_criterio_3": "vez el resultado no esta cantado: 0.30 ya juega con una red buena, asi que",
+  "_criterio_4": "lo que se mide es lo que aportan las etiquetas nuevas, no la red frente a",
+  "_criterio_5": "la evaluacion clasica.",
+
+  "_ruta_candidato": "Se rellena con la ganadora de 031-v2-contra-v1v2 antes de lanzar.",
+
+  "esquema": 1,
+  "id": "031-atalaya-v2-A",
+
+  "candidato": {
+    "nombre": "0.31-atalaya-v2",
+    "ruta": "Release/Vigia 0.31-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.30",
+    "ruta": "Release/Vigia 0.30.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260919,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 4000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/031-atalaya-v2-A"
+}

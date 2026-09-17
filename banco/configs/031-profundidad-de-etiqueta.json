@@ -1,0 +1,62 @@
+{
+  "_": "El control de la fase 7.1: dos redes entrenadas con 6 M de posiciones cada",
+  "_2": "una, las mismas aperturas y el mismo evaluador (la red), y como unica",
+  "_3": "diferencia el presupuesto de la busqueda que las etiqueto: 50.000 nodos",
+  "_4": "(8,72 plies de media) contra 25.000 (7,78).",
+
+  "_porque": "El corpus v2 cambia tres cosas a la vez respecto de v1: el evaluador",
+  "_porque_2": "de las hojas, los nodos y las partidas, que las juega otro motor. Sin este",
+  "_porque_3": "control, un acepta_h1 de 0.31 no diria que el cuello era la profundidad de",
+  "_porque_4": "la etiqueta, y el siguiente escalon del plan (100.000 nodos) cuesta el doble.",
+  "_porque_5": "Aqui solo cambia la profundidad, asi que lo que mida es suyo.",
+
+  "_reserva": "Las dos redes son flojas a proposito: 6 M dan unas 300.000 muestras",
+  "_reserva_2": "efectivas, la septima parte de las de una red de verdad. Esto compara",
+  "_reserva_3": "etiquetas, no publica una red.",
+
+  "esquema": 1,
+  "id": "031-profundidad-de-etiqueta",
+
+  "candidato": {
+    "nombre": "etiquetas-50000",
+    "ruta": "Release/Vigia 0.31-prefijo.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "etiquetas-25000",
+    "ruta": "Release/Vigia 0.31-control.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260917,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-16 Elo.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Hipotesis pegadas y alpha/beta minusculos: el LLR no se mueve y la",
+  "_sprt_2": "tanda agota su tope, que es lo que se quiere para leer el intervalo.",
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/031-profundidad-de-etiqueta"
+}

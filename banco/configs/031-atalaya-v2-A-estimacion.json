@@ -1,0 +1,56 @@
+{
+  "_": "La CIFRA de la fase 7.1: cuanto vale el corpus nuevo, con tope fijo.",
+  "_2": "La decision la da 031-atalaya-v2-A.",
+
+  "_metodo": "Una prueba secuencial que para al cruzar para en un momento favorable",
+  "_metodo_2": "al candidato, y la magnitud sale sesgada al alza: medido dos veces en este",
+  "_metodo_3": "proyecto (+109,2 contra +72,4 en 0.28; +266,7 contra +250,4 en 0.29). Con",
+  "_metodo_4": "las hipotesis pegadas y alpha/beta minusculos el LLR no se mueve, la tanda",
+  "_metodo_5": "agota su tope y el intervalo sale limpio.",
+
+  "esquema": 1,
+  "id": "031-atalaya-v2-A-estimacion",
+
+  "candidato": {
+    "nombre": "0.31-atalaya-v2",
+    "ruta": "Release/Vigia 0.31-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.30",
+    "ruta": "Release/Vigia 0.30.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "_libro": "Semilla distinta de la de la decision: muestra independiente.",
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260920,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "2.500 parejas con 8 workers, alrededor de hora y media, para un",
+  "_partidas_2": "intervalo de unos +-10 Elo.",
+  "partidas": {
+    "max_parejas": 2500,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/031-atalaya-v2-A-estimacion"
+}

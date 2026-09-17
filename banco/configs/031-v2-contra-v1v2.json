@@ -1,0 +1,59 @@
+{
+  "_": "Cual de las dos candidatas de la fase 7.1 se lleva al SPRT: la entrenada",
+  "_2": "solo con el corpus v2 (36 M, etiquetas de la red a 50.000 nodos) o la",
+  "_3": "entrenada con v1+v2 (72 M, la mitad con etiquetas viejas de la HCE).",
+
+  "_porque": "No se elige por perdida de validacion ni por holdout: las dos se miden",
+  "_porque_2": "contra etiquetas de v2, que son exactamente el objetivo de la red solo-v2,",
+  "_porque_3": "y ademas dependen de K, que es distinta en cada corpus. Una tanda directa",
+  "_porque_4": "entre las dos cuesta 40 minutos y responde lo que importa: cual juega mejor.",
+
+  "_contexto": "v2 tiene 21,8 M posiciones utiles pero solo 1,48 M muestras efectivas,",
+  "_contexto_2": "menos que los 1,90 M de v1, porque las etiquetas mas profundas son mas",
+  "_contexto_3": "suaves y se parecen mas entre plies vecinos (rho 0,910 contra 0,885). Por",
+  "_contexto_4": "eso juntar los dos corpus es una candidata de verdad y no un capricho.",
+
+  "esquema": 1,
+  "id": "031-v2-contra-v1v2",
+
+  "candidato": {
+    "nombre": "red-v1v2",
+    "ruta": "Release/Vigia 0.31-v1v2.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "red-v2",
+    "ruta": "Release/Vigia 0.31-v2.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260918,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Hipotesis pegadas: interesa el intervalo, no un veredicto.",
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/031-v2-contra-v1v2"
+}
