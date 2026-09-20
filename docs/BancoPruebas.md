@@ -330,9 +330,12 @@ que se añadió para eso:
   --profundidad 12 --hash 32 --hilos 1 --uci UseNNUE=true
 ```
 
-`--uci Nombre=valor,...` se pasa a los dos motores, y uno que no conozca la
-opción la ignora. `Hash` y `Threads` se rechazan ahí: van con `--hash` y
-`--hilos`, para que no haya dos formas de fijar lo mismo.
+`--uci Nombre=valor,...` se pasa a los dos motores. `Hash` y `Threads` se
+rechazan ahí: van con `--hash` y `--hilos`, para que no haya dos formas de
+fijar lo mismo. Aquí ponía que un motor que no conociera la opción «la
+ignora», y eso era verdad del protocolo pero un mal defecto para un banco:
+**desde ahora la tanda aborta** si el motor no anunció esa opción en su saludo
+(ver §8).
 
 **Lo que NO se puede hacer: sacar el coste de la evaluación restando nps entre
 la red y la HCE.** Con la red de material de la fase 1, en el mismo binario, la
@@ -709,6 +712,32 @@ pesimismo de un motor mal calibrado para regalar partidas salvables.
 Las reglas duras se comprueban **antes** que la adjudicación, así que un
 mate nunca queda tapado por un abandono.
 
+### Una opción que el motor no anuncia aborta la tanda
+
+UCI manda que un `setoption` con un nombre desconocido **se ignore en
+silencio**, sin error. Para un banco eso es el peor comportamiento posible: la
+tanda arranca, juega sus horas y mide una configuración que no es la que dice
+el fichero de experimento.
+
+No es hipotético. Entre 0.28 y 0.29 la red se enciende con `UseNNUE`, opción
+que los binarios anteriores no tienen: pedírsela a un 0.28 no fallaba, solo
+dejaba la red apagada y cambiaba en silencio lo que se estaba comparando.
+
+Así que el banco guarda los `option name` del saludo y, antes de enviar nada,
+comprueba que cada opción pedida está entre ellas. Si falta alguna, no se juega
+ni una partida y el error dice cuál falta y qué anuncia el motor:
+
+```
+Error: A: pide opciones UCI que el motor no anuncia: UseNNUE. Un 'setoption'
+desconocido se ignora en silencio y la tanda mediría otra cosa. El motor
+anuncia: Hash, Clear Hash, Threads, Ponder, Variety
+```
+
+Los nombres se comparan **sin distinguir mayúsculas**: el protocolo no obliga a
+nada y los motores no se ponen de acuerdo, y un falso positivo aquí costaría
+una tanda por una diferencia de caja. El nombre puede llevar espacios (`Clear
+Hash`), así que se corta por el ` type ` de la línea y no por el primer espacio.
+
 ### Un hueco en las puntuaciones rompe la ventana
 
 Si un motor devuelve `bestmove` sin haber anunciado ningún `info … score`
@@ -834,7 +863,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 394 tests (264 motor + 119 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 396 tests (264 motor + 121 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 

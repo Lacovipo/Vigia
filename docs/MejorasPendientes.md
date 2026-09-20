@@ -526,6 +526,14 @@ Por orden de utilidad para lo que viene:
    `src/bin/banco/velocidad.rs` y protege el único carril de validación que
    no cuesta partidas.
 
+1quinquies. ~~**Comprobar que el motor anuncia las opciones que se le
+   envían**~~ → **hecho**. Un `setoption` con nombre desconocido se ignora en
+   silencio por protocolo, así que una tanda podía medir horas con la
+   configuración equivocada —exactamente lo que pasa al pedirle `UseNNUE` a un
+   binario anterior a 0.29—. Ahora el banco guarda los `option name` del saludo
+   y aborta antes de jugar si falta alguna. Detalle en §8 de
+   `docs/BancoPruebas.md`.
+
 2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta,
    ya con el libro ancho.
 3. **Soporte de ponder en el árbitro** (`go ponder` / `ponderhit`), sin el

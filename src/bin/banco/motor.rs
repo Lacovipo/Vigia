@@ -137,9 +137,13 @@ impl Motor {
         motor.send("uci")?;
         let deadline = Instant::now() + handshake_timeout;
         let mut vio_uciok = false;
+        let mut anunciadas: Vec<String> = Vec::new();
         while let Some(line) = motor.recv_until(deadline) {
             if let Some(name) = line.strip_prefix("id name ") {
                 motor.id_name = name.trim().to_string();
+            }
+            if let Some(nombre) = nombre_anunciado(&line) {
+                anunciadas.push(nombre.to_string());
             }
             if line == "uciok" {
                 vio_uciok = true;
@@ -153,6 +157,22 @@ impl Motor {
             motor.id_name = format!("(sin id name) {}", ruta.display());
         }
 
+        // Un `setoption` con un nombre que el motor no conoce no da error:
+        // el protocolo manda ignorarlo, y la tanda seguiría adelante midiendo
+        // una configuración que no es la pedida. Aquí ya pasó con `UseNNUE`,
+        // que los binarios anteriores a 0.29 no tienen: la red se quedaba
+        // apagada y el experimento comparaba otra cosa. Se aborta antes de
+        // jugar nada.
+        let faltan = opciones_no_anunciadas(&anunciadas, opciones);
+        if !faltan.is_empty() {
+            return Err(format!(
+                "{etiqueta}: pide opciones UCI que el motor no anuncia: {}. Un 'setoption' \
+                 desconocido se ignora en silencio y la tanda mediría otra cosa. El motor \
+                 anuncia: {}",
+                faltan.join(", "),
+                if anunciadas.is_empty() { "ninguna".to_string() } else { anunciadas.join(", ") },
+            ));
+        }
         for (nombre, valor) in opciones {
             motor.send(&format!("setoption name {nombre} value {valor}"))?;
         }
@@ -285,6 +305,34 @@ impl Drop for Motor {
     }
 }
 
+/// Nombre de una línea `option name <nombre> type <tipo> ...` del saludo.
+///
+/// El nombre puede llevar espacios (`Clear Hash`, `UCI_LimitStrength`), así
+/// que se corta por el ` type ` que exige el protocolo y no por el primer
+/// espacio.
+fn nombre_anunciado(line: &str) -> Option<&str> {
+    let resto = line.strip_prefix("option name ")?;
+    let nombre = match resto.find(" type ") {
+        Some(i) => &resto[..i],
+        None => resto,
+    };
+    let nombre = nombre.trim();
+    (!nombre.is_empty()).then_some(nombre)
+}
+
+/// Opciones que pide la configuración y el motor no anunció.
+///
+/// Se comparan sin distinguir mayúsculas: el protocolo no obliga a nada y los
+/// motores no se ponen de acuerdo, y un falso positivo aquí aborta una tanda
+/// de horas por una diferencia de caja.
+fn opciones_no_anunciadas<'a>(anunciadas: &[String], pedidas: &'a [(String, String)]) -> Vec<&'a str> {
+    pedidas
+        .iter()
+        .map(|(nombre, _)| nombre.as_str())
+        .filter(|nombre| !anunciadas.iter().any(|a| a.eq_ignore_ascii_case(nombre)))
+        .collect()
+}
+
 #[derive(Default)]
 struct Info {
     score: Option<Score>,
@@ -391,6 +439,29 @@ mod tests {
         assert!(Score::Mate(5).as_cp() > 1000);
         assert!(Score::Mate(-5).as_cp() < -1000);
         assert_eq!(Score::Cp(-250).as_cp(), -250);
+    }
+
+    #[test]
+    fn an_option_name_with_spaces_survives_the_handshake() {
+        assert_eq!(nombre_anunciado("option name Clear Hash type button"), Some("Clear Hash"));
+        assert_eq!(nombre_anunciado("option name Hash type spin default 16 min 1 max 1024"), Some("Hash"));
+        // Sin ` type ` no es una línea legal, pero tampoco se pierde el nombre.
+        assert_eq!(nombre_anunciado("option name Ponder"), Some("Ponder"));
+        assert_eq!(nombre_anunciado("id name Vigia 0.31"), None);
+        assert_eq!(nombre_anunciado("option name  type check default false"), None);
+    }
+
+    #[test]
+    fn an_option_the_engine_never_advertised_is_caught_before_playing() {
+        let anunciadas = vec!["Hash".to_string(), "Threads".to_string()];
+        let pedidas = vec![
+            ("Hash".to_string(), "32".to_string()),
+            ("usennue".to_string(), "true".to_string()),
+        ];
+        // El nombre desconocido sale, y solo él: la caja no cuenta.
+        assert_eq!(opciones_no_anunciadas(&anunciadas, &pedidas), vec!["usennue"]);
+        let solo_conocidas = vec![("threads".to_string(), "1".to_string())];
+        assert!(opciones_no_anunciadas(&anunciadas, &solo_conocidas).is_empty());
     }
 
     #[test]
