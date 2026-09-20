@@ -1,0 +1,55 @@
+{
+  "_": "Fase 7, punto 2, la CIFRA: cuanto vale el peso al resultado de partida,",
+  "_2": "con tope fijo. La decision la da 032-lambda-A.",
+
+  "_metodo": "Una prueba secuencial que para al cruzar para en un momento favorable",
+  "_metodo_2": "al candidato, y la magnitud sale sesgada al alza: medido tres veces en este",
+  "_metodo_3": "proyecto (+109,2 contra +72,4 en 0.28; +266,7 contra +250,4 en 0.29; +73,9",
+  "_metodo_4": "contra +64,9 en 0.31). Con las hipotesis pegadas y alpha/beta minusculos el",
+  "_metodo_5": "LLR no se mueve, la tanda agota su tope y el intervalo sale limpio.",
+
+  "_libro": "Semilla distinta de la de la decision: muestra independiente.",
+
+  "esquema": 1,
+  "id": "032-lambda-A-estimacion",
+
+  "candidato": {
+    "nombre": "0.32-lambda",
+    "ruta": "Release/Vigia 0.32-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.31",
+    "ruta": "Release/Vigia 0.31.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260924,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 2500,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/032-lambda-A-estimacion"
+}

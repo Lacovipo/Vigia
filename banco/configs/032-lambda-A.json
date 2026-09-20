@@ -1,0 +1,54 @@
+{
+  "_": "Fase 7, punto 2, la decision: la red con peso al resultado de partida",
+  "_2": "contra 0.31. La cifra no se lee de aqui, sino de 032-lambda-A-estimacion.",
+
+  "_criterio": "Criterio declarado ANTES de jugar: acepta_h1. Con elo0=0 y elo1=5,",
+  "_criterio_2": "'acepta_h0' no significa que empeore, sino que no llega a +5 Elo. Y aqui",
+  "_criterio_3": "lo unico que cambia entre los dos binarios son los pesos de la red: mismo",
+  "_criterio_4": "corpus, misma K, mismas epocas, mismo lr, misma semilla. Solo el objetivo.",
+
+  "_ruta_candidato": "Se rellena con la ganadora del cribado (032-lambda-075 / -050).",
+
+  "esquema": 1,
+  "id": "032-lambda-A",
+
+  "candidato": {
+    "nombre": "0.32-lambda",
+    "ruta": "Release/Vigia 0.32-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.31",
+    "ruta": "Release/Vigia 0.31.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260923,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 4000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/032-lambda-A"
+}

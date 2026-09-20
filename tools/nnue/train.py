@@ -29,6 +29,18 @@ que la van a amortiguar. Con λ = 1, peso cero al resultado de la partida.
 La validación separa **partidas enteras**, no posiciones sueltas: las posiciones
 de una misma partida están correlacionadas (§5.5), y mezclarlas daría una
 validación optimista.
+
+**Se guarda la red de la última época, no la de mejor validación.** Con λ < 1 el
+objetivo lleva dentro el resultado de la partida, cuyo ruido irreducible domina
+la pérdida y aplana la curva: entrenando con λ = 0,50 el mínimo cayó en la época
+8 (0,026557) y la época 60 valía 0,026877, un 0,1 % peor. Elegir por ese mínimo
+guardaba una red de ocho épocas y la hacía pasar por el candidato de λ = 0,50.
+El plan de tasa de aprendizaje termina en 0, así que la red del final es la que
+se ha entrenado; la validación se imprime, pero no elige.
+
+Cada época se imprimen dos validaciones: la del objetivo con el λ pedido, que no
+es comparable entre λ distintos porque cada una mide contra otro objetivo, y la
+de puntuación pura (λ = 1), que sí lo es.
 """
 import argparse
 import hashlib
@@ -188,14 +200,14 @@ def main():
     val_tensores = [a_tensores(corpus.lote(muestra_val[a:a + args.lote], cubo_de), dispositivo)
                     for a in range(0, len(muestra_val), args.lote)]
 
-    def validar():
+    def validar(lam):
         modelo.eval()
         with torch.no_grad():
-            total = sum(perdida(modelo, t, args.k, args.lam).item() * len(t[0]) for t in val_tensores)
+            total = sum(perdida(modelo, t, args.k, lam).item() * len(t[0]) for t in val_tensores)
         modelo.train()
         return total / max(1, sum(len(t[0]) for t in val_tensores))
 
-    mejor = float('inf')
+    mejor, mejor_epoca = float('inf'), 0
     for epoca in range(args.epocas):
         orden = rng.permutation(corpus.entrenamiento)
         cola = queue.Queue(maxsize=8)
@@ -227,17 +239,22 @@ def main():
             suma += p.item()
             n += 1
         hilo.join()
-        val = validar()
-        print('epoca %2d  entrenamiento %.6f  validacion %.6f  lr %.2e  (%.0f s)'
-              % (epoca + 1, suma / max(n, 1), val, planificador.get_last_lr()[0], time.time() - t0))
+        val = validar(args.lam)
+        val_cp = val if args.lam == 1.0 else validar(1.0)
+        print('epoca %2d  entrenamiento %.6f  validacion %.6f  cp %.6f  lr %.2e  (%.0f s)'
+              % (epoca + 1, suma / max(n, 1), val, val_cp, planificador.get_last_lr()[0], time.time() - t0))
         if val < mejor:
-            mejor = val
-            torch.save({
-                'modelo': modelo.state_dict(), 'n_cubos': n_cubos, 'cubo': tabla, 'k': args.k,
-                'sha_corpus': corpus.sha, 'posiciones': int(len(corpus.entrenamiento)),
-                'epoca': epoca + 1, 'validacion': val, 'args': vars(args),
-            }, args.salida)
-    print('mejor validacion %.6f -> %s' % (mejor, args.salida))
+            mejor, mejor_epoca = val, epoca + 1
+        # La red que se guarda es siempre la de la última época terminada: así
+        # una interrupción deja algo utilizable y el fichero final es el de la
+        # época 60, no el de un mínimo de validación que con λ < 1 es ruido.
+        torch.save({
+            'modelo': modelo.state_dict(), 'n_cubos': n_cubos, 'cubo': tabla, 'k': args.k,
+            'sha_corpus': corpus.sha, 'posiciones': int(len(corpus.entrenamiento)),
+            'epoca': epoca + 1, 'validacion': val, 'validacion_cp': val_cp, 'args': vars(args),
+        }, args.salida)
+    print('epoca %d guardada -> %s (mejor validacion: %.6f en la epoca %d)'
+          % (args.epocas, args.salida, mejor, mejor_epoca))
 
 
 if __name__ == '__main__':

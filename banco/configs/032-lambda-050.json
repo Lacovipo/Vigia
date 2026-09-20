@@ -1,0 +1,60 @@
+{
+  "_": "Fase 7, punto 2 del plan: peso al resultado de partida en la etiqueta.",
+  "_2": "Red entrenada con lambda = 0,50 contra la de 0.31 (lambda = 1), que es la",
+  "_3": "misma red salvo el objetivo del entrenamiento: mismo corpus v1+v2 de 72 M,",
+  "_4": "misma K, mismas epocas, mismo lr, misma semilla.",
+
+  "_porque": "El corpus nuevo se juega hasta el final sin adjudicacion, asi que el",
+  "_porque_2": "resultado de la partida SI es informacion independiente de la puntuacion;",
+  "_porque_3": "en el corpus viejo, con adjudicacion, el resultado ERA la puntuacion y",
+  "_porque_4": "mezclarlos no habria anadido nada (§5.6 del plan).",
+
+  "_metodo": "Tanda de cribado: hipotesis pegadas y alpha/beta minusculos, asi que el",
+  "_metodo_2": "LLR no se mueve, la tanda agota su tope y lo que se lee es el intervalo.",
+  "_metodo_3": "Sirve para elegir entre los dos lambda y para descartar la idea si los dos",
+  "_metodo_4": "salen claramente negativos, no para aprobar nada: eso lo hace 032-lambda-A.",
+
+  "esquema": 1,
+  "id": "032-lambda-050",
+
+  "candidato": {
+    "nombre": "lambda-0,50",
+    "ruta": "Release/Vigia 0.32-lam050.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.31",
+    "ruta": "Release/Vigia 0.31.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260922,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-16 Elo.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/032-lambda-050"
+}

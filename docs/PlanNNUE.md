@@ -855,6 +855,26 @@ cubos y tabla real, idéntica entre el motor y Python en 200 posiciones.
 con una red aleatoria de 8 cubos, y una red entrenada trae menos cubos y una tabla
 de cubos de verdad, que el motor no había comprobado nunca.
 
+### 6.2 La red que se guarda es la de la última época (corrección, 0.32)
+
+Hasta aquí `train.py` guardaba la de **mejor validación**, que con λ = 1 es
+inofensivo —la curva es monótona y el mínimo cae en la época 56 o 57 de 60— pero
+deja de serlo en cuanto el objetivo lleva dentro el resultado de la partida. Con
+λ = 0,50 la validación toca fondo en la **época 8** (0,026557) y la 60 vale
+0,026877: un 0,1 % peor, dentro del ruido irreducible del resultado, que domina
+la pérdida y aplana la curva entera. Elegir por ese mínimo guardaba una red de
+ocho épocas y la hacía pasar por «el candidato de λ = 0,50».
+
+Desde ahora se guarda **la última época terminada**, que además deja algo
+utilizable si la tanda se corta; el plan de tasa de aprendizaje termina en 0, así
+que esa es la red que se ha entrenado. La mejor validación se sigue imprimiendo,
+con su época, pero no elige.
+
+Y cada época se imprimen **dos** validaciones: la del objetivo con el λ pedido,
+que no es comparable entre λ distintos porque cada una mide contra otra cosa, y
+la de puntuación pura (λ = 1), que sí lo es. Ninguna de las dos aprueba una red:
+eso es del banco.
+
 ## 7. Cómo se verifica que Rust y el entrenador coinciden
 
 **Esta es la sección que evita que el proyecto se rompa en silencio.** Todos los tests que
