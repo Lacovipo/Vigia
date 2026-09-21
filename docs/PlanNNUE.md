@@ -1537,6 +1537,34 @@ vez:
    la de 0.31 el 34,9 %. **Ajustar peor las etiquetas y jugar mejor no es una paradoja**: es
    la señal de que las etiquetas de una búsqueda de 8,7 plies no son la verdad, y de que el
    resultado de la partida aporta algo que ellas no tienen.
+
+   **Lo siguiente no es afinar λ.** Al cerrar 0.32 se propuso probar el tramo 0,8–0,9
+   «porque es donde suelen caer otros motores», y era folclore: una parábola por los tres
+   puntos medidos (λ = 1 → 0, 0,75 → +21,0, 0,50 → +3,1) pone el máximo en **λ ≈ 0,74**, y
+   con ella λ = 0,9 saldría unos 8 Elo por debajo de 0.32. Tres puntos con ±12 de ruido son
+   poco para fiarse de la forma, pero lo que sí dicen es que lo que queda por ganar
+   afinando λ es un puñado de Elo, y distinguir diferencias así cuesta miles de parejas.
+
+   **El paso siguiente: el corpus v3.** La palanca con más evidencia detrás es el volumen
+   —0.31 sacó +64,9 Elo pasando de 36 a 72 M— y λ le añade un motivo: ahora el resultado
+   de la partida entra en el objetivo, así que partidas jugadas por un motor más fuerte dan
+   mejor señal que las de la HCE (v1) o las de 0.30 (v2). A **25.000 nodos**, porque el
+   control de 0.31 no vio nada en doblarlos (con su salvedad de épocas) y así sale al doble
+   de ritmo.
+
+   | paso | qué | tiempo |
+   |---|---|---|
+   | 1 | v3: 36 M con 0.32 (red `ef81d9ad`) a 25.000 nodos, semillas 21–23, 8 CPUs | **~13 h** |
+   | 2 | K de v1+v2+v3 y dos entrenamientos a 60 épocas con λ = 0,75: v1+v2+v3 (108 M) y v2+v3 (72 M) | ~4,5 h de GPU |
+   | 3 | banco: las dos mezclas entre sí; la mejor contra 0.32, decisión y cifra | ~4 h de 8 CPUs |
+
+   Ritmo calibrado con 2 hilos: **348.777 registros por hora y por hilo**, el doble que v2 a
+   50.000; en la ventana de v2, 8 hilos no perdieron nada frente a la calibración con 2.
+
+   Las dos mezclas del paso 2 no son capricho: contestan de paso la pregunta que dejó
+   abierta la corrección de §7.1 —si v1, con partidas jugadas por la HCE, sigue aportando o
+   ya estorba—, y esta vez con las dos redes guardadas en la misma época, que es justo lo
+   que le faltó a `031-v2-contra-v1v2`.
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.
 4. **Los 4 rasgos de enroque**, si se decidió dejarlos fuera de v1 por simplicidad.
 5. **Re-sintonizar `CORRECTION_MAX = 300`** (`search.rs:135`), calibrado al ruido de la
