@@ -8,14 +8,18 @@
   "_metodo_4": "contra +64,9 en 0.31). Con las hipotesis pegadas y alpha/beta minusculos el",
   "_metodo_5": "LLR no se mueve, la tanda agota su tope y el intervalo sale limpio.",
 
-  "_libro": "Semilla distinta de la de la decision: muestra independiente.",
+  "_libro": "Semilla distinta de la de la decision, asi que las aperturas se vuelven a",
+  "_libro_2": "sortear del mismo libro de 20.000. Las partidas son otras, pero no es una",
+  "_libro_3": "muestra independiente del todo: con 4.000 parejas en la decision y 2.500",
+  "_libro_4": "aqui, unas 500 aperturas coinciden (4000*2500/20000). Por eso las dos tandas",
+  "_libro_5": "no se agregan: esta se lee sola.",
 
   "esquema": 1,
   "id": "032-lambda-A-estimacion",
 
   "candidato": {
-    "nombre": "0.32-lambda",
-    "ruta": "Release/Vigia 0.32-ganadora.exe",
+    "nombre": "0.32-lambda-0,75",
+    "ruta": "Release/Vigia 0.32-lam075.exe",
     "opciones": { "Hash": 32, "Threads": 1 }
   },
 

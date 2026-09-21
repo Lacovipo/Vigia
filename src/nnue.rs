@@ -298,8 +298,10 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary: `atalaya-256-0bd21a25`, trained on
-/// 36 M positions of Vigia's own self-play (docs/PlanNNUE.md, phase 3).
+/// The network compiled into the binary: `atalaya-256-0bd21a25`, trained on the
+/// v1 + v2 corpora of Vigia's own self-play — 72 M raw positions, 42.5 M of them
+/// usable (docs/PlanNNUE.md, phase 7.1). The 36 M of phase 3 were v1 alone, the
+/// corpus behind the networks of 0.29 and 0.30.
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
 /// executable, and not for convenience: the bench signs every experiment with

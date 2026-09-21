@@ -137,13 +137,13 @@ impl Motor {
         motor.send("uci")?;
         let deadline = Instant::now() + handshake_timeout;
         let mut vio_uciok = false;
-        let mut anunciadas: Vec<String> = Vec::new();
+        let mut anunciadas: Vec<OpcionAnunciada> = Vec::new();
         while let Some(line) = motor.recv_until(deadline) {
             if let Some(name) = line.strip_prefix("id name ") {
                 motor.id_name = name.trim().to_string();
             }
-            if let Some(nombre) = nombre_anunciado(&line) {
-                anunciadas.push(nombre.to_string());
+            if let Some(op) = opcion_anunciada(&line) {
+                anunciadas.push(op);
             }
             if line == "uciok" {
                 vio_uciok = true;
@@ -157,12 +157,12 @@ impl Motor {
             motor.id_name = format!("(sin id name) {}", ruta.display());
         }
 
-        // Un `setoption` con un nombre que el motor no conoce no da error:
-        // el protocolo manda ignorarlo, y la tanda seguiría adelante midiendo
-        // una configuración que no es la pedida. Aquí ya pasó con `UseNNUE`,
-        // que los binarios anteriores a 0.29 no tienen: la red se quedaba
-        // apagada y el experimento comparaba otra cosa. Se aborta antes de
-        // jugar nada.
+        // Un `setoption` que el motor no entiende no da error: el protocolo
+        // manda ignorarlo, y la tanda seguiría adelante midiendo una
+        // configuración que no es la pedida. Aquí ya pasó con `UseNNUE`, que
+        // los binarios anteriores a 0.29 no tienen: la red se quedaba apagada
+        // y el experimento comparaba otra cosa. Se aborta antes de jugar nada,
+        // y se miran las dos mitades de la línea: el nombre y el valor.
         let faltan = opciones_no_anunciadas(&anunciadas, opciones);
         if !faltan.is_empty() {
             return Err(format!(
@@ -170,11 +170,29 @@ impl Motor {
                  desconocido se ignora en silencio y la tanda mediría otra cosa. El motor \
                  anuncia: {}",
                 faltan.join(", "),
-                if anunciadas.is_empty() { "ninguna".to_string() } else { anunciadas.join(", ") },
+                if anunciadas.is_empty() {
+                    "ninguna".to_string()
+                } else {
+                    anunciadas.iter().map(|o| o.nombre.as_str()).collect::<Vec<_>>().join(", ")
+                },
+            ));
+        }
+        let malos: Vec<String> = opciones
+            .iter()
+            .filter_map(|(nombre, valor)| {
+                anunciadas.iter().find(|o| o.nombre.eq_ignore_ascii_case(nombre))?.reproche(valor)
+            })
+            .collect();
+        if !malos.is_empty() {
+            return Err(format!(
+                "{etiqueta}: valores que este motor no va a aceptar: {}. Un valor que no encaja \
+                 con el tipo anunciado tampoco da error: el motor lo descarta y deja la opción \
+                 como estaba —o peor, la pone en 'false'—, y la tanda mediría otra cosa.",
+                malos.join("; "),
             ));
         }
         for (nombre, valor) in opciones {
-            motor.send(&format!("setoption name {nombre} value {valor}"))?;
+            motor.send(&linea_setoption(&anunciadas, nombre, valor))?;
         }
         motor.sincronizar()?;
         Ok(motor)
@@ -305,32 +323,171 @@ impl Drop for Motor {
     }
 }
 
-/// Nombre de una línea `option name <nombre> type <tipo> ...` del saludo.
+/// Una opción tal como el motor la anunció en el saludo.
+struct OpcionAnunciada {
+    nombre: String,
+    tipo: TipoOpcion,
+}
+
+/// Lo que el protocolo permite declarar. `Otro` son `string`, `button` y
+/// cualquier cosa que no se reconozca: su valor no se puede juzgar aquí.
+enum TipoOpcion {
+    Check,
+    Spin { min: Option<i64>, max: Option<i64> },
+    Combo { valores: Vec<String> },
+    Otro,
+}
+
+impl OpcionAnunciada {
+    /// Qué tiene de malo este valor, si algo. `None` es «adelante».
+    ///
+    /// Una diferencia de mayúsculas no es un error: es una grafía, y se arregla
+    /// sola en `valor_para_el_cable`. Lo que sí se rechaza es un valor que no
+    /// corresponde a nada de lo anunciado, porque ahí el fichero de experimento
+    /// dice una cosa y la tanda mediría otra.
+    fn reproche(&self, valor: &str) -> Option<String> {
+        let nombre = &self.nombre;
+        match &self.tipo {
+            // Un motor resuelve el `check` comparando con "true" a secas —el de
+            // Vigía lo hace—, así que un '1' no se ignora: apaga la opción.
+            TipoOpcion::Check
+                if !valor.eq_ignore_ascii_case("true") && !valor.eq_ignore_ascii_case("false") =>
+            {
+                Some(format!("{nombre} = '{valor}' (es 'check': solo vale 'true' o 'false')"))
+            }
+            TipoOpcion::Spin { min, max } => match valor.parse::<i64>() {
+                Err(_) => Some(format!("{nombre} = '{valor}' (es 'spin': tiene que ser un entero)")),
+                Ok(n) if min.is_some_and(|m| n < m) || max.is_some_and(|m| n > m) => Some(format!(
+                    "{nombre} = {n} (fuera del rango anunciado {}..{})",
+                    min.map(|m| m.to_string()).unwrap_or_else(|| "-".into()),
+                    max.map(|m| m.to_string()).unwrap_or_else(|| "-".into()),
+                )),
+                Ok(_) => None,
+            },
+            TipoOpcion::Combo { valores }
+                if !valores.iter().any(|v| v.eq_ignore_ascii_case(valor)) =>
+            {
+                Some(format!(
+                    "{nombre} = '{valor}' (es 'combo'; el motor anuncia: {})",
+                    valores.join(", ")
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// El valor tal como conviene mandarlo: la grafía canónica del protocolo
+    /// para un `check` y la que el motor anunció para un `combo`.
+    ///
+    /// Mismo motivo que con el nombre: admitir la diferencia de caja en la
+    /// comprobación no sirve de nada si luego se envía una grafía que el motor
+    /// despacha de forma exacta y descarta en silencio.
+    fn valor_para_el_cable(&self, valor: &str) -> String {
+        match &self.tipo {
+            TipoOpcion::Check => valor.to_ascii_lowercase(),
+            TipoOpcion::Combo { valores } => valores
+                .iter()
+                .find(|v| v.eq_ignore_ascii_case(valor))
+                .cloned()
+                .unwrap_or_else(|| valor.to_string()),
+            _ => valor.to_string(),
+        }
+    }
+}
+
+/// Lee una línea `option name <nombre> type <tipo> ...` del saludo.
 ///
 /// El nombre puede llevar espacios (`Clear Hash`, `UCI_LimitStrength`), así
 /// que se corta por el ` type ` que exige el protocolo y no por el primer
-/// espacio.
-fn nombre_anunciado(line: &str) -> Option<&str> {
+/// espacio. Los valores de un `combo` también pueden llevarlos, de ahí que se
+/// acumulen hasta la siguiente palabra clave en vez de tomar solo la siguiente.
+fn opcion_anunciada(line: &str) -> Option<OpcionAnunciada> {
     let resto = line.strip_prefix("option name ")?;
-    let nombre = match resto.find(" type ") {
-        Some(i) => &resto[..i],
-        None => resto,
+    let (nombre, cola) = match resto.find(" type ") {
+        Some(i) => (&resto[..i], &resto[i + " type ".len()..]),
+        None => (resto, ""),
     };
     let nombre = nombre.trim();
-    (!nombre.is_empty()).then_some(nombre)
+    if nombre.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&str> = cola.split_whitespace().collect();
+    let numero = |clave: &str| {
+        tokens
+            .iter()
+            .position(|t| *t == clave)
+            .and_then(|i| tokens.get(i + 1))
+            .and_then(|t| t.parse::<i64>().ok())
+    };
+    let tipo = match tokens.first().copied() {
+        Some("check") => TipoOpcion::Check,
+        Some("spin") => TipoOpcion::Spin { min: numero("min"), max: numero("max") },
+        Some("combo") => TipoOpcion::Combo { valores: valores_de_combo(&tokens[1..]) },
+        _ => TipoOpcion::Otro,
+    };
+    Some(OpcionAnunciada { nombre: nombre.to_string(), tipo })
+}
+
+/// Los `var` de un `combo`, cada uno hasta la siguiente palabra clave.
+fn valores_de_combo(tokens: &[&str]) -> Vec<String> {
+    let mut valores: Vec<String> = Vec::new();
+    let mut actual: Option<String> = None;
+    for t in tokens {
+        match *t {
+            "var" => {
+                valores.extend(actual.take().filter(|v| !v.is_empty()));
+                actual = Some(String::new());
+            }
+            "default" | "min" | "max" => {
+                valores.extend(actual.take().filter(|v| !v.is_empty()));
+            }
+            palabra => {
+                if let Some(v) = actual.as_mut() {
+                    if !v.is_empty() {
+                        v.push(' ');
+                    }
+                    v.push_str(palabra);
+                }
+            }
+        }
+    }
+    valores.extend(actual.filter(|v| !v.is_empty()));
+    valores
 }
 
 /// Opciones que pide la configuración y el motor no anunció.
 ///
 /// Se comparan sin distinguir mayúsculas: el protocolo no obliga a nada y los
 /// motores no se ponen de acuerdo, y un falso positivo aquí aborta una tanda
-/// de horas por una diferencia de caja.
-fn opciones_no_anunciadas<'a>(anunciadas: &[String], pedidas: &'a [(String, String)]) -> Vec<&'a str> {
+/// de horas por una diferencia de caja. Esa tolerancia solo es segura porque
+/// lo que se envía después es la grafía anunciada (`grafia_anunciada`).
+fn opciones_no_anunciadas<'a>(
+    anunciadas: &[OpcionAnunciada],
+    pedidas: &'a [(String, String)],
+) -> Vec<&'a str> {
     pedidas
         .iter()
         .map(|(nombre, _)| nombre.as_str())
-        .filter(|nombre| !anunciadas.iter().any(|a| a.eq_ignore_ascii_case(nombre)))
+        .filter(|nombre| !anunciadas.iter().any(|a| a.nombre.eq_ignore_ascii_case(nombre)))
         .collect()
+}
+
+/// La línea `setoption` tal como conviene mandarla: con la grafía que el motor
+/// anunció, no con la del fichero de experimento.
+///
+/// La comprobación de nombres y valores admite diferencias de mayúsculas a
+/// propósito —el protocolo no obliga a nada y abortar una tanda de horas por
+/// una diferencia de caja sería peor—, pero el despacho de un motor real puede
+/// ser exacto: el de Vigía lo es. Sin esto, `usennue` pasaría la comprobación y
+/// se perdería igual, que es justo el fallo silencioso que se quería cerrar.
+fn linea_setoption(anunciadas: &[OpcionAnunciada], nombre: &str, valor: &str) -> String {
+    match anunciadas.iter().find(|o| o.nombre.eq_ignore_ascii_case(nombre)) {
+        Some(op) => {
+            format!("setoption name {} value {}", op.nombre, op.valor_para_el_cable(valor))
+        }
+        // Sin anunciar no se llega hasta aquí: lo aborta `opciones_no_anunciadas`.
+        None => format!("setoption name {nombre} value {valor}"),
+    }
 }
 
 #[derive(Default)]
@@ -443,17 +600,24 @@ mod tests {
 
     #[test]
     fn an_option_name_with_spaces_survives_the_handshake() {
-        assert_eq!(nombre_anunciado("option name Clear Hash type button"), Some("Clear Hash"));
-        assert_eq!(nombre_anunciado("option name Hash type spin default 16 min 1 max 1024"), Some("Hash"));
+        let nombre = |line| opcion_anunciada(line).map(|o| o.nombre);
+        assert_eq!(nombre("option name Clear Hash type button").as_deref(), Some("Clear Hash"));
+        assert_eq!(
+            nombre("option name Hash type spin default 16 min 1 max 1024").as_deref(),
+            Some("Hash")
+        );
         // Sin ` type ` no es una línea legal, pero tampoco se pierde el nombre.
-        assert_eq!(nombre_anunciado("option name Ponder"), Some("Ponder"));
-        assert_eq!(nombre_anunciado("id name Vigia 0.31"), None);
-        assert_eq!(nombre_anunciado("option name  type check default false"), None);
+        assert_eq!(nombre("option name Ponder").as_deref(), Some("Ponder"));
+        assert!(nombre("id name Vigia 0.31").is_none());
+        assert!(nombre("option name  type check default false").is_none());
     }
 
     #[test]
     fn an_option_the_engine_never_advertised_is_caught_before_playing() {
-        let anunciadas = vec!["Hash".to_string(), "Threads".to_string()];
+        let anunciadas = vec![
+            opcion_anunciada("option name Hash type spin default 16 min 1 max 1024").unwrap(),
+            opcion_anunciada("option name Threads type spin default 1 min 1 max 16").unwrap(),
+        ];
         let pedidas = vec![
             ("Hash".to_string(), "32".to_string()),
             ("usennue".to_string(), "true".to_string()),
@@ -462,6 +626,75 @@ mod tests {
         assert_eq!(opciones_no_anunciadas(&anunciadas, &pedidas), vec!["usennue"]);
         let solo_conocidas = vec![("threads".to_string(), "1".to_string())];
         assert!(opciones_no_anunciadas(&anunciadas, &solo_conocidas).is_empty());
+    }
+
+    #[test]
+    fn what_travels_on_the_wire_is_the_spelling_the_engine_advertised() {
+        // La comprobación admite 'usennue', pero un motor que despache con un
+        // `match` exacto —el de Vigía— ignoraría ese `setoption` en silencio y
+        // la tanda mediría la configuración de al lado.
+        let anunciadas = vec![
+            opcion_anunciada("option name UseNNUE type check default true").unwrap(),
+            opcion_anunciada("option name Hash type spin default 16 min 1 max 1024").unwrap(),
+            opcion_anunciada(
+                "option name NNUEInstructions type combo default auto var auto var avx2 var portable",
+            )
+            .unwrap(),
+        ];
+        let linea = |n, v| linea_setoption(&anunciadas, n, v);
+        assert_eq!(linea("usennue", "true"), "setoption name UseNNUE value true");
+        assert_eq!(linea("HASH", "32"), "setoption name Hash value 32");
+        // El valor también: 'True' es lo que quiso decir quien lo escribió, pero
+        // el motor compara con "true" y dejaría la red apagada.
+        assert_eq!(linea("UseNNUE", "True"), "setoption name UseNNUE value true");
+        // Y el `var` de un combo va con la grafía del motor, no con la del fichero.
+        assert_eq!(
+            linea("NNUEInstructions", "AVX2"),
+            "setoption name NNUEInstructions value avx2"
+        );
+        // Lo que no anunció se envía tal cual; ese caso ya ha abortado antes.
+        assert_eq!(linea("Ponder", "true"), "setoption name Ponder value true");
+    }
+
+    #[test]
+    fn a_value_the_engine_would_silently_drop_is_caught_before_playing() {
+        let check = opcion_anunciada("option name UseNNUE type check default true").unwrap();
+        // '1' no se ignora: el motor compara con "true" y deja la red APAGADA.
+        assert!(check.reproche("1").is_some());
+        assert!(check.reproche("si").is_some());
+        assert!(check.reproche("true").is_none());
+        assert!(check.reproche("false").is_none());
+        // 'True' es una grafía, no un error: pasa, y viaja como "true".
+        assert!(check.reproche("True").is_none());
+        assert_eq!(check.valor_para_el_cable("True"), "true");
+
+        let spin = opcion_anunciada("option name Hash type spin default 16 min 1 max 1024").unwrap();
+        assert!(spin.reproche("32").is_none());
+        assert!(spin.reproche("dos").is_some());
+        assert!(spin.reproche("0").is_some());
+        assert!(spin.reproche("2048").is_some());
+
+        let combo =
+            opcion_anunciada("option name NNUEInstructions type combo default auto var auto var avx2 var portable")
+                .unwrap();
+        assert!(combo.reproche("avx2").is_none());
+        assert!(combo.reproche("auto").is_none());
+        assert!(combo.reproche("AVX2").is_none());
+        assert_eq!(combo.valor_para_el_cable("AVX2"), "avx2");
+        assert!(combo.reproche("avx512").is_some());
+
+        // De un `string` o un `button` no se puede juzgar el valor.
+        let libre = opcion_anunciada("option name SyzygyPath type string default <empty>").unwrap();
+        assert!(libre.reproche("C:/lo/que/sea").is_none());
+    }
+
+    #[test]
+    fn the_values_of_a_combo_can_carry_spaces() {
+        let op = opcion_anunciada("option name Estilo type combo default Muy lento var Muy lento var Rapido")
+            .unwrap();
+        assert!(op.reproche("Muy lento").is_none());
+        assert!(op.reproche("Rapido").is_none());
+        assert!(op.reproche("Muy").is_some());
     }
 
     #[test]

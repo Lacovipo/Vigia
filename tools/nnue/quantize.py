@@ -65,8 +65,14 @@ def main():
     destino = os.path.join(args.salida, 'atalaya-256-%s.bin' % sha[:8])
     os.replace(temporal, destino)
     red = nf.read_net(destino)
-    print('%s  (%d cubos, K %d, epoca %d, validacion %.6f)'
-          % (destino, n_cubos, round(ck['k']), ck['epoca'], ck['validacion']))
+    # La validación del objetivo depende de λ y no se puede comparar entre redes
+    # entrenadas con λ distinto; la de puntuación pura sí, así que van las dos.
+    # Los checkpoints anteriores a 0.32 no llevan `validacion_cp`, pero son todos
+    # de λ = 1, donde las dos cifras coinciden.
+    lam = ck.get('args', {}).get('lam', 1.0)
+    print('%s  (%d cubos, K %d, epoca %d, lambda %.2f, validacion %.6f, validacion cp %.6f)'
+          % (destino, n_cubos, round(ck['k']), ck['epoca'], lam, ck['validacion'],
+             ck.get('validacion_cp', ck['validacion'])))
 
     # Error de cuantización sobre posiciones de validación.
     modelo = Atalaya(n_cubos)

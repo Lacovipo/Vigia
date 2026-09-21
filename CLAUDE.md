@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 396 tests (264 motor, 121 banco, 3 generador, 8 harness viejo)
+cargo test --release                   # 399 tests (264 motor, 124 banco, 3 generador, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -140,9 +140,17 @@ de nodos/segundo compra ~0,52 plies.
   AVX-512 no sirve compilar con `x86-64-v4`: su ajuste prefiere vectores de 256 bits.
 - **Doblar los nodos de la etiqueta del corpus no compró fuerza**: 25.000 → 50.000
   nodos sube la profundidad de la etiqueta de 7,78 a 8,72 plies y dio +3,8 Elo
-  [−8,7, +16,4] en un control de 1.000 parejas con todo lo demás igual (0.31). Los
-  +64,9 Elo de 0.31 salen de **más corpus** (72 M contra 36 M) y de etiquetar con
-  una red mejor. No subir a 100.000 nodos sin una prueba nueva.
+  [−8,7, +16,4] en un control de 1.000 parejas (0.31). Los +64,9 Elo de 0.31 salen
+  de **más corpus** (72 M contra 36 M) y de etiquetar con una red mejor. No subir a
+  100.000 nodos sin una prueba nueva. Con una salvedad que salió en 0.32: las dos
+  redes de ese control se guardaron en épocas distintas (56 y 60), y las cuatro de
+  menos le tocaron al candidato de etiquetas profundas.
+- **Los checkpoints anteriores a 0.32 no son de la última época.** `train.py`
+  guardaba el de **mejor validación**, y eso no era «casi la última» como se creyó:
+  `atalaya-v2.pt` se quedó en la **época 30 de 60**, y es la base de
+  `031-v2-contra-v1v2`, así que esos +8,7 Elo miden corpus *y* entrenamiento a la
+  vez. Desde 0.32 se guarda la última época (§6.2 de `docs/PlanNNUE.md`). Antes de
+  comparar dos redes viejas, mirar su `epoca` con `torch.load`.
 - El harness antiguo `src/bin/selfplay.rs` sigue compilando pero **no sirve
   para aprobar nada**: 16 partidas, ±150–200 Elo de error.
 

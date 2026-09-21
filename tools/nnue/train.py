@@ -30,13 +30,13 @@ La validación separa **partidas enteras**, no posiciones sueltas: las posicione
 de una misma partida están correlacionadas (§5.5), y mezclarlas daría una
 validación optimista.
 
-**Se guarda la red de la última época, no la de mejor validación.** Con λ < 1 el
-objetivo lleva dentro el resultado de la partida, cuyo ruido irreducible domina
-la pérdida y aplana la curva: entrenando con λ = 0,50 el mínimo cayó en la época
-8 (0,026557) y la época 60 valía 0,026877, un 0,1 % peor. Elegir por ese mínimo
-guardaba una red de ocho épocas y la hacía pasar por el candidato de λ = 0,50.
-El plan de tasa de aprendizaje termina en 0, así que la red del final es la que
-se ha entrenado; la validación se imprime, pero no elige.
+**Se guarda la red de la última época, no la de mejor validación.** Elegir por el
+mínimo de validación devuelve la época que haya tenido suerte: entrenando con
+λ = 0,50 el mínimo cayó en la época 8 de 60, y con λ = 1 —donde se creía
+inofensivo— el corpus v2 se quedó guardado en la **época 30 de 60**, media red.
+El plan de tasa de aprendizaje termina en 0, así que la del final es la que se ha
+entrenado, y además es la única elección que hace comparables dos entrenamientos
+distintos. La validación se imprime, pero no elige.
 
 Cada época se imprimen dos validaciones: la del objetivo con el λ pedido, que no
 es comparable entre λ distintos porque cada una mide contra otro objetivo, y la

@@ -403,7 +403,8 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 7.6 — instrucciones anchas | **hecha en 0.30**: núcleos de la red con AVX-512, AVX2 o portables, elegidos al arrancar. +13,6 % de nodos/segundo con AVX-512 y +10,1 % con AVX2, nodos idénticos; el camino portable no pierde nada |
 | QA = 255 | pendiente: QA = 127 se eligió porque en SSE2 el cuadrado cabe en `i16`; con AVX2 y AVX-512 hay que volver a medir (§3.4 del plan) |
 | 7.1 — etiquetas de la red | **hecha y aprobada**: corpus v2 de 36 M etiquetado por la red a 50.000 nodos; la red entrenada con v1+v2 (72 M) gana **+64,9 Elo [+57,1, +72,7]** a 0.30 y se publica como 0.31 |
-| 7.1, el control | **medido y negativo**: doblar los nodos de la etiqueta (25.000 → 50.000, +0,94 plies) da +3,8 Elo [−8,7, +16,4]. La profundidad no era el cuello: el escalón de 100.000 nodos queda desaconsejado y la vía barata es más posiciones |
+| 7.1, el control | **medido y negativo**: doblar los nodos de la etiqueta (25.000 → 50.000, +0,94 plies) da +3,8 Elo [−8,7, +16,4]. La profundidad no era el cuello: el escalón de 100.000 nodos queda desaconsejado y la vía barata es más posiciones. Salvedad de 0.32: las dos redes se guardaron en épocas distintas (56 y 60) |
+| 7.1, la atribución | **pendiente y barata**: `031-v2-contra-v1v2` enfrentó 57 épocas contra **30** (la regla vieja de mejor validación), así que sus +8,7 Elo no separan «mezclar v1 con v2» de «entrenar el doble». Para cerrarlo: reentrenar solo-v2 con el `train.py` de hoy y repetir la tanda. **2 h de GPU + 40 min de 8 CPUs**, y decide con qué corpus se entrena la próxima red |
 | 7, el resto | pendiente |
 
 La fase 1, criterio a criterio:
@@ -533,6 +534,17 @@ Por orden de utilidad para lo que viene:
    binario anterior a 0.29—. Ahora el banco guarda los `option name` del saludo
    y aborta antes de jugar si falta alguna. Detalle en §8 de
    `docs/BancoPruebas.md`.
+
+1sexies. **Que el motor no apague una opción cuando no entiende el valor.**
+   `cmd_setoption` resuelve los `check` con `engine.use_nnue = v == "true"`
+   (`src/uci.rs`), así que `UseNNUE=True` o `UseNNUE=1` no se ignoran: **ponen
+   la opción en `false`**. Y el despacho por nombre es exacto, de modo que
+   `usennue` se ignora entero. El banco ya no deja pasar ninguna de las dos
+   cosas (§8 de `docs/BancoPruebas.md`), que es lo que protege las mediciones,
+   pero un GUI cualquiera sí puede mandarlas. Arreglo: normalizar el nombre y
+   aceptar el valor solo si se reconoce, dejando la opción como estaba si no.
+   **No entra en 0.32 a propósito**: el binario que se publica tiene que ser el
+   que midió el banco, y esto se decidió después de congelarlo.
 
 2. **Repetir 0.25 vs 0.24 a 300 y 800 ms** para cerrar la pregunta abierta,
    ya con el libro ancho.

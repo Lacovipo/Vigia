@@ -5,16 +5,21 @@
   "_criterio": "Criterio declarado ANTES de jugar: acepta_h1. Con elo0=0 y elo1=5,",
   "_criterio_2": "'acepta_h0' no significa que empeore, sino que no llega a +5 Elo. Y aqui",
   "_criterio_3": "lo unico que cambia entre los dos binarios son los pesos de la red: mismo",
-  "_criterio_4": "corpus, misma K, mismas epocas, mismo lr, misma semilla. Solo el objetivo.",
+  "_criterio_4": "corpus, misma K, mismo lr, misma semilla, 60 epocas las dos.",
 
-  "_ruta_candidato": "Se rellena con la ganadora del cribado (032-lambda-075 / -050).",
+  "_salvedad": "La red de 0.31 es el checkpoint de la epoca 57 (hasta donde guardo el",
+  "_salvedad_2": "entrenador viejo, por mejor validacion) y la candidata el de la 60. La cola",
+  "_salvedad_3": "corre con lr de 1,2e-5 a 0 y no mueve ninguna perdida en la sexta cifra,",
+  "_salvedad_4": "pero quien lo mide es el control 032-epocas-de-cola, no esta tanda.",
+
+  "_cribado": "032-lambda-075 dio +11,1 Elo [-1,0, +23,3] con LOS 96,4 % en 1.000 parejas.",
 
   "esquema": 1,
   "id": "032-lambda-A",
 
   "candidato": {
-    "nombre": "0.32-lambda",
-    "ruta": "Release/Vigia 0.32-ganadora.exe",
+    "nombre": "0.32-lambda-0,75",
+    "ruta": "Release/Vigia 0.32-lam075.exe",
     "opciones": { "Hash": 32, "Threads": 1 }
   },
 

@@ -1,0 +1,64 @@
+{
+  "_": "El control de 0.32: cuanto valen las tres ultimas epocas, sin tocar lambda.",
+
+  "_porque": "La revision adversarial encontro que la base y el candidato del experimento",
+  "_porque_2": "de lambda no difieren SOLO en lambda. La red de 0.31 es el checkpoint de la",
+  "_porque_3": "epoca 57, que es donde el entrenador viejo dejo de guardar por su regla de",
+  "_porque_4": "mejor validacion; la de lambda = 0,75 es el de la epoca 60, con la regla",
+  "_porque_5": "nueva. La cola corre con lr de 1,2e-5 a 0 y no mueve ninguna perdida en la",
+  "_porque_6": "sexta cifra, pero en este proyecto la perdida no ha predicho bien el Elo mas",
+  "_porque_7": "de una vez, asi que se mide en vez de suponerse.",
+
+  "_que_compara": "Una red entrenada con lambda = 1 y TODO lo demas igual que la de 0.31",
+  "_que_compara_2": "(mismo corpus v1+v2, misma K = 159,7, mismo lr, misma semilla, 60 epocas),",
+  "_que_compara_3": "guardada en la epoca 60, contra la propia 0.31, que es la 57. Si sale plano,",
+  "_que_compara_4": "los Elo de 032-lambda-A son de lambda. Si no, hay que repartirlos.",
+
+  "_metodo": "Hipotesis pegadas y alpha/beta minusculos: el LLR no se mueve, la tanda",
+  "_metodo_2": "agota su tope y lo que se lee es el intervalo, no un veredicto.",
+
+  "esquema": 1,
+  "id": "032-epocas-de-cola",
+
+  "candidato": {
+    "nombre": "lambda-1-epoca-60",
+    "ruta": "Release/Vigia 0.32-e60.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.31",
+    "ruta": "Release/Vigia 0.31.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260925,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-16 Elo. Basta para",
+  "_partidas_2": "descartar que la cola valga tanto como lambda, que es lo que se pregunta.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/032-epocas-de-cola"
+}

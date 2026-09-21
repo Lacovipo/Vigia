@@ -857,13 +857,37 @@ de cubos de verdad, que el motor no había comprobado nunca.
 
 ### 6.2 La red que se guarda es la de la última época (corrección, 0.32)
 
-Hasta aquí `train.py` guardaba la de **mejor validación**, que con λ = 1 es
-inofensivo —la curva es monótona y el mínimo cae en la época 56 o 57 de 60— pero
-deja de serlo en cuanto el objetivo lleva dentro el resultado de la partida. Con
-λ = 0,50 la validación toca fondo en la **época 8** (0,026557) y la 60 vale
-0,026877: un 0,1 % peor, dentro del ruido irreducible del resultado, que domina
-la pérdida y aplana la curva entera. Elegir por ese mínimo guardaba una red de
-ocho épocas y la hacía pasar por «el candidato de λ = 0,50».
+Hasta aquí `train.py` guardaba la de **mejor validación**. Lo que lo destapó fue
+λ = 0,50: la validación toca fondo en la **época 8** (0,026557) y la 60 vale
+0,026877, así que el fichero guardado era una red de ocho épocas haciéndose pasar
+por «el candidato de λ = 0,50».
+
+**Y aquí se escribió que con λ = 1 la regla era inofensiva, «porque la curva es
+monótona y el mínimo cae en la época 56 o 57 de 60». Es falso, y lo desmienten
+los propios ficheros del repositorio**, que llevan dentro la época que se guardó:
+
+| checkpoint | época guardada | dónde se usó |
+|---|---:|---|
+| `atalaya-v1-e60.pt` | 53 de 60 | la red de 0.29 y 0.30 |
+| `atalaya-v1v2.pt` | 57 de 60 | **la red de 0.31** |
+| `atalaya-v2-prefijo.pt` | 56 de 60 | candidato de `031-profundidad-de-etiqueta` |
+| `atalaya-v2-control.pt` | 60 de 60 | base de `031-profundidad-de-etiqueta` |
+| `atalaya-v2.pt` | **30 de 60** | base de `031-v2-contra-v1v2` |
+| `atalaya-v1v2-lam0.75.pt` | 60 de 60 | la red candidata de 0.32 |
+
+La curva de λ = 1 tampoco es monótona, y en el entrenamiento de v2 la regla vieja
+mordió de verdad: guardó **la mitad del entrenamiento**. Las consecuencias sobre
+lo ya publicado están anotadas en §7.1; ninguna cambia una decisión, pero sí
+cambian a qué se atribuye lo medido.
+
+Un número que también estaba mal y se corrige aquí: la diferencia entre la época
+8 y la 60 de λ = 0,50 se escribió como «un 0,1 % peor» y es **un 1,2 %**
+(0,026877 / 0,026557 = 1,0121). No es «ruido que aplana la curva»: comparado con
+el 0,007 % que separa la época 56 de la 60 en λ = 0,75, lo que se ve en λ = 0,50
+es un sobreajuste real al resultado desde muy pronto. Lo que sostiene la decisión
+de guardar la última época no es esa cifra, sino las dos razones que quedan en
+pie: el plan de tasa de aprendizaje termina en 0, y una regla que puede devolver
+la época 8 —o la 30— no sirve para comparar dos redes entre sí.
 
 Desde ahora se guarda **la última época terminada**, que además deja algo
 utilizable si la tanda se corta; el plan de tasa de aprendizaje termina en 0, así
@@ -1274,8 +1298,8 @@ cifras mal citadas), y cada sospecha la revisó otro agente intentando refutarla
 | `check_red.py muestra` sacaba posiciones de entrenamiento, así que el criterio 3 se midió sobre posiciones que la red había visto | **corregido**: el reparto de validación vive en `dataset.py` y lo usan los tres scripts (reproduce byte a byte el holdout anterior). Medida de nuevo sobre partidas apartadas: razón **1,052**, dentro del ±15 % |
 | este plan decía `UseNNUE` «por defecto `true`» (§7.3) cuando era `false` | se vuelve cierto con 0.29, que la enciende por defecto |
 | con `movetime`, el banco no vigila el tiempo de cada jugada: no hay guardián como el de `go nodes` | comprobado a mano que no pasó: candidato 99,57 ms por jugada de media y 103 de máximo, base 99,86 y 106. Queda como mejora del banco |
-| el banco no comprueba que el motor anuncie las opciones UCI que se le mandan | una opción mal escrita se ignoraría en silencio. Mejora del banco |
-| `tablas_desde_jugada` se compara con el número de jugada del libro, que siempre es 1, así que la adjudicación de tablas casi nunca se dispara | medido: no cambia el resultado de ninguna de las 256 partidas de la sonda. Afecta igual a todas las tandas anteriores. Mejora del banco |
+| el banco no comprueba que el motor anuncie las opciones UCI que se le mandan | **corregido** (0.32): el banco guarda los `option name` del saludo y aborta antes de jugar si falta alguna (`opciones_no_anunciadas`, `src/bin/banco/motor.rs`), §8 de `docs/BancoPruebas.md` |
+| ~~`tablas_desde_jugada` se compara con el número de jugada del libro, que siempre es 1, así que la adjudicación de tablas casi nunca se dispara~~ | **el hallazgo era falso, y se retira** (0.32). `arbitro.rs` compara `board.fullmove_number` del tablero vivo, que arranca en 1 con la FEN del libro y llega a 40 en la jugada 40 de la partida, que es justo lo que se quería. Y la regla se dispara: **196 de 2.000 partidas** (9,8 %) en `032-lambda-075`, 470 de 5.000 (9,4 %) en `031-atalaya-v2-A-estimacion`. Tocarla cambiaría el criterio de una de cada diez partidas y haría incomparables las tandas ya registradas |
 | la exclusión de los libros del banco se anuncia con el tamaño del conjunto, no con un recuento | comprobado que muerde (las claves del libro están literales en `apertura.txt`), y aun con fallo total serían ~1.200 registros de 36 M |
 
 ---
@@ -1294,7 +1318,7 @@ quedan desactivados y la red vive sin ellos.
 
 ---
 
-### Fase 7 — La escalera, y va por profundidad de etiqueta
+### Fase 7 — La escalera, y **no** iba por profundidad de etiqueta (corregido en 0.31)
 
 Con v1 aprobada y congelada como 0.29, el orden de los experimentos siguientes es, uno cada
 vez:
@@ -1302,9 +1326,12 @@ vez:
 1. **Etiquetas más profundas, no red más ancha.** La señal de entrenamiento es la
    *diferencia* entre lo que ve la búsqueda a d≈7,5 y lo que ve la evaluación estática en
    las hojas. Cuando v1 sustituya a la HCE, esa diferencia se estrecha por construcción:
-   v1 ya sabe lo que la búsqueda le enseñó. **Reentrenar con más posiciones a la misma
-   profundidad no aporta casi nada.** Y aquí se cobra el crédito de velocidad: con +20,8 %
-   de nps, `nodes 50000` cuesta en reloj casi lo que costaba `nodes 40000`.
+   v1 ya sabe lo que la búsqueda le enseñó. ~~**Reentrenar con más posiciones a la misma
+   profundidad no aporta casi nada.**~~ **Esto se midió y salió al revés**: el volumen es
+   justo lo que compró los +64,9 Elo de 0.31 y la profundidad no compró nada medible; el
+   resultado está más abajo, en «Resultado (0.31)». Se deja escrito porque era la tesis con
+   la que se entró. Y aquí se cobra el crédito de velocidad: con +20,8 % de nps,
+   `nodes 50000` cuesta en reloj casi lo que costaba `nodes 40000`.
 
    **Preparación de la ejecución (antes de 0.31).** `generador datos` tiene la opción
    `--evaluador hce|red`, que queda escrita en la cabecera (bytes 100–103, bit 0), y con
@@ -1370,14 +1397,35 @@ vez:
    vecinos y el mismo número de posiciones vale menos. Por eso «v1+v2» dejó de ser una
    curiosidad y pasó a ser la candidata seria.
 
-   Cuatro redes, todas a 60 épocas y `lr` 2e-3, y cada una con la K de su corpus:
+   Cuatro redes, todas **entrenadas** a 60 épocas y `lr` 2e-3, y cada una con la K de su
+   corpus:
 
-   | red | corpus | validación |
-   |---|---|---|
-   | control | 6 M, red a 25.000 nodos | 0,009870 |
-   | prefijo | 6 M, red a 50.000 nodos (mismas aperturas) | 0,010031 |
-   | v2 | 36 M a 50.000 | 0,008487 |
-   | **v1+v2** | **72 M** | **0,008223** |
+   | red | corpus | validación | época guardada |
+   |---|---|---|---:|
+   | control | 6 M, red a 25.000 nodos | 0,009870 | 60 |
+   | prefijo | 6 M, red a 50.000 nodos (mismas aperturas) | 0,010031 | 56 |
+   | v2 | 36 M a 50.000 | 0,008487 | **30** |
+   | **v1+v2** | **72 M** | **0,008223** | 57 |
+
+   **La última columna se añadió en 0.32 y es una corrección, no un detalle.** Aquí ponía
+   «todas a 60 épocas», y entrenadas sí, pero guardadas no: el `train.py` de entonces
+   escribía el checkpoint de mejor validación, y cada entrenamiento paró donde le tocó
+   (§6.2). Dos comparaciones de arriba quedan tocadas:
+
+   - **`031-v2-contra-v1v2` no aísla el corpus.** Enfrentó la red de v1+v2, de 57 épocas,
+     contra la de solo v2, de **30**: media red. Los **+8,7 Elo** [−3,6, +21,0] miden el
+     corpus *y* el doble de entrenamiento juntos, así que no sostienen «mezclar v1 con v2
+     vale +8,7». Lo que sí queda en pie es la decisión, que era cuál de las dos publicar.
+   - **`031-profundidad-de-etiqueta` compara 56 épocas contra 60**, y las cuatro de menos
+     le tocan al candidato de etiquetas profundas. La diferencia es mucho menor que la
+     anterior —es la cola, con `lr` por debajo de 1,2e-5— pero nadie la ha acotado, así que
+     «con todo lo demás igual» es más de lo que se midió. La conclusión de que la
+     profundidad no compra fuerza se apoya además en el tamaño del efecto y en su
+     intervalo, no solo en ese contraste.
+
+   Ninguna de las dos cambia lo que se publicó, porque las releases se deciden contra la
+   release anterior con los dos binarios congelados. Cambian a qué se atribuye lo medido,
+   que es justo lo que este documento existe para no confundir.
 
    Las dos grandes pasan las comprobaciones: idénticas entero a entero entre el motor y
    Python en 2.000 posiciones, y escala 1,077 y 1,066 frente a la HCE. Sobre 20.000

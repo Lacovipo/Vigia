@@ -322,13 +322,25 @@ divergencia parezca inofensiva.
 
 ### Medir la red NNUE: `--uci`, y lo que no se puede comparar
 
-La red va apagada por defecto, así que `banco velocidad` la mide con la opción
-que se añadió para eso:
+Aquí ponía que «la red va apagada por defecto, así que `banco velocidad` la mide
+con la opción que se añadió para eso». **Eso dejó de ser cierto en 0.29**, que
+enciende `UseNNUE` por defecto: hoy `banco velocidad` mide la red sin pedir nada,
+y quien quiera medir la **HCE** de un binario moderno es quien tiene que decirlo:
 
 ```bash
+# la red, que es lo que juega por defecto desde 0.29
 ./target/release/banco.exe velocidad --motor target/release/vigia.exe \
-  --profundidad 12 --hash 32 --hilos 1 --uci UseNNUE=true
+  --profundidad 12 --hash 32 --hilos 1
+
+# la evaluación clásica del mismo binario
+./target/release/banco.exe velocidad --motor target/release/vigia.exe \
+  --profundidad 12 --hash 32 --hilos 1 --uci UseNNUE=false
 ```
+
+El `--uci UseNNUE=true` que traía este ejemplo sigue siendo correcto, pero hoy es
+redundante salvo contra un binario de 0.29 o posterior al que se le haya cambiado
+el defecto. **Contra uno anterior a 0.29 aborta la tanda**, que es lo que se quiere
+(§8): esos binarios no tienen la opción.
 
 `--uci Nombre=valor,...` se pasa a los dos motores. `Hash` y `Threads` se
 rechazan ahí: van con `--hash` y `--hilos`, para que no haya dos formas de
@@ -562,6 +574,15 @@ mirar nada, y si hace falta la cifra, **otra tanda aparte que no pueda
 pararse sola**. La segunda no necesita hipótesis buenas, necesita no tener
 ninguna.
 
+**Y las dos tandas no se suman.** La segunda se lanza con otra semilla, pero
+esa semilla baraja *el mismo libro* y corta las primeras `max_parejas`, así
+que las aperturas se vuelven a sortear del mismo saco: con 4.000 parejas en
+la decisión y 2.500 en la cifra, unas 500 coinciden (4000·2500/20.000). Las
+partidas sí son distintas —el control es `movetime`, que no es
+reproducible—, pero llamar «muestra independiente» a la segunda es más de lo
+que hay, y agregarlas daría un intervalo algo más estrecho del que
+corresponde. La cifra se lee de la tanda de tope fijo, sola.
+
 **Cómo desactivar la parada**, sin trucar `alpha`: `stats.rs` tiene un test,
 `identical_hypotheses_give_zero_llr`, que fija que con `elo0 = elo1` el LLR
 es cero exactamente. La configuración exige `elo0 < elo1`, así que se usa
@@ -738,6 +759,45 @@ nada y los motores no se ponen de acuerdo, y un falso positivo aquí costaría
 una tanda por una diferencia de caja. El nombre puede llevar espacios (`Clear
 Hash`), así que se corta por el ` type ` de la línea y no por el primer espacio.
 
+**Esa tolerancia era un agujero, y lo encontró la revisión adversarial de 0.32.**
+Admitir `usennue` en el fichero de experimento no sirve de nada si luego se envía
+`setoption name usennue`, porque el despacho de un motor real puede ser exacto
+—el de Vigía lo es, `match name.as_str()`— y entonces la opción se ignora igual,
+que es justo lo que este guardián venía a impedir. Comprobado: con `--uci
+usennue=false` la tanda arrancaba sin protestar y el motor jugaba con la red
+encendida. Corregido: **lo que viaja por el cable es la grafía que el motor
+anunció**, no la del fichero, así que la tolerancia de caja es real y vale
+también contra los binarios 0.24–0.31 ya congelados, que no se pueden recompilar.
+
+**Y el valor también se comprueba**, que era la otra mitad de la línea. Un valor
+que no encaja con el tipo anunciado tampoco da error: el motor lo descarta y deja
+la opción como estaba, o peor. En Vigía un `check` se resuelve con `v == "true"`,
+de modo que `UseNNUE=True` o `UseNNUE=1` no se ignoran: **apagan la red**, que es
+lo contrario de lo que pedía quien lo escribió. Medido antes de arreglarlo:
+`banco velocidad ... --uci UseNNUE=True` daba los 57.517 nodos de la HCE en vez
+de los 62.732 de la red. Así que el banco guarda el `type` de cada opción del
+saludo y rechaza antes de jugar un `check` que no sea `true`/`false`, un `spin`
+que no sea entero o que se salga del rango anunciado, y un `combo` que no sea uno
+de sus `var`. De `string` y `button` no se puede juzgar nada y pasan.
+
+**La caja no es un error, es una grafía**, y se arregla igual que la del nombre:
+`UseNNUE=True` pasa y viaja como `true`, y `NNUEInstructions=AVX2` viaja como el
+`avx2` que anunció el motor. Lo contrario sería otro falso positivo —`AVX2`
+funciona en Vigía, que pasa el valor a minúsculas— y abortaría una tanda buena.
+Lo que no se adivina es un valor que no corresponde a nada: `UseNNUE=1` aborta,
+en vez de mandarlo y dejar la red apagada. Comprobado de punta a punta con el
+binario de hoy:
+
+| `--uci` | nodos a profundidad 6 | qué jugó |
+|---|---:|---|
+| (nada) | 62.732 | la red |
+| `UseNNUE=true` | 62.732 | la red |
+| `UseNNUE=True` | 62.732 | la red (**antes: 57.517, la HCE**) |
+| `UseNNUE=false` | 57.517 | la HCE |
+| `usennue=false` | 57.517 | la HCE (**antes: 62.732, la red**) |
+| `UseNNUE=1` | — | aborta |
+| `--hash 99999` | — | aborta: fuera del rango `1..1024` |
+
 ### Un hueco en las puntuaciones rompe la ventana
 
 Si un motor devuelve `bestmove` sin haber anunciado ningún `info … score`
@@ -863,7 +923,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 396 tests (264 motor + 121 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 399 tests (264 motor + 124 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -932,9 +992,12 @@ mantiene o cae.
 | `velocidad.rs` | banco de nodos y nodos/segundo |
 | `epd.rs` | suites EPD |
 | `json.rs` | JSON mínimo, determinista |
-| `sha256.rs` | SHA-256 |
 
-121 tests propios, incluidos en `cargo test --release`.
+124 tests propios, incluidos en `cargo test --release`.
+
+Aquí figuraba también un `sha256.rs` del banco, y no existe: el SHA-256 vive en
+`src/sha256.rs`, en la biblioteca, compartido con el cargador de la red, y el
+banco lo usa con `use vigia::sha256;` (`src/bin/banco/main.rs`).
 
 El harness antiguo `src/bin/selfplay.rs` sigue compilando y funcionando,
 pero está **superado**: sus 8 aperturas y 16 partidas no distinguen +20 Elo

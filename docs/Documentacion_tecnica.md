@@ -570,11 +570,20 @@ que sus 36 M valen 1,48 M de muestras efectivas frente a los 1,90 M de v1, y jun
 los dos es lo que devuelve variedad. En el banco, la red de v1+v2 le gana a la de
 solo v2 por +8,7 Elo [−3,6, +21,0].
 
+**Corrección de 0.32 a ese +8,7**: las dos redes no estaban igual de entrenadas.
+El `train.py` de entonces guardaba el checkpoint de mejor validación, y el de solo
+v2 se quedó en la **época 30 de 60** frente a las 57 de v1+v2, así que esa tanda
+mide el corpus y el doble de entrenamiento a la vez. La decisión —cuál de las dos
+publicar— sigue siendo la que era; la atribución, no (§6.2 y §7.1 del plan).
+
 **Y lo que no fue.** El plan sostenía que el cuello era la profundidad de la
-etiqueta. Un control con todo lo demás igual —6 M de posiciones, las mismas
-aperturas, el mismo evaluador, y solo el presupuesto cambiado de 25.000 a 50.000
-nodos— dio **+3,8 Elo [−8,7, +16,4]**: nada medible. Los +64,9 Elo de 0.31 salen del
-volumen y del evaluador que etiqueta, no de ese ply de más (§7.1 del plan).
+etiqueta. Un control —6 M de posiciones, las mismas aperturas, el mismo evaluador,
+y el presupuesto cambiado de 25.000 a 50.000 nodos— dio **+3,8 Elo [−8,7, +16,4]**:
+nada medible. Los +64,9 Elo de 0.31 salen del volumen y del evaluador que etiqueta,
+no de ese ply de más (§7.1 del plan). Aquí ponía «con todo lo demás igual» y hay que
+rebajarlo: por la misma regla de arriba, el candidato de etiquetas profundas se
+guardó en la época 56 y la base en la 60. Son cuatro épocas de cola con `lr` por
+debajo de 1,2e-5, mucho menos que el caso anterior, pero nadie las ha acotado.
 
 **El modelo flotante es el motor sin redondear**: el acumulador vive en unidades
 de activación (1,0 son 127 enteros) y la salida es directamente centipeones, así
@@ -1649,7 +1658,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 264 del motor + 119 del banco + 3 del generador + 8 del harness antiguo
+cargo test --release              # 264 del motor + 124 del banco + 3 del generador + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```
