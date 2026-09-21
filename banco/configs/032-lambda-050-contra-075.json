@@ -1,0 +1,57 @@
+{
+  "_": "Cual de los dos lambda se publica, si el cribado de 0,50 lo pone en duda.",
+
+  "_porque": "0,75 tiene decision y cifra contra 0.31 (+21,0 Elo [+13,3, +28,7]). Si el",
+  "_porque_2": "cribado de 0,50 apunta mas alto, la pregunta ya no es si lambda vale, sino",
+  "_porque_3": "donde esta el optimo, y eso no se decide comparando dos tandas contra una",
+  "_porque_4": "misma base: se decide enfrentandolas, que ademas cuesta la mitad de partidas",
+  "_porque_5": "para la misma resolucion. Es el mismo patron que 031-v2-contra-v1v2.",
+
+  "_criterio": "Declarado antes de jugar: solo se cambia el candidato de 0.32 si 0,50 gana",
+  "_criterio_2": "con el intervalo entero por encima de cero. Un empate deja a 0,75, que es la",
+  "_criterio_3": "que ya tiene las dos tandas contra 0.31 y el control de las epocas.",
+
+  "esquema": 1,
+  "id": "032-lambda-050-contra-075",
+
+  "candidato": {
+    "nombre": "lambda-0,50",
+    "ruta": "Release/Vigia 0.32-lam050.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "lambda-0,75",
+    "ruta": "Release/Vigia 0.32-lam075.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260926,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "_sprt": "Hipotesis pegadas: interesa el intervalo, no un veredicto.",
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/032-lambda-050-contra-075"
+}

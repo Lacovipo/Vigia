@@ -404,6 +404,7 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | QA = 255 | pendiente: QA = 127 se eligió porque en SSE2 el cuadrado cabe en `i16`; con AVX2 y AVX-512 hay que volver a medir (§3.4 del plan) |
 | 7.1 — etiquetas de la red | **hecha y aprobada**: corpus v2 de 36 M etiquetado por la red a 50.000 nodos; la red entrenada con v1+v2 (72 M) gana **+64,9 Elo [+57,1, +72,7]** a 0.30 y se publica como 0.31 |
 | 7.1, el control | **medido y negativo**: doblar los nodos de la etiqueta (25.000 → 50.000, +0,94 plies) da +3,8 Elo [−8,7, +16,4]. La profundidad no era el cuello: el escalón de 100.000 nodos queda desaconsejado y la vía barata es más posiciones. Salvedad de 0.32: las dos redes se guardaron en épocas distintas (56 y 60) |
+| 7.2 — λ = 0,75 (el WDL del corpus) | **hecha y aprobada**: el objetivo pasa a `0,75·σ(cp/K) + 0,25·resultado`, sin corpus nuevo —el resultado ya estaba en el registro— y gana **+21,0 Elo [+13,3, +28,7]** a 0.31. Se publica como 0.32. Con su control: las tres épocas de cola que separaban las dos redes valen +3,3 [−8,6, +15,2] |
 | 7.1, la atribución | **pendiente y barata**: `031-v2-contra-v1v2` enfrentó 57 épocas contra **30** (la regla vieja de mejor validación), así que sus +8,7 Elo no separan «mezclar v1 con v2» de «entrenar el doble». Para cerrarlo: reentrenar solo-v2 con el `train.py` de hoy y repetir la tanda. **2 h de GPU + 40 min de 8 CPUs**, y decide con qué corpus se entrena la próxima red |
 | 7, el resto | pendiente |
 

@@ -1302,6 +1302,22 @@ cifras mal citadas), y cada sospecha la revisó otro agente intentando refutarla
 | ~~`tablas_desde_jugada` se compara con el número de jugada del libro, que siempre es 1, así que la adjudicación de tablas casi nunca se dispara~~ | **el hallazgo era falso, y se retira** (0.32). `arbitro.rs` compara `board.fullmove_number` del tablero vivo, que arranca en 1 con la FEN del libro y llega a 40 en la jugada 40 de la partida, que es justo lo que se quería. Y la regla se dispara: **196 de 2.000 partidas** (9,8 %) en `032-lambda-075`, 470 de 5.000 (9,4 %) en `031-atalaya-v2-A-estimacion`. Tocarla cambiaría el criterio de una de cada diez partidas y haría incomparables las tandas ya registradas |
 | la exclusión de los libros del banco se anuncia con el tamaño del conjunto, no con un recuento | comprobado que muerde (las claves del libro están literales en `apertura.txt`), y aun con fallo total serían ~1.200 registros de 36 M |
 
+#### La de 0.32, que encontró más de lo previsto
+
+Cuatro lentes —el guardián de opciones del banco, el cambio del entrenador, el
+diseño del experimento de λ y la documentación contra el código—, cada hallazgo
+revisado después por un escéptico con el encargo de refutarlo. **Ninguna toca el
+resultado de λ**, pero dos tocan lo que se había escrito de 0.31:
+
+| hallazgo | qué se hizo |
+|---|---|
+| el guardián de opciones UCI comparaba los nombres sin distinguir mayúsculas y luego **enviaba la grafía del fichero**, que el motor despacha de forma exacta: `usennue=false` pasaba la comprobación y se perdía igual | **corregido**: se envía la grafía que anunció el motor. Reproducido antes de arreglarlo: la tanda jugaba con la red encendida creyendo medir la HCE |
+| el guardián miraba el nombre y no el valor, y en Vigía un `check` se resuelve con `v == "true"`, así que `UseNNUE=True` **apagaba** la red | **corregido**: el banco guarda el `type` de cada opción y valida el valor; la caja se normaliza (`True` → `true`, `AVX2` → `avx2`) porque eso es grafía, no error |
+| la red de 0.31 es la **época 57** y la candidata de λ la **60**: no difieren solo en λ | **medido**, no supuesto: el control `032-epocas-de-cola` da +3,3 Elo [−8,6, +15,2] para esas tres épocas |
+| `train.py` guardaba la de mejor validación, y aquí se escribió que con λ = 1 eso era inofensivo | **falso**: `atalaya-v2.pt` se quedó en la época 30 de 60 y es la base de `031-v2-contra-v1v2`. Corregido en §6.2 y §7.1; esos +8,7 Elo no separan corpus de entrenamiento |
+| «un 0,1 % peor» entre la época 8 y la 60 de λ = 0,50 | son **1,2 %**. Corregido donde se repitió: el plan, el `train.py` y el mensaje del commit |
+| el plan daba por pendiente una «mejora del banco» que no lo era: `tablas_desde_jugada` comparada con el número de jugada del libro | **el hallazgo original era falso y se retira**: compara el contador vivo del tablero y adjudica el 9,8 % de las partidas. Tocarlo habría roto la comparabilidad de todo lo medido desde 0.28 |
+
 ---
 
 ### Fase 6 — SPRT-B: los amortiguadores de final
@@ -1455,6 +1471,72 @@ vez:
      el evaluador de las hojas y cuánto son las partidas que juega una red mejor.
 2. **λ = 0,75**, con el WDL del corpus sin adjudicación, que ahora sí es información
    independiente.
+
+   **Resultado (0.32): +21,0 Elo [+13,3, +28,7], y es lo más barato que ha comprado este
+   proyecto.** No hizo falta un solo corpus nuevo: el resultado de la partida lleva en el
+   registro de 32 bytes desde la fase 2 (byte 30, desde el punto de vista de quien mueve) y
+   las partidas del generador se juegan hasta el final, sin adjudicación. Lo único que
+   cambia es una línea del objetivo de entrenamiento:
+
+   ```
+   objetivo = λ·σ(cp/K) + (1−λ)·resultado
+   ```
+
+   Dos redes entrenadas con todo lo demás idéntico a la de 0.31 —corpus v1+v2, K = 159,7,
+   `lr` 2e-3, 60 épocas, misma semilla— y cuantizadas igual (error medio 0,84 y 0,90 cp,
+   idénticas entero a entero entre el motor y Python en 2.000 posiciones, escala 1,057 y
+   1,073 frente a la HCE).
+
+   | tanda | qué compara | resultado |
+   |---|---|---|
+   | `032-lambda-075` | λ = 0,75 contra 0.31, cribado | +11,1 Elo [−1,0, +23,3] en 1.000 parejas |
+   | `032-lambda-A` | lo mismo, decisión | **`acepta_h1`** en 1.049 parejas, +23,6 (sesgado al alza) |
+   | `032-lambda-A-estimacion` | lo mismo, tope fijo | **+21,0 Elo** [+13,3, +28,7] en 2.500 parejas |
+   | `032-epocas-de-cola` | el control: λ = 1 en la época 60 contra la 57 de 0.31 | +3,3 Elo [−8,6, +15,2] |
+   | `032-lambda-050` | λ = 0,50 contra 0.31, cribado | +3,1 Elo [−9,1, +15,4] en 1.000 parejas |
+
+   **El óptimo no está más abajo.** λ = 0,50 se entrenó a la vez que λ = 0,75, con todo lo
+   demás igual, y se cribó después precisamente porque la pregunta se volvió obligatoria al
+   ver los +21: si quitarle un cuarto del peso a la puntuación vale tanto, ¿por qué no la
+   mitad? Porque se pierde casi toda la ganancia. Con tres puntos —λ = 1 de base, 0,75 con
+   +21,0 y 0,50 con +3,1— la curva tiene el máximo entre 1 y 0,50, y 0,75 no está lejos de
+   él. Lo que queda por probar es el tramo **0,8–0,9**, que es donde suelen aterrizar otros
+   motores, y cuesta 2 h de GPU y 40 min de banco por punto.
+
+   El criterio para elegir candidato se declaró **antes** de ver el cribado de 0,50: solo
+   se cambiaba el candidato de 0.32 si ganaba el enfrentamiento directo con el intervalo
+   entero por encima de cero (`032-lambda-050-contra-075.json`, que queda escrito y sin
+   ejecutar). No hizo falta.
+
+   **Qué redes quedan en `nets/`.** La que juega (`atalaya-256-ef81d9ad`) y la del control
+   (`atalaya-256-1dbd0d27`, λ = 1 en la época 60). La segunda se queda porque no pertenece a
+   ninguna etiqueta de versión y sin ella el control de las épocas no se puede repetir; las
+   de releases anteriores sí se recuperan de su etiqueta (`git show 0.31:nets/...`), y la de
+   λ = 0,50 (`atalaya-256-360bf4fc`), del commit que la introdujo. Y el binario que se
+   publica es **el mismo que midió el banco**: `Vigia 0.32.exe` y el `Vigia 0.32-lam075.exe`
+   de las tandas visitan nodos idénticos en las 12 posiciones del banco de velocidad, y solo
+   se diferencian en la cadena de versión.
+
+   **El control hacía falta** y lo pidió la revisión adversarial: la red de 0.31 es el
+   checkpoint de la época 57 y la candidata el de la 60, porque el `train.py` viejo guardaba
+   por mejor validación (§6.2). Entrenada una red λ = 1 hasta la época 60 con todo lo demás
+   igual —y reproduciendo el entrenamiento de 0.31 en la sexta cifra, época a época—, esas
+   tres épocas de cola no compran nada medible. Los +21,0 son de λ.
+
+   Dos cosas que **no** explican la ganancia, medidas sobre las 5.000 partidas de la tanda
+   de la cifra:
+
+   - **No busca más hondo**: 11,934 plies de media contra 11,917. Acierta más a la misma
+     profundidad, como la sonda de TT en quiescencia de 0.27.
+   - **No juega más decidida**, que habría sido la explicación bonita para un objetivo que
+     lleva dentro el resultado: el reparto de finales es el mismo que en 0.31 (66,2 % de
+     abandonos adjudicados contra 65,5 %, 18,2 % de repetición triple contra 18,5 %).
+
+   Y la métrica de validación va en contra, que es exactamente lo que se esperaba: contra
+   etiquetas de puntuación, la red de λ = 0,75 recorta el 29,5 % de la pérdida de la HCE y
+   la de 0.31 el 34,9 %. **Ajustar peor las etiquetas y jugar mejor no es una paradoja**: es
+   la señal de que las etiquetas de una búsqueda de 8,7 plies no son la verdad, y de que el
+   resultado de la partida aporta algo que ellas no tienen.
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.
 4. **Los 4 rasgos de enroque**, si se decidió dejarlos fuera de v1 por simplicidad.
 5. **Re-sintonizar `CORRECTION_MAX = 300`** (`search.rs:135`), calibrado al ruido de la

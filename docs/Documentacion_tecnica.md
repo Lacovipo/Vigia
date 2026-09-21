@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.31.0 (`Cargo.toml`).
+**Versión:** 0.32.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -533,9 +533,11 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
 argumentada en `docs/PlanNNUE.md`. La red empotrada es
-**`atalaya-256-0bd21a25`, entrenada con 72 millones de posiciones del propio
-Vigía** (los corpus v1 y v2 juntos; desde 0.29 y hasta 0.30 fue
-`atalaya-256-6f8033fc`, con los 36 M de v1). Sustituye a la de la fase 1 —construida a mano, solo material—, que era
+**`atalaya-256-ef81d9ad`, entrenada con 72 millones de posiciones del propio
+Vigía** (los corpus v1 y v2 juntos) **y con λ = 0,75**, es decir dando un cuarto
+del peso del objetivo al resultado de la partida en vez de todo a la puntuación
+(0.32). Antes fue `atalaya-256-0bd21a25`, el mismo corpus con λ = 1 (0.31), y
+`atalaya-256-6f8033fc`, con los 36 M de v1 (0.29 y 0.30). Sustituye a la de la fase 1 —construida a mano, solo material—, que era
 el andamio para probar el bucle entero antes de gastar horas generando datos y
 que sigue en `nets/` porque dos tests la cargan del fichero: es la única red cuya
 salida se puede recalcular con lápiz.
@@ -1591,6 +1593,25 @@ usarse para aprobar un cambio.
   nada medible. La mejora viene del volumen y del evaluador que etiqueta, no de la
   profundidad, así que el siguiente escalón que proponía el plan —100.000 nodos, el
   doble de coste— queda desaconsejado (§7.1 de `docs/PlanNNUE.md`).
+
+- **0.32.0 — el resultado de la partida entra en el objetivo (λ = 0,75).**
+  **+21,0 Elo [+13,3, +28,7]** sobre 0.31 en 2.500 parejas de tope fijo, tras
+  `acepta_h1` en 1.049. Lo único que cambia son los pesos de la red, y para
+  obtenerlos no hizo falta generar nada: el resultado de cada partida ya estaba en
+  el corpus, en el byte 30 de cada registro. El objetivo pasa de `σ(cp/K)` a
+  `0,75·σ(cp/K) + 0,25·resultado`, con el mismo corpus, la misma K y las mismas
+  épocas.
+
+  **Con su control**, porque la revisión adversarial encontró que la comparación
+  no era limpia: la red de 0.31 se había guardado en la época 57 y la nueva en la
+  60. Una red λ = 1 entrenada hasta la 60 le saca a 0.31 +3,3 Elo [−8,6, +15,2],
+  o sea nada medible, así que los +21,0 son de λ (§7, punto 2, del plan).
+
+  De propina, dos explicaciones descartadas con los datos de las 5.000 partidas:
+  no busca más hondo (11,934 plies contra 11,917) y no juega más decidida (mismo
+  reparto de finales que 0.31). Y ajusta **peor** las etiquetas de puntuación que
+  la red de 0.31 —29,5 % de la pérdida de la HCE recortada frente a 34,9 %—
+  mientras juega mejor, que es la señal de que esas etiquetas no son la verdad.
 
 ---
 

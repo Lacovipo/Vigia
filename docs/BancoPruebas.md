@@ -946,6 +946,11 @@ desde los resultados) cada vez que se lee.
 | `031-v2-contra-v1v2` | red de v1+v2 vs red de solo v2 | `movetime` 100 ms | 1.000 parejas, tope fijo: **+8,7 Elo** [−3,6, +21,0], LOS 92 % |
 | `031-atalaya-v2-A` | red de v1+v2 (0.31) vs 0.30 | `movetime` 100 ms | 377 parejas: **`acepta_h1`**, +73,9 Elo (sesgado al alza) |
 | `031-atalaya-v2-A-estimacion` | red de v1+v2 (0.31) vs 0.30 | `movetime` 100 ms | 2.500 parejas, tope fijo: **+64,9 Elo** [+57,1, +72,7] |
+| `032-lambda-075` | red con λ = 0,75 (el WDL entra en el objetivo) vs 0.31, cribado | `movetime` 100 ms | 1.000 parejas, tope fijo: +11,1 Elo [−1,0, +23,3], LOS 96 % |
+| `032-lambda-A` | lo mismo, decisión | `movetime` 100 ms | 1.049 parejas: **`acepta_h1`**, +23,6 Elo (sesgado al alza) |
+| `032-lambda-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas, tope fijo: **+21,0 Elo** [+13,3, +28,7] |
+| `032-epocas-de-cola` | el control de 0.32: λ = 1 en la época 60 vs la época 57 de 0.31 | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,3 Elo [−8,6, +15,2]. La cola de entrenamiento que separaba las dos redes no compra nada |
+| `032-lambda-050` | red con λ = 0,50 vs 0.31, cribado | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,1 Elo [−9,1, +15,4]. El óptimo de λ no está por debajo de 0,75 |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba

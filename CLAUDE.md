@@ -145,6 +145,14 @@ de nodos/segundo compra ~0,52 plies.
   100.000 nodos sin una prueba nueva. Con una salvedad que salió en 0.32: las dos
   redes de ese control se guardaron en épocas distintas (56 y 60), y las cuatro de
   menos le tocaron al candidato de etiquetas profundas.
+- **Desde 0.32 la red se entrena con λ = 0,75**: el objetivo es
+  `0,75·σ(cp/K) + 0,25·resultado de la partida`, y eso valió **+21,0 Elo** sin
+  generar un solo corpus nuevo. Consecuencia para comparar redes: **la validación
+  y el holdout dejan de servir como criterio**. La red que juega hoy ajusta *peor*
+  las etiquetas de puntuación que la de 0.31 (recorta el 29,5 % de la pérdida de
+  la HCE frente al 34,9 %) y aun así gana. Con λ distintos las validaciones ni
+  siquiera miden contra lo mismo; `train.py` imprime además la de λ = 1 (`cp`),
+  que sí es comparable, pero tampoco aprueba nada: eso es del banco.
 - **Los checkpoints anteriores a 0.32 no son de la última época.** `train.py`
   guardaba el de **mejor validación**, y eso no era «casi la última» como se creyó:
   `atalaya-v2.pt` se quedó en la **época 30 de 60**, y es la base de

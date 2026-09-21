@@ -298,10 +298,13 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary: `atalaya-256-0bd21a25`, trained on the
+/// The network compiled into the binary: `atalaya-256-ef81d9ad`, trained on the
 /// v1 + v2 corpora of Vigia's own self-play — 72 M raw positions, 42.5 M of them
-/// usable (docs/PlanNNUE.md, phase 7.1). The 36 M of phase 3 were v1 alone, the
-/// corpus behind the networks of 0.29 and 0.30.
+/// usable — with lambda = 0.75, so a quarter of the training target is the game
+/// result and not the search score (docs/PlanNNUE.md, phase 7, point 2). Before
+/// it came `atalaya-256-0bd21a25`, the same corpus with lambda = 1 (0.31), and
+/// `atalaya-256-6f8033fc`, trained on the 36 M of v1 alone (0.29 and 0.30). Both
+/// are recoverable from their release tags.
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
 /// executable, and not for convenience: the bench signs every experiment with
@@ -312,7 +315,7 @@ impl Net {
 /// It replaces `material-256.bin`, the hand-built network of phase 1, which
 /// stays in `nets/` because two tests below still pin its arithmetic: it is the
 /// only network whose every output can be recomputed by hand.
-static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-0bd21a25.bin");
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-ef81d9ad.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();
