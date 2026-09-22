@@ -79,6 +79,24 @@ cruza `log(β/(1−α))` se acepta H0; mientras tanto, se sigue jugando. El LLR
 usa el modelo de máxima verosimilitud generalizado de Fishtest, resuelto por
 bisección sobre la ecuación secular (por eso no hace falta SciPy).
 
+**El LLR está atado a vectores dorados publicados** (`stats.rs`,
+`the_llr_matches_the_published_golden_vectors`): tres pentanomiales con su
+resultado esperado, tomados de una implementación independiente que a su vez los
+contrasta con `LLRcalc.py` de Fishtest. Es la única forma de verificar este
+número: el LLR decide si una mejora se acepta y no hay manera de mirarlo y ver
+si está bien. Los dos vectores de muestra grande coincidieron a la primera
+—1e-12—, que es la comprobación de verdad.
+
+El tercero, `[0, 0, 10, 0, 0]`, no coincidía, y la causa merece quedar escrita
+porque es una trampa para cualquiera que verifique su implementación con
+vectores ajenos: con cajones vacíos hay que rellenarlos con un epsilon, y la
+diferencia estaba en **si esos epsilon cuentan como observaciones** al multiplicar
+la suma por el número de parejas. Fishtest multiplica cajón a cajón por las
+cuentas ya regularizadas, o sea que sí cuentan: 10,004 en vez de 10. El factor es
+`1 + 0,001·vacíos/parejas` —un 0,04 % con diez parejas, un 0,0004 % con mil— y no
+puede mover una decisión, pero sin él los vectores no cuadran. Adoptada la
+convención de Fishtest.
+
 ### 3.2 Uso
 
 ```bash
@@ -923,7 +941,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 399 tests (264 motor + 124 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 400 tests (264 motor + 125 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -998,7 +1016,7 @@ mantiene o cae.
 | `epd.rs` | suites EPD |
 | `json.rs` | JSON mínimo, determinista |
 
-124 tests propios, incluidos en `cargo test --release`.
+125 tests propios, incluidos en `cargo test --release`.
 
 Aquí figuraba también un `sha256.rs` del banco, y no existe: el SHA-256 vive en
 `src/sha256.rs`, en la biblioteca, compartido con el cargador de la red, y el

@@ -191,11 +191,22 @@ impl Pentanomial {
     }
 
     /// LLR acumulado de toda la muestra.
+    ///
+    /// El multiplicador es la suma de las cuentas **regularizadas**, no el
+    /// número real de parejas: los epsilon con los que se rellenan los cajones
+    /// vacíos cuentan como observaciones, que es lo que hace `LLRcalc.py` de
+    /// Fishtest (multiplica cajón a cajón por las cuentas ya regularizadas).
+    /// La diferencia es de un factor `1 + 0,001·vacíos/parejas` —con 10 parejas
+    /// y cuatro cajones vacíos, un 0,04 %; con mil, un 0,0004 %— y no puede
+    /// mover una decisión, pero sin ella los vectores dorados publicados no
+    /// cuadran y quien los use para verificar su implementación se vuelve loco
+    /// buscando un fallo que no existe.
     pub fn llr(&self, sprt: &Sprt) -> f64 {
         let Some(p) = self.regularized_pdf() else {
             return 0.0;
         };
-        let n = self.pairs() as f64;
+        let vacios = self.bins.iter().filter(|&&b| b == 0).count() as f64;
+        let n = self.pairs() as f64 + vacios * EMPTY_BIN_EPSILON;
         let s0 = score_from_elo(sprt.elo0);
         let s1 = score_from_elo(sprt.elo1);
         let q0 = mle_with_mean(&p, &PAIR_SCORES, s0);
@@ -406,6 +417,31 @@ mod tests {
         let pen = Pentanomial { bins: [10, 20, 100, 25, 12] };
         let sprt = Sprt { elo0: 3.0, elo1: 3.0, alpha: 0.05, beta: 0.05 };
         assert!(approx(pen.llr(&sprt), 0.0, 1e-9));
+    }
+
+    #[test]
+    fn the_llr_matches_the_published_golden_vectors() {
+        // Vectores dorados de una implementación independiente (el manual de
+        // validación de otro motor de esta máquina, que a su vez los contrasta
+        // con LLRcalc.py de Fishtest). Que dos implementaciones escritas por
+        // separado coincidan a 1e-9 es la comprobación más fuerte que hay de que
+        // el LLR pentanomial de este banco no tiene un signo cambiado ni una
+        // regularización de más: el LLR es el número que decide si una mejora se
+        // acepta, y no hay forma de mirarlo y ver si está bien.
+        let casos = [
+            ([10789u64, 19328, 33806, 19402, 10543], -3.0, 1.0, 2.131_067_811_791_736),
+            ([39, 2226, 31451, 2412, 40], 0.2, 0.9, 2.162_542_580_047_681_6),
+            ([0, 0, 10, 0, 0], 0.0, 5.0, -0.139_427_638_815_398_85),
+        ];
+        for (bins, elo0, elo1, esperado) in casos {
+            let pen = Pentanomial { bins };
+            let sprt = Sprt { elo0, elo1, alpha: 0.05, beta: 0.05 };
+            let obtenido = pen.llr(&sprt);
+            assert!(
+                (obtenido - esperado).abs() < 1e-9,
+                "penta {bins:?} con elo0={elo0} elo1={elo1}: {obtenido} != {esperado}"
+            );
+        }
     }
 
     #[test]

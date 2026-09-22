@@ -1679,7 +1679,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 264 del motor + 124 del banco + 3 del generador + 8 del harness antiguo
+cargo test --release              # 264 del motor + 125 del banco + 3 del generador + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```
