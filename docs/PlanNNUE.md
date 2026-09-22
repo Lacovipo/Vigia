@@ -1567,12 +1567,24 @@ vez:
    | 2 | K de v1+v2+v3 y dos entrenamientos a 60 épocas con λ = 0,75: v1+v2+v3 (108 M) y v2+v3 (72 M) | ~4,5 h de GPU |
    | 3 | banco: las dos mezclas entre sí; la mejor contra 0.32, decisión y cifra | ~4 h de 8 CPUs |
 
-   **El ritmo con 8 hilos no es el de la calibración con 2, y a 25.000 nodos sí se nota**:
-   348.777 registros por hora y por hilo calibrados con 2 hilos, **328.900 reales con 8**,
-   un −5,7 %. En v2 la extrapolación se cumplió de sobra (162.600 calibrados, 166.070
-   reales), pero v2 iba a 50.000 nodos: al partir el presupuesto por la mitad se doblan las
-   posiciones por segundo y con ellas la presión de memoria que los ocho hilos se disputan.
-   De ahí que la ventana sean 13,7 h y no las 13 que decía la primera cuenta.
+   **El ritmo, y una lección sobre cómo se mide un ritmo.** Calibrado con 2 hilos: 348.777
+   registros por hora y por hilo. En los diez primeros minutos de la ventana, con 8 hilos,
+   salieron **328.900**, un −5,7 %, y se anotó aquí que a 25.000 nodos el reparto entre
+   hilos sí costaba. **Era falso, y la culpa era mía**: en esos mismos minutos corría una
+   revisión adversarial de la propia ventana, diez agentes leyendo ficheros y calculando
+   hashes. Con la máquina ya tranquila, los diez minutos siguientes dan **394.468**, un
+   +13 % sobre la calibración con 2 hilos.
+
+   | medida | reg/h/hilo | ventana estimada |
+   |---|---:|---:|
+   | calibración con 2 hilos | 348.777 | 12,9 h |
+   | 8 hilos, con mis propios agentes trabajando | 328.900 | 13,7 h |
+   | 8 hilos, máquina tranquila | **394.468** | **~11,4 h** |
+
+   La lección no es el número: es que **la carga que mete el propio observador cuenta como
+   carga**. Medir el ritmo en los primeros minutos está bien, pero hay que mirar quién más
+   está corriendo, y repetir la medida cuando la máquina esté como va a estar el resto de
+   la ventana.
 
    Las dos mezclas del paso 2 no son capricho: contestan de paso la pregunta que dejó
    abierta la corrección del punto 1 de esta misma fase —si v1, con partidas jugadas por la
