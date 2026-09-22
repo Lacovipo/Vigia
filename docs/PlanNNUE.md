@@ -1545,26 +1545,39 @@ vez:
    poco para fiarse de la forma, pero lo que sí dicen es que lo que queda por ganar
    afinando λ es un puñado de Elo, y distinguir diferencias así cuesta miles de parejas.
 
-   **El paso siguiente: el corpus v3.** La palanca con más evidencia detrás es el volumen
-   —0.31 sacó +64,9 Elo pasando de 36 a 72 M— y λ le añade un motivo: ahora el resultado
-   de la partida entra en el objetivo, así que partidas jugadas por un motor más fuerte dan
-   mejor señal que las de la HCE (v1) o las de 0.30 (v2). A **25.000 nodos**, porque el
-   control de 0.31 no vio nada en doblarlos (con su salvedad de épocas) y así sale al doble
-   de ritmo.
+   **El paso siguiente: el corpus v3.** Aquí se escribió que «la palanca con más evidencia
+   detrás es el volumen, que en 0.31 sacó +64,9 Elo pasando de 36 a 72 M», y es justo lo
+   que este mismo documento desmiente cuarenta líneas más arriba: esos +64,9 cambian tres
+   cosas a la vez —volumen, evaluador de las hojas y nodos de etiqueta—. **La única medida
+   directa del volumen es `031-v2-contra-v1v2`: +8,7 Elo [−3,6, +21,0]**, sin decisión y
+   encima con las épocas desparejadas (57 contra 30).
+
+   O sea que el volumen no está demostrado, está *sugerido*, y v3 existe para medirlo
+   limpio: la comparación del paso 2, **v1+v2+v3 (108 M) contra v2+v3 (72 M)**, cambia el
+   volumen y nada más, con las dos redes guardadas en la misma época. Con eso basta para
+   justificar la ventana, sin apoyarse en una cifra que mide otra cosa. Y λ añade un motivo
+   propio: ahora el resultado de la partida entra en el objetivo, así que partidas jugadas
+   por un motor más fuerte dan mejor señal que las de la HCE (v1) o las de 0.30 (v2). A
+   **25.000 nodos**, porque el control de 0.31 no vio nada en doblarlos (con su salvedad de
+   épocas) y así sale al doble de ritmo.
 
    | paso | qué | tiempo |
    |---|---|---|
-   | 1 | v3: 36 M con 0.32 (red `ef81d9ad`) a 25.000 nodos, semillas 21–23, 8 CPUs | **~13 h** |
+   | 1 | v3: 36 M con 0.32 (red `ef81d9ad`) a 25.000 nodos, semillas 21–23, 8 CPUs | **~13,7 h** |
    | 2 | K de v1+v2+v3 y dos entrenamientos a 60 épocas con λ = 0,75: v1+v2+v3 (108 M) y v2+v3 (72 M) | ~4,5 h de GPU |
    | 3 | banco: las dos mezclas entre sí; la mejor contra 0.32, decisión y cifra | ~4 h de 8 CPUs |
 
-   Ritmo calibrado con 2 hilos: **348.777 registros por hora y por hilo**, el doble que v2 a
-   50.000; en la ventana de v2, 8 hilos no perdieron nada frente a la calibración con 2.
+   **El ritmo con 8 hilos no es el de la calibración con 2, y a 25.000 nodos sí se nota**:
+   348.777 registros por hora y por hilo calibrados con 2 hilos, **328.900 reales con 8**,
+   un −5,7 %. En v2 la extrapolación se cumplió de sobra (162.600 calibrados, 166.070
+   reales), pero v2 iba a 50.000 nodos: al partir el presupuesto por la mitad se doblan las
+   posiciones por segundo y con ellas la presión de memoria que los ocho hilos se disputan.
+   De ahí que la ventana sean 13,7 h y no las 13 que decía la primera cuenta.
 
    Las dos mezclas del paso 2 no son capricho: contestan de paso la pregunta que dejó
-   abierta la corrección de §7.1 —si v1, con partidas jugadas por la HCE, sigue aportando o
-   ya estorba—, y esta vez con las dos redes guardadas en la misma época, que es justo lo
-   que le faltó a `031-v2-contra-v1v2`.
+   abierta la corrección del punto 1 de esta misma fase —si v1, con partidas jugadas por la
+   HCE, sigue aportando o ya estorba—, y esta vez con las dos redes guardadas en la misma
+   época, que es justo lo que le faltó a `031-v2-contra-v1v2`.
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.
 4. **Los 4 rasgos de enroque**, si se decidió dejarlos fuera de v1 por simplicidad.
 5. **Re-sintonizar `CORRECTION_MAX = 300`** (`search.rs:135`), calibrado al ruido de la
