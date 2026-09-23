@@ -1,0 +1,55 @@
+{
+  "_": "Fase 7.3, la decision: la red con el corpus v3 contra 0.32.",
+  "_2": "La cifra no se lee de aqui, sino de 033-corpus-v3-A-estimacion.",
+
+  "_criterio": "Criterio declarado ANTES de jugar: acepta_h1. Con elo0=0 y elo1=5,",
+  "_criterio_2": "'acepta_h0' no significa que empeore, sino que no llega a +5 Elo. Entre los",
+  "_criterio_3": "dos binarios cambia solo el corpus con el que se entreno la red: mismo",
+  "_criterio_4": "lambda = 0,75, mismo lr, misma semilla, 60 epocas las dos, y cada una con",
+  "_criterio_5": "la K de su corpus.",
+
+  "_ruta_candidato": "Se rellena con la ganadora de 033-v1v2v3-contra-v2v3 antes de lanzar.",
+
+  "esquema": 1,
+  "id": "033-corpus-v3-A",
+
+  "candidato": {
+    "nombre": "0.33-corpus-v3",
+    "ruta": "Release/Vigia 0.33-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.32",
+    "ruta": "Release/Vigia 0.32.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260928,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 4000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 0.0, "elo1": 5.0, "alpha": 0.05, "beta": 0.05 },
+
+  "salida": "banco/resultados/033-corpus-v3-A"
+}

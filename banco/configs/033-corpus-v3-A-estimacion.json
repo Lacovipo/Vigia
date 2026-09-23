@@ -1,0 +1,57 @@
+{
+  "_": "Fase 7.3, la CIFRA: cuanto vale el corpus v3, con tope fijo.",
+  "_2": "La decision la da 033-corpus-v3-A.",
+
+  "_metodo": "Una prueba secuencial que para al cruzar lo hace en un momento favorable",
+  "_metodo_2": "al candidato, y la magnitud sale sesgada al alza: medido cuatro veces en",
+  "_metodo_3": "este proyecto (+109,2 contra +72,4; +266,7 contra +250,4; +73,9 contra",
+  "_metodo_4": "+64,9; +23,6 contra +21,0). Con las hipotesis pegadas el LLR no se mueve,",
+  "_metodo_5": "la tanda agota su tope y el intervalo sale limpio.",
+
+  "_libro": "Semilla distinta de la de la decision, pero las aperturas se re-sortean",
+  "_libro_2": "del mismo libro de 20.000: unas 500 coinciden con las de la decision, asi",
+  "_libro_3": "que las dos tandas no se agregan. Esta se lee sola.",
+
+  "esquema": 1,
+  "id": "033-corpus-v3-A-estimacion",
+
+  "candidato": {
+    "nombre": "0.33-corpus-v3",
+    "ruta": "Release/Vigia 0.33-ganadora.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.32",
+    "ruta": "Release/Vigia 0.32.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260929,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 2500,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/033-corpus-v3-A-estimacion"
+}

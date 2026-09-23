@@ -1586,6 +1586,33 @@ vez:
    está corriendo, y repetir la medida cuando la máquina esté como va a estar el resto de
    la ventana.
 
+   **Resultado del corpus (0.33): 36.001.706 posiciones en 10,28 h**, por debajo incluso de
+   las 11,4 corregidas, porque el ritmo subió trozo a trozo según la máquina se quedaba sola
+   (389.774 → 458.758 → 475.118 registros por hora y por hilo). 21,7 M útiles (60,28 %),
+   309.226 partidas de 116,4 plies, 23,6 % de tablas. Y una sorpresa que refuerza lo que ya
+   se sabía:
+
+   | | v1 (HCE, 25.000) | v2 (red 0.30, 50.000) | **v3 (red 0.32, 25.000)** |
+   |---|---|---|---|
+   | ρ a desfase 2 con \|cp\| < 300 | 0,885 | 0,910 | **0,882** |
+   | longitud de decorrelación | 11,4 plies | 14,8 plies | **11,0 plies** |
+   | muestras efectivas | 1,90 M (9,40 por parámetro) | 1,48 M (7,31) | **1,97 M (9,77)** |
+   | coste de máquina | 18,9 h | 27,2 h | **10,3 h** |
+
+   **v3 es el corpus más informativo de los tres y el más barato, por bastante**: los mismos
+   36 M brutos que v2 valen un 33 % más de muestras efectivas y costaron 17 horas menos. La
+   razón es la de la fase 7.1 vista del revés: etiquetar a 50.000 nodos suaviza las etiquetas
+   y hace que las posiciones vecinas se parezcan más entre sí, así que cada una aporta menos.
+   A 25.000 la etiqueta es más áspera y rinde más por posición. Sumado a que el control de
+   0.31 no vio ganancia alguna en doblar los nodos, **el escalón de profundidad queda
+   descartado, no solo desaconsejado**.
+
+   K ajustada sobre cada mezcla: **163,3** para v1+v2+v3 y **164,8** para v2+v3. Las dos
+   redes, con λ = 0,75 y 60 épocas, quedan en `atalaya-256-fe9a48f3` (108 M) y
+   `atalaya-256-b3ef7165` (72 M); las dos idénticas entero a entero entre el motor y Python
+   en 2.000 posiciones, con 0,97 y 0,94 cp de error de cuantización y escalas 1,057 y 1,074
+   frente a la HCE. Quién gana lo dice el banco.
+
    Las dos mezclas del paso 2 no son capricho: contestan de paso la pregunta que dejó
    abierta la corrección del punto 1 de esta misma fase —si v1, con partidas jugadas por la
    HCE, sigue aportando o ya estorba—, y esta vez con las dos redes guardadas en la misma

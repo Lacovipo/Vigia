@@ -1,0 +1,64 @@
+{
+  "_": "La pregunta que 031-v2-contra-v1v2 no pudo contestar: cuanto aporta el",
+  "_2": "volumen del corpus, con todo lo demas igual de verdad.",
+
+  "_porque": "Aquella tanda enfrento una red de 57 epocas contra otra de 30, porque el",
+  "_porque_2": "train.py de entonces guardaba la de mejor validacion (§6.2 del plan). Sus",
+  "_porque_3": "+8,7 Elo [-3,6, +21,0] median corpus Y entrenamiento a la vez. Estas dos",
+  "_porque_4": "redes se han guardado las dos en la epoca 60, con el mismo lambda = 0,75,",
+  "_porque_5": "el mismo lr y la misma semilla; cada una con la K de su propio corpus",
+  "_porque_6": "(163,3 y 164,8), que es lo que corresponde cuando el corpus cambia.",
+
+  "_que_cambia": "Candidato: v1+v2+v3, 108 M brutas. Base: v2+v3, 72 M. La diferencia es",
+  "_que_cambia_2": "v1, el corpus viejo: 36 M etiquetados por la evaluacion clasica a 25.000",
+  "_que_cambia_3": "nodos, con partidas jugadas por la propia HCE. Si gana el candidato, v1",
+  "_que_cambia_4": "sigue aportando pese a ser el mas debil; si pierde, estorba y la proxima",
+  "_que_cambia_5": "red se entrena sin el. Las dos respuestas sirven.",
+
+  "_metodo": "Hipotesis pegadas y alpha/beta minusculos: el LLR no se mueve, la tanda",
+  "_metodo_2": "agota su tope y lo que se lee es el intervalo.",
+
+  "esquema": 1,
+  "id": "033-v1v2v3-contra-v2v3",
+
+  "candidato": {
+    "nombre": "v1+v2+v3",
+    "ruta": "Release/Vigia 0.33-v1v2v3.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "v2+v3",
+    "ruta": "Release/Vigia 0.33-v2v3.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260927,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-12 Elo.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/033-v1v2v3-contra-v2v3"
+}
