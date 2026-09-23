@@ -16,8 +16,8 @@
   "id": "033-corpus-v3-A-estimacion",
 
   "candidato": {
-    "nombre": "0.33-corpus-v3",
-    "ruta": "Release/Vigia 0.33-ganadora.exe",
+    "nombre": "0.33-v2+v3",
+    "ruta": "Release/Vigia 0.33-v2v3.exe",
     "opciones": { "Hash": 32, "Threads": 1 }
   },
 

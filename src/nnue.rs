@@ -298,13 +298,18 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary: `atalaya-256-ef81d9ad`, trained on the
-/// v1 + v2 corpora of Vigia's own self-play — 72 M raw positions, 42.5 M of them
-/// usable — with lambda = 0.75, so a quarter of the training target is the game
-/// result and not the search score (docs/PlanNNUE.md, phase 7, point 2). Before
-/// it came `atalaya-256-0bd21a25`, the same corpus with lambda = 1 (0.31), and
-/// `atalaya-256-6f8033fc`, trained on the 36 M of v1 alone (0.29 and 0.30). Both
-/// are recoverable from their release tags.
+/// The network compiled into the binary: `atalaya-256-b3ef7165`, trained on 72 M
+/// raw positions of Vigia's own self-play — corpora v2 and v3, both played and
+/// labelled by earlier versions of the engine — with lambda = 0.75, so a quarter
+/// of the training target is the game result and not the search score
+/// (docs/PlanNNUE.md, phase 7, point 2).
+///
+/// Corpus v1, labelled by the classical evaluation, was in every net from 0.29 and
+/// is retired in 0.33: adding it on top of v2+v3 is indistinguishable from zero,
+/// while replacing it with fresh data is worth +32 Elo. Earlier nets, each
+/// recoverable from its release tag: `atalaya-256-ef81d9ad` (v1+v2, lambda 0.75,
+/// 0.32), `atalaya-256-0bd21a25` (v1+v2, lambda 1, 0.31) and
+/// `atalaya-256-6f8033fc` (v1 alone, 0.29 and 0.30).
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
 /// executable, and not for convenience: the bench signs every experiment with
@@ -315,7 +320,7 @@ impl Net {
 /// It replaces `material-256.bin`, the hand-built network of phase 1, which
 /// stays in `nets/` because two tests below still pin its arithmetic: it is the
 /// only network whose every output can be recomputed by hand.
-static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-ef81d9ad.bin");
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-b3ef7165.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();

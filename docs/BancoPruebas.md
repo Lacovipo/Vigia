@@ -601,6 +601,27 @@ reproducible—, pero llamar «muestra independiente» a la segunda es más de l
 que hay, y agregarlas daría un intervalo algo más estrecho del que
 corresponde. La cifra se lee de la tanda de tope fijo, sola.
 
+### Y el empate hay que preinscribirlo, no solo la victoria
+
+Regla de la casa desde 0.33, y está escrita aquí porque allí faltó: **una
+preinscripción que solo dice qué hacer si gana alguien no es una
+preinscripción**. En `033-v1v2v3-contra-v2v3` el fichero decía «se rellena con
+la ganadora» y la tanda salió sin decisión (+2,1 Elo [−9,9, +14,1]); el criterio
+de desempate se escribió 86 segundos después de leer el resultado y se etiquetó,
+mal, como declarado de antemano. La elección resultante era defendible, pero la
+etiqueta no.
+
+Así que cuando una tanda pueda terminar en empate —y una de hipótesis pegadas
+**siempre** puede—, el fichero del experimento declara **antes de lanzar**:
+
+1. qué se hace si gana el candidato;
+2. qué se hace si gana la base;
+3. **qué se hace si no hay decisión**, que es el caso más probable de los tres.
+
+El desempate por defecto, salvo que el experimento diga otra cosa: **se queda la
+opción más barata de mantener y la que simplifica lo que viene**, y el coste
+máximo de equivocarse se anota con el intervalo en la mano.
+
 **Cómo desactivar la parada**, sin trucar `alpha`: `stats.rs` tiene un test,
 `identical_hypotheses_give_zero_llr`, que fija que con `elo0 = elo1` el LLR
 es cero exactamente. La configuración exige `elo0 < elo1`, así que se usa
@@ -969,6 +990,9 @@ desde los resultados) cada vez que se lee.
 | `032-lambda-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas, tope fijo: **+21,0 Elo** [+13,3, +28,7] |
 | `032-epocas-de-cola` | el control de 0.32: λ = 1 en la época 60 vs la época 57 de 0.31 | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,3 Elo [−8,6, +15,2]. La cola de entrenamiento que separaba las dos redes no compra nada |
 | `032-lambda-050` | red con λ = 0,50 vs 0.31, cribado | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,1 Elo [−9,1, +15,4]. El óptimo de λ no está por debajo de 0,75 |
+| `033-v1v2v3-contra-v2v3` | red de 108 M vs red de 72 M: qué aporta añadir el corpus v1 | `movetime` 100 ms | 1.000 parejas, tope fijo: +2,1 Elo [−9,9, +14,1], LOS 63 %. Sin decisión: v1 ya no aporta |
+| `033-corpus-v3-A` | red de v2+v3 (0.33) vs 0.32 | `movetime` 100 ms | 950 parejas: **`acepta_h1`**, +26,8 Elo |
+| `033-corpus-v3-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas, tope fijo: **+32,0 Elo** [+24,3, +39,7] |
 
 La tercera fila es la primera medición seria del proyecto y su lectura está
 desarrollada en `docs/Documentacion_tecnica.md` §8.6. En resumen: la prueba

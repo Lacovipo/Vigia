@@ -153,6 +153,12 @@ de nodos/segundo compra ~0,52 plies.
   la HCE frente al 34,9 %) y aun así gana. Con λ distintos las validaciones ni
   siquiera miden contra lo mismo; `train.py` imprime además la de λ = 1 (`cp`),
   que sí es comparable, pero tampoco aprueba nada: eso es del banco.
+- **Desde 0.33 el corpus se renueva, no se acumula.** Sustituir la mitad vieja
+  del corpus por partidas del motor actual, **a igual tamaño**, valió +32,0 Elo;
+  apilar esa mitad vieja encima no valió nada (+2,1 [−9,9, +14,1]). El corpus v1,
+  de la evaluación clásica, queda jubilado. **Pero eso no demuestra que el volumen
+  esté saturado**: lo que se añadió era el corpus más viejo, no volumen cualquiera.
+  Lo separa una red entrenada con v3 solo contra la de v2+v3, pendiente.
 - **Los checkpoints anteriores a 0.32 no son de la última época.** `train.py`
   guardaba el de **mejor validación**, y eso no era «casi la última» como se creyó:
   `atalaya-v2.pt` se quedó en la **época 30 de 60**, y es la base de

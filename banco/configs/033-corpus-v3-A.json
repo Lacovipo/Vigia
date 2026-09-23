@@ -8,14 +8,25 @@
   "_criterio_4": "lambda = 0,75, mismo lr, misma semilla, 60 epocas las dos, y cada una con",
   "_criterio_5": "la K de su corpus.",
 
-  "_ruta_candidato": "Se rellena con la ganadora de 033-v1v2v3-contra-v2v3 antes de lanzar.",
+  "_eleccion": "CORRECCION. Aqui se escribio que la eleccion seguia una regla declarada",
+  "_eleccion_2": "antes de mirar el resultado, y es falso: la tanda del volumen termino a las",
+  "_eleccion_3": "16:27:29 y esta regla se escribio a las 16:28:55, 86 segundos despues. Lo",
+  "_eleccion_4": "que SI estaba preinscrito era Se rellena con la ganadora, y la tanda dio",
+  "_eleccion_5": "+2,1 Elo [-9,9, +14,1], o sea sin decision: no hubo ganadora y la",
+  "_eleccion_6": "preinscripcion no cubria el empate.",
+  "_eleccion_7": "Lo que se hizo, dicho como fue: con las dos indistinguibles se llevo al",
+  "_eleccion_8": "banco la de v2+v3 por coste (1,4 h de GPU frente a 2,6) y porque jubila el",
+  "_eleccion_9": "corpus v1. Es una decision de ingenieria tomada despues de ver el empate.",
+  "_eleccion_10": "El argumento que si es solido a posteriori: la red publicada es la unica",
+  "_eleccion_11": "con una medida contra 0.32; la grande no se enfrento nunca a la base.",
+  "_eleccion_12": "Para la proxima, la regla de desempate queda escrita en §7 de BancoPruebas.",
 
   "esquema": 1,
   "id": "033-corpus-v3-A",
 
   "candidato": {
-    "nombre": "0.33-corpus-v3",
-    "ruta": "Release/Vigia 0.33-ganadora.exe",
+    "nombre": "0.33-v2+v3",
+    "ruta": "Release/Vigia 0.33-v2v3.exe",
     "opciones": { "Hash": 32, "Threads": 1 }
   },
 

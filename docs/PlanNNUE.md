@@ -1553,9 +1553,17 @@ vez:
    encima con las épocas desparejadas (57 contra 30).
 
    O sea que el volumen no está demostrado, está *sugerido*, y v3 existe para medirlo
-   limpio: la comparación del paso 2, **v1+v2+v3 (108 M) contra v2+v3 (72 M)**, cambia el
-   volumen y nada más, con las dos redes guardadas en la misma época. Con eso basta para
-   justificar la ventana, sin apoyarse en una cifra que mide otra cosa. Y λ añade un motivo
+   limpio: la comparación del paso 2, **v1+v2+v3 (108 M) contra v2+v3 (72 M)**, con las dos
+   redes guardadas en la misma época. Con eso basta para justificar la ventana, sin apoyarse
+   en una cifra que mide otra cosa.
+
+   **Aviso escrito después, cuando la revisión adversarial lo señaló**: aquí ponía que esa
+   comparación «cambia el volumen y nada más», y no es cierto. Cambian tres cosas: el
+   volumen, el **número de pasos de optimizador** —60 épocas sobre 63,8 M son 1,5 veces los
+   pasos que sobre 42,6 M, con el mismo coseno de tasa de aprendizaje— y la **K** del
+   objetivo, que se ajusta por corpus (163,3 contra 164,8). Las dos asimetrías juegan a
+   favor de la red grande, así que un resultado nulo sigue diciendo «lo que se le añade no
+   aporta»; lo que no puede decir es cuánto de eso es el volumen. Y λ añade un motivo
    propio: ahora el resultado de la partida entra en el objetivo, así que partidas jugadas
    por un motor más fuerte dan mejor señal que las de la HCE (v1) o las de 0.30 (v2). A
    **25.000 nodos**, porque el control de 0.31 no vio nada en doblarlos (con su salvedad de
@@ -1599,19 +1607,68 @@ vez:
    | muestras efectivas | 1,90 M (9,40 por parámetro) | 1,48 M (7,31) | **1,97 M (9,77)** |
    | coste de máquina | 18,9 h | 27,2 h | **10,3 h** |
 
-   **v3 es el corpus más informativo de los tres y el más barato, por bastante**: los mismos
-   36 M brutos que v2 valen un 33 % más de muestras efectivas y costaron 17 horas menos. La
-   razón es la de la fase 7.1 vista del revés: etiquetar a 50.000 nodos suaviza las etiquetas
-   y hace que las posiciones vecinas se parezcan más entre sí, así que cada una aporta menos.
-   A 25.000 la etiqueta es más áspera y rinde más por posición. Sumado a que el control de
-   0.31 no vio ganancia alguna en doblar los nodos, **el escalón de profundidad queda
-   descartado, no solo desaconsejado**.
+   **v3 empata con v1 en muestras efectivas y le saca un 33 % a v2, y es el más barato con
+   diferencia.** El empate con v1 —1,97 M contra 1,90 M— es de un 3,7 %, dentro del ruido de
+   este estimador, así que no se puede decir que sea «el más informativo de los tres»; contra
+   v2 la ventaja sí es real. Lo que no admite discusión es el coste: 10,3 h contra 18,9 y
+   27,2 por los mismos 36 M brutos.
+
+   La razón del hueco con v2 es la de la fase 7.1 vista del revés: etiquetar a 50.000 nodos
+   suaviza las etiquetas y hace que las posiciones vecinas se parezcan más entre sí, así que
+   cada una aporta menos. A 25.000 la etiqueta es más áspera y rinde más por posición. Con
+   eso, **el escalón de profundidad queda desaconsejado por coste**: el doble de horas de
+   máquina por corpus y un 33 % menos de muestras efectivas. Lo que **no** se puede decir es
+   que esté descartado por fuerza, y aquí se escribió: el único contraste de Elo que existe
+   —el control de 0.31— dio **+3,8 Elo [−8,7, +16,4] a favor** de las etiquetas profundas,
+   sin decisión y encima con el candidato profundo cuatro épocas corto. Es un resultado nulo,
+   no un resultado en contra.
 
    K ajustada sobre cada mezcla: **163,3** para v1+v2+v3 y **164,8** para v2+v3. Las dos
    redes, con λ = 0,75 y 60 épocas, quedan en `atalaya-256-fe9a48f3` (108 M) y
    `atalaya-256-b3ef7165` (72 M); las dos idénticas entero a entero entre el motor y Python
    en 2.000 posiciones, con 0,97 y 0,94 cp de error de cuantización y escalas 1,057 y 1,074
    frente a la HCE. Quién gana lo dice el banco.
+
+   **Resultado (0.33): +32,0 Elo [+24,3, +39,7] renovando el corpus, sin hacerlo más grande.**
+
+   | tanda | qué compara | resultado |
+   |---|---|---|
+   | `033-v1v2v3-contra-v2v3` | 108 M contra 72 M: qué aporta añadir v1 | +2,1 Elo [−9,9, +14,1], LOS 63 % — sin decisión |
+   | `033-corpus-v3-A` | v2+v3 contra 0.32, decisión | **`acepta_h1`** en 950 parejas, +26,8 |
+   | `033-corpus-v3-A-estimacion` | lo mismo, tope fijo | **+32,0 Elo** [+24,3, +39,7] en 2.500 parejas |
+
+   Las dos mezclas llevan **el mismo número de posiciones que 0.32** en un caso (v2+v3, 72 M)
+   y un 50 % más en el otro. Lo que cambia respecto de 0.32 es **cuál es la mitad vieja**: en
+   0.32 era v1 —partidas jugadas por la evaluación clásica y etiquetadas por ella— y en 0.33
+   es v3, jugado y etiquetado por 0.32. A igual tamaño, esa sustitución vale +32 Elo.
+
+   **Lo que se mide y lo que no**, que la revisión adversarial tuvo que corregir dos veces:
+
+   - Aquí se escribió «el volumen está saturado». **No es lo que se midió.** La tanda no
+     añade volumen genérico: añade **v1**, el único corpus del proyecto jugado y etiquetado
+     por la HCE, tres versiones por detrás. Lo que sostiene el resultado es «v1 ya no
+     aporta», y el intervalo solo excluye que valga más de ~14 Elo. Con 1.000 parejas no hay
+     potencia para hablar de saturación a la granularidad con la que este proyecto acepta
+     cambios (+5 Elo).
+   - Lo que **sí** se sostiene, y es la lección de la versión: **renovar bate a acumular**.
+     Sustituir la mitad vieja por datos del motor actual vale +32 Elo; apilar esa misma mitad
+     vieja encima no vale nada medible. El corpus deja de ser algo que crece y pasa a ser algo
+     que se renueva, lo que además abarata: 10,3 h por cada 36 M a 25.000 nodos.
+   - **El experimento que falta**, y que separa volumen de vejez sin generar nada nuevo:
+     entrenar una red con **v3 solo** (36 M) y enfrentarla a la de v2+v3 (72 M). Si la de 36 M
+     pierde con claridad, el volumen sigue comprando y lo que fallaba era v1; si empata, el
+     techo es de la red y no de los datos. Cuesta ~0,7 h de GPU y 40 min de 8 CPUs, y decide
+     si el siguiente paso es más corpus o **N = 384**. Sin eso, proponer N = 384 «porque los
+     datos saturan» sería repetir el error que este apartado acaba de corregir.
+
+   **Y una corrección sobre cómo se eligió la candidata**, porque el criterio importa tanto
+   como el resultado. El fichero del experimento decía «se rellena con la ganadora», la tanda
+   salió **sin decisión** y la preinscripción no cubría el empate. El criterio de desempate
+   —la más barata y la que simplifica— se escribió **86 segundos después** de leer el
+   resultado y se etiquetó como declarado de antemano, que es falso. La elección se mantiene,
+   con el argumento honesto: **la red publicada es la única con una medida contra 0.32**; la
+   grande no llegó a enfrentarse a la base. La regla de desempate queda ahora escrita en §7 de
+   `docs/BancoPruebas.md` para que la próxima vez sí esté antes.
 
    Las dos mezclas del paso 2 no son capricho: contestan de paso la pregunta que dejó
    abierta la corrección del punto 1 de esta misma fase —si v1, con partidas jugadas por la

@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.32.0 (`Cargo.toml`).
+**Versión:** 0.33.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -533,11 +533,17 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
 argumentada en `docs/PlanNNUE.md`. La red empotrada es
-**`atalaya-256-ef81d9ad`, entrenada con 72 millones de posiciones del propio
-Vigía** (los corpus v1 y v2 juntos) **y con λ = 0,75**, es decir dando un cuarto
-del peso del objetivo al resultado de la partida en vez de todo a la puntuación
-(0.32). Antes fue `atalaya-256-0bd21a25`, el mismo corpus con λ = 1 (0.31), y
-`atalaya-256-6f8033fc`, con los 36 M de v1 (0.29 y 0.30). Sustituye a la de la fase 1 —construida a mano, solo material—, que era
+**`atalaya-256-b3ef7165`, entrenada con 72 millones de posiciones del propio
+Vigía** —los corpus **v2 y v3**, los dos jugados y etiquetados por versiones
+anteriores del motor— **y con λ = 0,75**, es decir dando un cuarto del peso del
+objetivo al resultado de la partida en vez de todo a la puntuación (0.33).
+
+El corpus **v1**, que venía de la evaluación clásica y estuvo dentro de todas las
+redes desde 0.29, **queda jubilado en 0.33**: añadirlo encima de v2+v3 no se
+distingue de cero (+2,1 Elo [−9,9, +14,1]), mientras que sustituirlo por datos
+nuevos vale +32,0. Historial de redes: `atalaya-256-ef81d9ad` (v1+v2 con λ = 0,75,
+0.32), `atalaya-256-0bd21a25` (v1+v2 con λ = 1, 0.31) y `atalaya-256-6f8033fc`
+(v1 solo, 0.29 y 0.30). Sustituye a la de la fase 1 —construida a mano, solo material—, que era
 el andamio para probar el bucle entero antes de gastar horas generando datos y
 que sigue en `nets/` porque dos tests la cargan del fichero: es la única red cuya
 salida se puede recalcular con lápiz.
@@ -1612,6 +1618,20 @@ usarse para aprobar un cambio.
   reparto de finales que 0.31). Y ajusta **peor** las etiquetas de puntuación que
   la red de 0.31 —29,5 % de la pérdida de la HCE recortada frente a 34,9 %—
   mientras juega mejor, que es la señal de que esas etiquetas no son la verdad.
+
+- **0.33.0 — el corpus se renueva en vez de crecer.** **+32,0 Elo [+24,3, +39,7]**
+  sobre 0.32 en 2.500 parejas de tope fijo, tras `acepta_h1` en 950. La red nueva
+  se entrena con **el mismo número de posiciones** que la de 0.32 (72 M): lo que
+  cambia es que la mitad vieja —v1, jugado y etiquetado por la evaluación
+  clásica— se sustituye por **v3**, generado por 0.32 a 25.000 nodos en 10,28 h.
+
+  **Y la otra mitad del experimento, que es la que ordena lo que viene:** añadir
+  v1 *encima* de v2+v3, hasta 108 M, da **+2,1 Elo [−9,9, +14,1]**, o sea nada.
+  Renovar bate a acumular. Ojo con leer ahí «el volumen está saturado», que es
+  más de lo que se midió: lo que se añadió no fue volumen genérico sino el corpus
+  más viejo del proyecto, y el intervalo solo excluye que valiera más de ~14 Elo.
+  Lo separa un experimento que queda pendiente y cuesta una hora de GPU: una red
+  con v3 solo contra la de v2+v3 (§7, punto 2, del plan).
 
 ---
 
