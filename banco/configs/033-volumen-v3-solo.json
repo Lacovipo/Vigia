@@ -1,0 +1,65 @@
+{
+  "_": "Lo que 033-v1v2v3-contra-v2v3 no pudo separar: volumen contra vejez.",
+
+  "_porque": "Aquella tanda anadio v1 (viejo, de la evaluacion clasica) encima de",
+  "_porque_2": "v2+v3 y no dio nada, pero eso sostiene v1 ya no aporta, NO el volumen",
+  "_porque_3": "esta saturado: lo anadido no era volumen cualquiera. Esta tanda quita la",
+  "_porque_4": "mitad del corpus BUENO y ve que pasa: v3 solo (36 M, K 171,0) contra",
+  "_porque_5": "v2+v3 (72 M, K 164,8), las dos con lambda = 0,75, 60 epocas y misma semilla.",
+
+  "_como_se_lee": "Si la de 36 M pierde con claridad, el volumen sigue comprando y lo que",
+  "_como_se_lee_2": "fallaba era v1: el camino es mas corpus nuevo. Si empata, el techo es de la",
+  "_como_se_lee_3": "red y no de los datos, y el siguiente paso es N = 384.",
+
+  "_preinscripcion": "Declarado ANTES de jugar, incluido el caso sin decision: gane quien",
+  "_preinscripcion_2": "gane no se publica nada (las dos son peores o iguales que 0.33); esto solo",
+  "_preinscripcion_3": "decide la hoja de ruta. Sin decision se lee como no hay evidencia de que",
+  "_preinscripcion_4": "36 M basten, y el corpus se sigue renovando sin encogerlo.",
+
+  "_metodo": "Hipotesis pegadas y alpha/beta minusculos: el LLR no se mueve, la tanda",
+  "_metodo_2": "agota su tope y lo que se lee es el intervalo.",
+
+  "esquema": 1,
+  "id": "033-volumen-v3-solo",
+
+  "candidato": {
+    "nombre": "v3-solo-36M",
+    "ruta": "Release/Vigia 0.34-v3solo.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "v2+v3",
+    "ruta": "Release/Vigia 0.33-v2v3.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20260930,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-12 Elo.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 8,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/033-volumen-v3-solo"
+}
