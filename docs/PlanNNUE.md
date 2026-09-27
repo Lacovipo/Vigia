@@ -1654,12 +1654,18 @@ vez:
      Sustituir la mitad vieja por datos del motor actual vale +32 Elo; apilar esa misma mitad
      vieja encima no vale nada medible. El corpus deja de ser algo que crece y pasa a ser algo
      que se renueva, lo que además abarata: 10,3 h por cada 36 M a 25.000 nodos.
-   - **El experimento que falta**, y que separa volumen de vejez sin generar nada nuevo:
-     entrenar una red con **v3 solo** (36 M) y enfrentarla a la de v2+v3 (72 M). Si la de 36 M
-     pierde con claridad, el volumen sigue comprando y lo que fallaba era v1; si empata, el
-     techo es de la red y no de los datos. Cuesta ~0,7 h de GPU y 40 min de 8 CPUs, y decide
-     si el siguiente paso es más corpus o **N = 384**. Sin eso, proponer N = 384 «porque los
-     datos saturan» sería repetir el error que este apartado acaba de corregir.
+   - **El experimento que faltaba, ya hecho: el volumen NO está saturado.** Una red con
+     **v3 solo** (36 M, K 171,0) contra la de v2+v3 (72 M) pierde **−38,4 Elo
+     [−50,7, −26,2]** (`033-volumen-v3-solo`, 1.000 parejas). Quitar la mitad del corpus
+     bueno cuesta 38 Elo; añadir la mitad vieja no daba nada. Las dos cosas juntas dicen lo
+     mismo desde los dos lados: **los datos siguen comprando, pero solo si son frescos**.
+     Y de paso entierra la propuesta de saltar a **N = 384** «porque los datos saturan», que
+     era exactamente el error que este apartado acababa de corregir y que estuve a punto de
+     repetir.
+
+     Lo que el control sigue sin decir: si el volumen **fresco** paga más allá de 72 M. Eso
+     es lo que mide 0.34, con `v2+v3+v4` (108 M, todos etiquetados por una red) contra
+     `v3+v4` (72 M, los dos más nuevos).
 
    **Y una corrección sobre cómo se eligió la candidata**, porque el criterio importa tanto
    como el resultado. El fichero del experimento decía «se rellena con la ganadora», la tanda
