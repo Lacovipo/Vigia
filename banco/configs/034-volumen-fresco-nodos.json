@@ -1,0 +1,76 @@
+{
+  "_": "Fase 7.4: ¿paga el volumen cuando TODO el corpus es fresco?",
+
+  "_porque": "034-volumen-fresco cerro media pregunta: quitar la mitad del corpus bueno",
+  "_porque_2": "cuesta -38,4 Elo, asi que los datos no estaban saturados. Lo que sigue sin",
+  "_porque_3": "saberse es si pagan POR ENCIMA de 72 M, porque la unica vez que se probo a",
+  "_porque_4": "crecer, lo que se anadia era v1, el corpus viejo de la evaluacion clasica.",
+
+  "_que_cambia": "Candidato: v2+v3+v4, 108 M, todos etiquetados por una red (0.30, 0.32 y",
+  "_que_cambia_2": "0.33). Base: v3+v4, 72 M, los dos mas nuevos. Las dos con lambda = 0,75,",
+  "_que_cambia_3": "60 epocas, misma semilla, cada una con la K de su corpus (168,8 y 174,5).",
+  "_que_cambia_4": "Sigue habiendo dos asimetrias a favor de la grande, como en 033: 1,5 veces",
+  "_que_cambia_5": "los pasos de optimizador y distinta K. Un resultado nulo seguiria",
+  "_que_cambia_6": "significando que lo anadido no aporta; uno positivo no separa las tres.",
+
+  "_preinscripcion": "Declarado ANTES de jugar, con su caso sin decision:",
+  "_preinscripcion_2": "gana el candidato -> el corpus crece mientras sea fresco, y 0.34 sale de",
+  "_preinscripcion_3": "108 M; gana la base -> crecer no paga y el ciclo es renovar a 72 M;",
+  "_preinscripcion_4": "sin decision -> se publica la de 72 M por barata (misma regla que en 0.33,",
+  "_preinscripcion_5": "esta vez escrita antes) y el techo de los datos queda por encima de 72 M",
+  "_preinscripcion_6": "pero sin cuantificar, que no es lo mismo que saturado.",
+
+  "_control": "Por NODOS y no por tiempo, a proposito. Esta maquina nunca esta parada",
+  "_control_2": "-se mantiene al 50-60 % adrede, porque una CPU ociosa es tiempo tirado-, y",
+  "_control_3": "una tanda por tiempo sale mas ancha cuando hay carga. Las dos redes tienen",
+  "_control_4": "arquitectura identica y la misma velocidad, solo cambian los pesos, asi que",
+  "_control_5": "go nodes las ordena igual y ademas da el mismo resultado con la maquina",
+  "_control_6": "vacia o llena, bit a bit: esta comparacion interna no necesita ventana.",
+  "_control_7": "La cifra de la release contra 0.33 si ira a 100 ms, para ser comparable.",
+  "_metodo": "Hipotesis pegadas y alpha/beta minusculos: el LLR no se mueve, la tanda",
+  "_metodo_2": "agota su tope y lo que se lee es el intervalo.",
+
+  "esquema": 1,
+  "id": "034-volumen-fresco-nodos",
+
+  "candidato": {
+    "nombre": "v2+v3+v4-108M",
+    "ruta": "Release/Vigia 0.34-v2v3v4.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "v3+v4-72M",
+    "ruta": "Release/Vigia 0.34-v3v4.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20261002,
+    "barajar": true
+  },
+
+  "busqueda": { "nodos": 50000 },
+
+  "_partidas": "1.000 parejas con 8 workers: unos 40 minutos, +-12 Elo.",
+  "partidas": {
+    "max_parejas": 1000,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/034-volumen-fresco-nodos"
+}

@@ -1,0 +1,62 @@
+{
+  "_": "Fase 7.3, la CIFRA: cuanto vale el corpus v3, con tope fijo.",
+  "_2": "La decision la da 034-renovacion-A-estimacion.",
+
+  "_ruido": "Cuatro workers y no ocho, y con la maquina a medio gas a proposito: en",
+  "_ruido_2": "esta casa nunca esta parada. Una medicion pareada con colores invertidos y",
+  "_ruido_3": "movetime da a los dos motores los mismos 100 ms por jugada, asi que la carga",
+  "_ruido_4": "les quita nodos por igual: ensancha el intervalo, no lo desplaza. La cifra",
+  "_ruido_5": "sale insesgada y algo mas ancha, y asi queda escrito en la documentacion.",
+  "_metodo": "Una prueba secuencial que para al cruzar lo hace en un momento favorable",
+  "_metodo_2": "al candidato, y la magnitud sale sesgada al alza: medido cuatro veces en",
+  "_metodo_3": "este proyecto (+109,2 contra +72,4; +266,7 contra +250,4; +73,9 contra",
+  "_metodo_4": "+64,9; +23,6 contra +21,0). Con las hipotesis pegadas el LLR no se mueve,",
+  "_metodo_5": "la tanda agota su tope y el intervalo sale limpio.",
+
+  "_libro": "Semilla distinta de la de la decision, pero las aperturas se re-sortean",
+  "_libro_2": "del mismo libro de 20.000: unas 500 coinciden con las de la decision, asi",
+  "_libro_3": "que las dos tandas no se agregan. Esta se lee sola.",
+
+  "esquema": 1,
+  "id": "034-renovacion-A-estimacion",
+
+  "candidato": {
+    "nombre": "0.34-v3+v4",
+    "ruta": "Release/Vigia 0.34-v3v4.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.33",
+    "ruta": "Release/Vigia 0.33.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20261004,
+    "barajar": true
+  },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": {
+    "max_parejas": 2500,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/034-renovacion-A-estimacion"
+}
