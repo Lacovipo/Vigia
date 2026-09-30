@@ -408,7 +408,8 @@ tomar es el tamaño: sus redes necesitan SIMD explícito para ir rápido.
 | 7.3 — corpus v3 | **hecha y aprobada**: 36 M jugados y etiquetados por 0.32 a 25.000 nodos en 10,28 h; la red entrenada con v2+v3 (72 M, sin el corpus viejo) gana **+32,0 Elo [+24,3, +39,7]** a 0.32 y se publica como 0.33. **Renovar bate a acumular**: añadir v1 encima no da nada (+2,1 [−9,9, +14,1]) |
 | 7.3, lo que falta | **pendiente y barato**: una red con **v3 solo** (36 M) contra la de v2+v3 (72 M) separa volumen de vejez, que esta tanda no separa. ~0,7 h de GPU y 40 min de 8 CPUs, y decide si lo siguiente es más corpus o N = 384 |
 | 7.1, la atribución | **pendiente y barata**: `031-v2-contra-v1v2` enfrentó 57 épocas contra **30** (la regla vieja de mejor validación), así que sus +8,7 Elo no separan «mezclar v1 con v2» de «entrenar el doble». Para cerrarlo: reentrenar solo-v2 con el `train.py` de hoy y repetir la tanda. **2 h de GPU + 40 min de 8 CPUs**, y decide con qué corpus se entrena la próxima red |
-| 7, el resto | pendiente |
+| 7.4 — mas corpus | **medida y sin decision: la via se cierra**. Crecer a 108 M da +6,6 [-6,2, +19,4]; renovar v2 por v4 a tamano constante da +1,3 [-6,3, +8,8] y no llega a `acepta_h1`. **No se publica 0.34.** La renovacion pagaba por quitar datos malos (v1, de la HCE), no por ser nueva |
+| 7, el resto | pendiente. Con el corpus agotado, lo siguiente es **N = 384**, y lo primero de N = 384 es medir su peaje en nodos/segundo |
 
 La fase 1, criterio a criterio:
 

@@ -1680,6 +1680,41 @@ vez:
    abierta la corrección del punto 1 de esta misma fase —si v1, con partidas jugadas por la
    HCE, sigue aportando o ya estorba—, y esta vez con las dos redes guardadas en la misma
    época, que es justo lo que le faltó a `031-v2-contra-v1v2`.
+
+### Fase 7.4 — el corpus deja de pagar, y se cierra la via (0.34 no existe)
+
+Dos experimentos, los dos sin decision, y juntos cierran una linea de trabajo que
+venia dando de comer desde 0.31.
+
+| tanda | que compara | resultado |
+|---|---|---|
+| `034-volumen-fresco-nodos` | 108 M contra 72 M, **todo fresco**, por nodos | +6,6 Elo [-6,2, +19,4], LOS 84 % |
+| `034-renovacion-A` | v3+v4 (72 M) contra 0.33, decision a 100 ms | agota 4.000 parejas, LLR +2,16 de +2,94: **sin decision**. +6,6 [+0,6, +12,6] |
+| `034-renovacion-A-estimacion` | lo mismo, tope fijo | **+1,3 Elo** [-6,3, +8,8] en 2.500 parejas |
+
+**No se publica.** El criterio declarado era `acepta_h1` y no llego: la tanda de
+decision agoto su tope con el LLR a dos tercios de la frontera. La cifra
+independiente, +1,3 con el intervalo cruzando el cero, es coherente con una
+ganancia real de dos o tres Elo, por debajo de los +5 con los que este proyecto
+acepta un cambio. 0.33 sigue siendo la release.
+
+**Por que se ha agotado, que es lo que importa para lo siguiente.** Las dos
+palancas del corpus estan medidas y las dos se han aplanado:
+
+- **Volumen**: de ~38 Elo por doblar (36 -> 72 M) a ~11 (72 -> 108 M), con el
+  intervalo cruzando el cero. Un doblado cuesta ~27 h de maquina.
+- **Renovacion**: +32,0 Elo cuando lo que se sustituia era v1, jugado y
+  etiquetado por la evaluacion clasica; **+1,3** cuando lo que se sustituye es
+  v2, que ya estaba etiquetado por una red. O sea que la renovacion no pagaba
+  por ser nueva, pagaba por **quitar de enmedio datos malos**, y ya no quedan.
+
+La consecuencia es que **mas datos del mismo tipo no es el camino**, y esta vez
+con numeros en vez de con corazonadas. Lo que queda por probar, por orden de
+coste: ensanchar la red (N = 384), donde lo primero que hay que medir es el peaje
+en nodos/segundo, porque a 2,26 Elo por punto porcentual eso decide solo si el
+trato sale; y las mejoras de busqueda de `MejorasPendientes.md`, que llevan
+aparcadas desde 0.28 porque la NNUE las tapaba.
+
 3. **N = 384**, con la deuda ya cuantificada y el corpus ya dimensionado.
 4. **Los 4 rasgos de enroque**, si se decidió dejarlos fuera de v1 por simplicidad.
 5. **Re-sintonizar `CORRECTION_MAX = 300`** (`search.rs:135`), calibrado al ruido de la
