@@ -57,6 +57,28 @@ impl Medida {
     }
 }
 
+fn una_posicion(
+    motor: &mut Motor,
+    nombre: &str,
+    etiqueta: &str,
+    fen: &str,
+    profundidad: u32,
+    margen: Duration,
+) -> Result<Medida, String> {
+    // Tabla limpia en cada posición: si no, lo que se mide es el orden
+    // en que se recorrieron, no la velocidad del motor.
+    motor.nueva_partida()?;
+    let respuesta = motor
+        .pedir_jugada(Some(fen), &[], Limite::Profundidad(profundidad), margen)?
+        .ok_or_else(|| format!("{nombre}: no contestó en '{etiqueta}' dentro del plazo"))?;
+    Ok(Medida {
+        nombre: etiqueta.to_string(),
+        nodos: respuesta.nodes.unwrap_or(0),
+        ms: respuesta.elapsed.as_millis() as u64,
+        jugada: respuesta.uci,
+    })
+}
+
 pub fn medir(
     ruta: &Path,
     nombre: &str,
@@ -67,20 +89,59 @@ pub fn medir(
     let mut motor = Motor::lanzar(ruta, nombre, None, opciones, Duration::from_secs(10))?;
     let mut medidas = Vec::new();
     for (etiqueta, fen) in POSICIONES {
-        // Tabla limpia en cada posición: si no, lo que se mide es el orden
-        // en que se recorrieron, no la velocidad del motor.
-        motor.nueva_partida()?;
-        let respuesta = motor
-            .pedir_jugada(Some(fen), &[], Limite::Profundidad(profundidad), margen)?
-            .ok_or_else(|| format!("{nombre}: no contestó en '{etiqueta}' dentro del plazo"))?;
-        medidas.push(Medida {
-            nombre: (*etiqueta).to_string(),
-            nodos: respuesta.nodes.unwrap_or(0),
-            ms: respuesta.elapsed.as_millis() as u64,
-            jugada: respuesta.uci,
-        });
+        medidas.push(una_posicion(&mut motor, nombre, etiqueta, fen, profundidad, margen)?);
     }
     Ok(medidas)
+}
+
+/// En qué orden se miden los dos motores en cada posición: `true` = primero A.
+///
+/// Se alterna para que el segundo turno —que hereda la caché caliente de la
+/// posición y cualquier ráfaga de carga que empezara durante el primero— no le
+/// toque siempre al mismo bando.
+fn turnos(n: usize) -> Vec<(usize, bool)> {
+    (0..n).map(|i| (i, i % 2 == 0)).collect()
+}
+
+/// Mide los dos motores **posición a posición**, alternando quién va primero.
+///
+/// Medir A entero y luego B entero es lo que hacía este banco hasta 0.34, y en
+/// una máquina que no está en reposo no sirve: una carga que aparece a mitad de
+/// camino se la cobra **entera** a uno de los dos bandos. Medido con el mismo
+/// par de binarios y la máquina ocupada: +41,2 %, +13,6 %, +40,4 % y +49,9 %,
+/// con el nodos/segundo absoluto de la base oscilando un 30 % sin que nada
+/// cambiara. Alternando el orden entre pasadas eso se *detecta*, pero no se
+/// arregla.
+///
+/// Intercalando, las dos mediciones de cada posición caen en el mismo instante
+/// de la máquina, así que una deriva lenta afecta a los dos por igual y lo que
+/// queda es la diferencia real. No elimina el ruido —nada lo hace en una
+/// máquina compartida—, lo reparte.
+pub fn medir_pareados(
+    ruta_a: &Path,
+    nombre_a: &str,
+    ruta_b: &Path,
+    nombre_b: &str,
+    opciones: &[(String, String)],
+    profundidad: u32,
+    margen: Duration,
+) -> Result<(Vec<Medida>, Vec<Medida>), String> {
+    let saludo = Duration::from_secs(10);
+    let mut motor_a = Motor::lanzar(ruta_a, nombre_a, None, opciones, saludo)?;
+    let mut motor_b = Motor::lanzar(ruta_b, nombre_b, None, opciones, saludo)?;
+    let mut medidas_a = Vec::with_capacity(POSICIONES.len());
+    let mut medidas_b = Vec::with_capacity(POSICIONES.len());
+    for (i, a_primero) in turnos(POSICIONES.len()) {
+        let (etiqueta, fen) = POSICIONES[i];
+        if a_primero {
+            medidas_a.push(una_posicion(&mut motor_a, nombre_a, etiqueta, fen, profundidad, margen)?);
+            medidas_b.push(una_posicion(&mut motor_b, nombre_b, etiqueta, fen, profundidad, margen)?);
+        } else {
+            medidas_b.push(una_posicion(&mut motor_b, nombre_b, etiqueta, fen, profundidad, margen)?);
+            medidas_a.push(una_posicion(&mut motor_a, nombre_a, etiqueta, fen, profundidad, margen)?);
+        }
+    }
+    Ok((medidas_a, medidas_b))
 }
 
 pub fn total_nodos(medidas: &[Medida]) -> u64 {
@@ -213,6 +274,17 @@ mod tests {
         let antes = nombres.len();
         nombres.dedup();
         assert_eq!(nombres.len(), antes, "hay nombres repetidos en el banco");
+    }
+
+    #[test]
+    fn the_interleaving_gives_each_engine_the_same_number_of_first_turns() {
+        let t = turnos(POSICIONES.len());
+        assert_eq!(t.len(), POSICIONES.len());
+        // Cada posición se mide una vez y en su orden.
+        assert!(t.iter().enumerate().all(|(i, (indice, _))| i == *indice));
+        // Y el turno de salida se reparte: con doce posiciones, seis y seis.
+        let primeros_a = t.iter().filter(|(_, a)| *a).count();
+        assert_eq!(primeros_a, POSICIONES.len() - primeros_a);
     }
 
     fn medida(nombre: &str, nodos: u64, ms: u64) -> Medida {

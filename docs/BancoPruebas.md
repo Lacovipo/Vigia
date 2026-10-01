@@ -389,6 +389,27 @@ rustc pueden multiplicar el coste por cuatro sin que falle un solo test. Si el
 nps de la red cae sin motivo, se mira el ensamblador del binario, con la trampa
 que cuenta §4 de `docs/Documentacion_tecnica.md`.
 
+### Se miden intercalados, no uno entero y luego el otro (0.34)
+
+Hasta 0.34 el comando medía el motor A en las doce posiciones y después el B. En
+una máquina en reposo da igual; en una que **nunca** está en reposo, no: una
+carga que aparece a mitad de camino se la cobra entera a uno de los dos bandos.
+Medido con el mismo par de binarios y la máquina ocupada: **+41,2 %, +13,6 %,
++40,4 % y +49,9 %**, con el nodos/segundo absoluto de la base oscilando un 30 %
+sin que nada cambiara. Alternar el orden entre pasadas lo *detecta*; no lo
+arregla.
+
+Desde 0.34 se mide **posición a posición**, con los dos motores vivos a la vez y
+**alternando quién va primero** (seis y seis en las doce posiciones), para que el
+segundo turno —que hereda la caché caliente y cualquier ráfaga que empezara
+durante el primero— no le toque siempre al mismo. Las dos medidas de cada
+posición caen así en el mismo instante de la máquina: una deriva lenta afecta a
+los dos por igual y lo que queda es la diferencia real.
+
+No elimina el ruido, que en una máquina compartida no lo elimina nada: lo
+reparte. Y el criterio duro no cambia — **nodos idénticos posición a posición**,
+o esto no aprueba nada.
+
 ## 5. `banco epd` — no-regresión táctica
 
 ```bash
@@ -962,7 +983,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 400 tests (264 motor + 125 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 401 tests (264 motor + 126 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -1040,7 +1061,7 @@ mantiene o cae.
 | `epd.rs` | suites EPD |
 | `json.rs` | JSON mínimo, determinista |
 
-125 tests propios, incluidos en `cargo test --release`.
+126 tests propios, incluidos en `cargo test --release`.
 
 Aquí figuraba también un `sha256.rs` del banco, y no existe: el SHA-256 vive en
 `src/sha256.rs`, en la biblioteca, compartido con el cargador de la red, y el

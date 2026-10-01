@@ -346,16 +346,22 @@ fn cmd_velocidad(args: &Args) -> Result<ExitCode, String> {
 
     let margen = Duration::from_secs(300);
     let nombre_a = ruta_a.display().to_string();
-    let medidas_a = velocidad::medir(&ruta_a, "A", &opciones, profundidad, margen)?;
-    velocidad::imprimir_una(&nombre_a, &medidas_a, profundidad);
 
-    if let Some(ruta_b) = ruta_b {
-        let nombre_b = ruta_b.display().to_string();
-        let medidas_b = velocidad::medir(&ruta_b, "B", &opciones, profundidad, margen)?;
-        println!();
-        velocidad::imprimir_una(&nombre_b, &medidas_b, profundidad);
-        velocidad::imprimir_comparacion(&nombre_a, &medidas_a, &nombre_b, &medidas_b, profundidad);
-    }
+    // Con dos motores se miden intercalados, posición a posición: medir A
+    // entero y luego B entero regala la diferencia a cualquier carga que
+    // aparezca a mitad de camino (ver `velocidad::medir_pareados`).
+    let Some(ruta_b) = ruta_b else {
+        let medidas_a = velocidad::medir(&ruta_a, "A", &opciones, profundidad, margen)?;
+        velocidad::imprimir_una(&nombre_a, &medidas_a, profundidad);
+        return Ok(ExitCode::SUCCESS);
+    };
+    let nombre_b = ruta_b.display().to_string();
+    let (medidas_a, medidas_b) =
+        velocidad::medir_pareados(&ruta_a, "A", &ruta_b, "B", &opciones, profundidad, margen)?;
+    velocidad::imprimir_una(&nombre_a, &medidas_a, profundidad);
+    println!();
+    velocidad::imprimir_una(&nombre_b, &medidas_b, profundidad);
+    velocidad::imprimir_comparacion(&nombre_a, &medidas_a, &nombre_b, &medidas_b, profundidad);
     Ok(ExitCode::SUCCESS)
 }
 

@@ -520,7 +520,11 @@ Por orden de utilidad para lo que viene:
    verificación: no avisa de que lleva tiempo sin poder correr, simplemente
    nadie la corre.
 
-1quater. **`banco velocidad` debería intercalar A y B posición a posición**,
+1quater. ~~**`banco velocidad` debería intercalar A y B posición a posición**~~
+   → **hecho en 0.34**, y dejó de ser una mejora para ser un prerrequisito: con
+   la máquina mantenida a propósito al 50–60 % de carga, medir A entero y luego
+   B entero no mide nada. Detalle en §4 de `docs/BancoPruebas.md`. Lo que sigue
+   vale como relato de por qué:
    en vez de medir A entero y luego B entero. Hallazgo de 0.28: repitiendo
    la misma comparación con la máquina ocupada salieron +41,2 %, +13,6 %,
    +40,4 % y +49,9 % para el mismo par de binarios, con el nps absoluto de
