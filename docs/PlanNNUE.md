@@ -1903,6 +1903,61 @@ compilada.
 
 ---
 
+### 10.4 Lo que hacen diez motores de primera fila (encuesta del 06/10/2026)
+
+El usuario dejó los fuentes de 25 motores top en `D:\desa\_Top_Ajedrez` «para tomar
+ideas, conceptos y mecanismos, no para copiar código» (casi todos son GPLv3 o AGPLv3).
+Antes de ensanchar la red a 384 se leyó cómo está hecha la de diez de ellos, uno por
+lector y con esa regla escrita en el encargo. Lo que sigue son hechos de arquitectura.
+
+| motor | espejo horizontal | cubos de rey | 1.ª capa | activación | cubos de salida | datos |
+|---|---|---|---|---|---|---|
+| Reckless (Rust) | sí | 10 | 768 | pares | 8, por piezas | no documentado |
+| viridithas (Rust) | sí | 16 | 1024 | pares | 8, por piezas | propios, **25.000 nodos/jugada** |
+| icarus (Rust) | sí | 14 | 1024 | pares | ninguno | propios |
+| Obsidian | sí | 13 | 1536 | pares | 8, por piezas | de Lc0 |
+| Alexandria | sí | 16 | 1536 | pares | 8, por piezas | de Lc0 |
+| PlentyChess | sí | 12 | 1024 | pares | 8, por piezas | **15.000 M** propios |
+| Stormphrax | sí | 16 | 1024 | pares | 8, por piezas | propios, 24.000 nodos |
+| berserk | sí | 16 | 1024 | CReLU | ninguno | propios |
+| Halogen | sí | 8 | 768 | pares | 8, por piezas | propios, 40.000 nodos |
+| Caissa | sí | 32 | 1536 | pares | 8, por piezas | **20.500 M** propios |
+| **Vigía 0.33** | **no** | ninguno | 256 | SCReLU | 8, por piezas | 72 M propios, 25.000 nodos |
+
+Lo que se lee ahí, por orden de lo que le importa a Vigía:
+
+- **El espejo horizontal es unánime: diez de diez.** Reflejan el tablero cuando el rey
+  propio está en las columnas e–h. Y los diez lectores, por separado, lo señalaron como
+  la idea más barata para un motor con pocos datos: no añade un parámetro. Es lo único de
+  la tabla que Vigía no tenía y podía tener sin pedir más corpus. Se prueba en 0.34.
+- **Pero ninguno lo usa solo.** Todos lo combinan con cubos de rey, de 8 a 32, y ahí es
+  donde el espejo ahorra de verdad: parte por dos el número de cubos. Sobre una red plana
+  como Atalaya no ahorra nada; lo que hace es dar a los mismos 772 pesos un significado
+  relativo al flanco del rey. Que sea unánime **con** cubos no dice cuánto vale **sin**
+  ellos, y eso solo lo contesta el banco.
+- **Los cubos de rey están repartidos igual en todos**: finos en las dos primeras filas
+  —un cubo por columna de medio tablero— y uno o dos para todo lo demás. PlentyChess
+  añade el detalle que los hace viables con pocos datos: un **factorizador** común de 768
+  rasgos que se entrena encima y se pliega al exportar, de modo que un cubo raro hereda
+  lo aprendido en común. Es la receta que §10.1 dejó apuntada para la fase 7.7, y aquí
+  aparece confirmada en un motor que la usa.
+- **La escala de datos es otra liga**: 15.000 y 20.500 millones de posiciones los que lo
+  dicen, contra 72 M. Doscientas veces más. Eso sitúa los ~560 Elo que separan a Vigía de
+  la cabeza de la lista del usuario, y dice que las anchuras de 768 a 1536 no son para
+  este corpus: una red de 1536 con 72 M memorizaría.
+- **Los 25.000 nodos por jugada del generador no eran una rareza**: viridithas usa 25.000
+  y Stormphrax 24.000. Es la misma cifra a la que llegó este proyecto por su cuenta,
+  midiendo, en 0.31 y 0.33.
+- **Los 8 cubos de salida por número de piezas** son lo habitual (ocho de diez), y Vigía
+  ya los tiene.
+- **La activación por pares** —recortar, multiplicar la neurona *i* por la *i + N/2*—
+  la usan nueve de diez, seguida de una cabeza pequeña (16 → 32 → 1). Es un cambio de
+  arquitectura mayor que el espejo o la anchura y va detrás de los dos.
+
+**Orden que sale de aquí, una cosa cada vez:** el espejo (sin coste de parámetros);
+después la anchura, N = 384, cuyo peaje está medido en ~2,9 % de nodos/segundo; y solo
+con más corpus, de 2 a 4 cubos de rey con factorizador.
+
 ## 11. Documentación que hay que actualizar al terminar
 
 - **`Documentacion_tecnica.md` §4**: reescrito entero. **Las tres reglas de escritura de

@@ -1,0 +1,68 @@
+{
+  "_": "Fase 7.5: el espejo horizontal de la red, contra 0.33.",
+  "_que_cambia": "La red con espejo (atalaya-256-c5417606) se entreno con el MISMO corpus",
+  "_que_cambia_2": "(v2+v3, 72 M), la misma K = 164,8, el mismo lambda = 0,75, las mismas 60",
+  "_que_cambia_3": "epocas y la misma semilla que la de 0.33. Entre los dos binarios cambia el",
+  "_que_cambia_4": "indexado de los rasgos y el codigo que lo mantiene, y nada mas.",
+  "_lo_que_mide": "A 100 ms mide el efecto NETO: lo que el espejo mejora la evaluacion menos",
+  "_lo_que_mide_2": "lo que cuesta en velocidad. El coste esta medido aparte con el truco de la",
+  "_lo_que_mide_3": "red simetrica y arbol identico: -1,75 % +- 1,07 % de nodos/segundo, unos 2 a",
+  "_lo_que_mide_4": "4 Elo. La senal previa: validacion 0,012382 frente a 0,012462 de 0.33.",
+  "_preinscripcion": "Declarado ANTES de jugar, con sus tres ramas:",
+  "_preinscripcion_2": "acepta_h1 -> el espejo se publica como 0.34.",
+  "_preinscripcion_3": "acepta_h0 -> no llega a +5 Elo: el espejo NO entra en main; se guarda el",
+  "_preinscripcion_4": "parche y se documenta como medido y descartado.",
+  "_preinscripcion_5": "sin decision -> tampoco entra. El espejo anade un formato de red nuevo y",
+  "_preinscripcion_6": "una reconstruccion en el nucleo; esa complejidad solo se paga con ganancia",
+  "_preinscripcion_7": "medida. Lo que si se queda en cualquier caso: la reanudacion del",
+  "_preinscripcion_8": "entrenador y la marca de indexado del checkpoint, que no dependen de el.",
+  "_ruido": "Cuatro workers con la maquina a medio gas, que es como esta siempre. En una",
+  "_ruido_2": "medida pareada la carga ensancha el intervalo pero no lo desplaza.",
+  "esquema": 1,
+  "id": "034-espejo-A-estimacion",
+  "candidato": {
+    "nombre": "0.34-espejo",
+    "ruta": "Release/Vigia 0.34-espejo.exe",
+    "opciones": {
+      "Hash": 32,
+      "Threads": 1
+    }
+  },
+  "base": {
+    "nombre": "0.33",
+    "ruta": "Release/Vigia 0.33.exe",
+    "opciones": {
+      "Hash": 32,
+      "Threads": 1
+    }
+  },
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20261007,
+    "barajar": true
+  },
+  "busqueda": {
+    "movetime_ms": 100
+  },
+  "partidas": {
+    "max_parejas": 2500,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+  "sprt": {
+    "elo0": 9.9,
+    "elo1": 10.1,
+    "alpha": 0.001,
+    "beta": 0.001
+  },
+  "salida": "banco/resultados/034-espejo-A-estimacion"
+}
