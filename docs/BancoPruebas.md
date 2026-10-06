@@ -389,26 +389,74 @@ rustc pueden multiplicar el coste por cuatro sin que falle un solo test. Si el
 nps de la red cae sin motivo, se mira el ensamblador del binario, con la trampa
 que cuenta §4 de `docs/Documentacion_tecnica.md`.
 
-### Se miden intercalados, no uno entero y luego el otro (0.34)
+### Cómo mide, y las dos veces que midió mal (0.34)
 
-Hasta 0.34 el comando medía el motor A en las doce posiciones y después el B. En
-una máquina en reposo da igual; en una que **nunca** está en reposo, no: una
-carga que aparece a mitad de camino se la cobra entera a uno de los dos bandos.
-Medido con el mismo par de binarios y la máquina ocupada: **+41,2 %, +13,6 %,
-+40,4 % y +49,9 %**, con el nodos/segundo absoluto de la base oscilando un 30 %
-sin que nada cambiara. Alternar el orden entre pasadas lo *detecta*; no lo
-arregla.
+Esta máquina no está nunca en reposo: se mantiene a propósito al 50–60 % de
+carga. Un banco de velocidad que solo funciona con la máquina quieta, aquí no
+funciona. Tres diseños, y los dos primeros fallaron de formas que conviene tener
+delante porque la segunda **parecía** estar bien:
 
-Desde 0.34 se mide **posición a posición**, con los dos motores vivos a la vez y
-**alternando quién va primero** (seis y seis en las doce posiciones), para que el
-segundo turno —que hereda la caché caliente y cualquier ráfaga que empezara
-durante el primero— no le toque siempre al mismo. Las dos medidas de cada
-posición caen así en el mismo instante de la máquina: una deriva lenta afecta a
-los dos por igual y lo que queda es la diferencia real.
+**1. A entero y luego B entero** (hasta 0.34). Una carga que aparece a mitad de
+camino se la cobra entera a uno de los dos bandos. Con el mismo par de binarios:
++41,2 %, +13,6 %, +40,4 % y +49,9 %.
 
-No elimina el ruido, que en una máquina compartida no lo elimina nada: lo
-reparte. Y el criterio duro no cambia — **nodos idénticos posición a posición**,
-o esto no aprueba nada.
+**2. Intercalado, una medición por motor y posición** (unas horas). Tres pasadas
+seguidas dieron 1,07, 1,07 y 1,06, y esa banda tan estrecha se leyó como que el
+problema estaba resuelto. **Tenía un sesgo fijo del 6 %**: el mismo binario
+contra su propia copia daba 0,94. Dos causas que se sumaban: cada posición, medida
+una sola vez, sale con ±15 % de ruido; y la cifra era nodos sumados entre tiempo
+sumado, así que la decidía una sola posición —`promocion`, casi la mitad de los
+nodos—, en la que siempre le tocaba medir segundo al mismo motor.
+
+> **Una banda estrecha no es ausencia de sesgo.** Repetir una medida sesgada da
+> una medida sesgada muy precisa. Lo único que detecta un sesgo es medir algo
+> cuyo resultado se conoce de antemano.
+
+**3. El actual.** Cuatro cosas, y cada una cierra un agujero concreto:
+
+- **Dos bloques cruzados por posición**, A-B-B-A y B-A-A-B: ocho búsquedas. Cada
+  motor mide antes y después que el otro (reparte el coste de ir segundo) y es
+  una vez «el de dentro» —sus dos búsquedas seguidas, la segunda con la caché y
+  el predictor de saltos ya entrenados en ese árbol— y otra «el de fuera». Con
+  un solo bloque A-B-B-A, un binario contra su copia aún daba de 1,016 a 1,031.
+- **Media geométrica de las relaciones por posición**, con todas pesando lo
+  mismo, en vez de nodos sumados entre tiempo sumado.
+- **Tiempos en microsegundos**: hay posiciones de 50 ms, y con milisegundos
+  enteros cada medición llevaba ±2 % solo de redondeo.
+- **`--pasadas N`**, que repite todo N veces y da la media con su **error
+  típico**. Es lo que convierte la cifra en una medida.
+
+```bash
+./target/release/banco.exe velocidad --motor <nuevo> --contra <viejo> \
+    --profundidad 12 --hash 32 --hilos 1 --pasadas 12
+```
+
+**Calibrado como se calibra un instrumento**: midiendo algo de resultado
+conocido. Un binario contra su propia copia, 12 pasadas, con la máquina cargada:
+**0,992 ± 0,76 %**. Compatible con 1,00, sin tendencia.
+
+**Y su resolución, que hay que conocer antes de usarlo**: una pasada sola se
+mueve ±2 % (entre 0,956 y 1,041 en esa calibración). Doce pasadas dejan el error
+típico en ~0,8–1 %. O sea que **un efecto del 1 % no se resuelve con menos de
+unas doce pasadas**, y uno del 0,5 % pide del orden de cincuenta. Antes de citar
+una diferencia, mirar su error típico: 0,985 ± 0,4 % dice que A es más lento;
+0,985 ± 1,2 % no dice nada.
+
+El criterio duro no cambia: **nodos idénticos posición a posición**, o esto no
+aprueba nada. Y un motor que no repite sus propios nodos de una búsqueda a la
+siguiente se rechaza con un error, porque entonces no es determinista y el
+criterio no significa nada.
+
+#### El truco de la red simétrica, para medir un cambio que sí mueve los nodos
+
+Un cambio en la evaluación mueve los nodos por definición, así que el criterio
+de arriba parece dejarlo fuera. No siempre: si el cambio es **de indexado** y no
+de pesos, se puede construir una red con la que el código viejo y el nuevo
+calculen exactamente los mismos enteros. Para el espejo horizontal que se probó en 0.34 fue
+copiar cada fila de las columnas e–h de su reflejo: con esos pesos, leer con
+espejo o sin él da lo mismo, el árbol es idéntico y la diferencia de reloj es el
+coste puro del código nuevo. Idea de la revisión adversarial de 0.34, y la
+generalización del truco de duplicar una llamada que se usa desde 0.28.
 
 ## 5. `banco epd` — no-regresión táctica
 
@@ -983,7 +1031,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 401 tests (264 motor + 126 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 404 tests (264 motor + 129 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -1061,7 +1109,7 @@ mantiene o cae.
 | `epd.rs` | suites EPD |
 | `json.rs` | JSON mínimo, determinista |
 
-126 tests propios, incluidos en `cargo test --release`.
+129 tests propios, incluidos en `cargo test --release`.
 
 Aquí figuraba también un `sha256.rs` del banco, y no existe: el SHA-256 vive en
 `src/sha256.rs`, en la biblioteca, compartido con el cargador de la red, y el

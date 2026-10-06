@@ -52,6 +52,7 @@ USO
   banco informe   --run <directorio>
   banco humo      --motor <exe> [--libro <epd>] [--parejas N] [--nodos N] [--salida <dir>]
   banco velocidad --motor <exe> [--contra <exe>] [--profundidad N] [--hash MB] [--hilos N]
+                  [--pasadas N]
                   [--uci Nombre=valor,...]
   banco epd       --fichero <suite.epd> --motor <exe> [--movetime N | --nodos N] [--hash MB]
                   [--uci Nombre=valor,...]
@@ -341,6 +342,7 @@ fn cmd_velocidad(args: &Args) -> Result<ExitCode, String> {
     let ruta_a = PathBuf::from(args.requerido("motor")?);
     let ruta_b = args.opcional("contra").map(PathBuf::from);
     let profundidad = args.numero("profundidad", 12)? as u32;
+    let pasadas = args.numero("pasadas", 1)?.max(1);
     let opciones = opciones_uci(args)?;
     args.fin()?;
 
@@ -362,6 +364,26 @@ fn cmd_velocidad(args: &Args) -> Result<ExitCode, String> {
     println!();
     velocidad::imprimir_una(&nombre_b, &medidas_b, profundidad);
     velocidad::imprimir_comparacion(&nombre_a, &medidas_a, &nombre_b, &medidas_b, profundidad);
+    if pasadas == 1 {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Una pasada resuelve lo que resuelve: en una máquina con carga, el mismo
+    // binario contra su copia sale entre 0,99 y 1,03. Para un efecto del 1 %
+    // hay que promediar, y decir con cuánta dispersión se promedió.
+    let mut relaciones = vec![velocidad::relacion_geometrica(&medidas_a, &medidas_b).map(|r| r.0).unwrap_or(0.0)];
+    let mut divergencias = velocidad::divergencias(&medidas_a, &medidas_b).len();
+    for _ in 1..pasadas {
+        let (a, b) = velocidad::medir_pareados(&ruta_a, "A", &ruta_b, "B", &opciones, profundidad, margen)?;
+        relaciones.push(velocidad::relacion_geometrica(&a, &b).map(|r| r.0).unwrap_or(0.0));
+        divergencias += velocidad::divergencias(&a, &b).len();
+    }
+    println!();
+    println!("=== {pasadas} pasadas ===");
+    println!("{}", velocidad::resumen_de_pasadas(&relaciones));
+    if divergencias > 0 {
+        println!("AVISO: los nodos difieren; esto no es un cambio de solo velocidad y la cifra no aprueba nada.");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
