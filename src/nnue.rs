@@ -5,15 +5,20 @@
 //! shaped the way it is — which is the part a refactor loses without a single
 //! test failing.
 //!
-//! `772 -> 2x256 -> 1`: flat piece-square features seen from each side, plus
-//! the four castling rights, feed one `i16` accumulator per perspective, then
-//! a squared clipped ReLU, then an output layer picked by piece count.
+//! `772 -> 2x256 -> 1`: piece-square features seen from each side and
+//! mirrored left to right by the file of that side's own king, plus the four
+//! castling rights, feed one `i16` accumulator per perspective, then a squared
+//! clipped ReLU, then an output layer picked by piece count.
 //!
-//! **The invariant the whole design rests on:** no feature depends on more
-//! than one piece, so a move changes at most a handful of features and the
-//! accumulator is never rebuilt from scratch during a search. A king move
-//! costs exactly what a pawn move costs. The only full refresh is at the root
-//! of each search, once per thread.
+//! **The invariant the design rests on, and its one exception:** apart from
+//! the mirror, no feature depends on more than one piece, so a move changes a
+//! handful of features and the accumulator is updated, not rebuilt. The
+//! exception arrived with the mirror in 0.34: when a king crosses between the
+//! d and e files — queenside castling included — every square changes meaning
+//! for that king's own perspective, and that half is rebuilt from nothing.
+//! That is about 3 % of the pushes of a search and 9 % in a pawn ending, not
+//! "a handful of times in a game": the search tries king moves the game never
+//! plays. The other perspective, and every other move, stay incremental.
 //!
 //! Every constant below has a twin in `tools/nnue/netfmt.py`, and the
 //! golden-vector test keeps the two from disagreeing in silence: a feature
@@ -55,7 +60,11 @@ const MAX_ACTIVE_FEATURES: usize = 36;
 const MAX_ACTIVATION: i64 = ((QA as i64) * (QA as i64)) >> 4;
 
 const HEADER_LEN: usize = 128;
-const MAGIC: &[u8; 8] = b"VIGIANN1";
+/// `VIGIANN2` since 0.34: the horizontal mirror changes what every feature
+/// index means without changing a single size, so `ARCH` cannot tell a mirrored
+/// network from an unmirrored one. A file of the other kind would load, pass
+/// every bound and evaluate garbage; with its own magic it is refused instead.
+const MAGIC: &[u8; 8] = b"VIGIANN2";
 /// The architecture packed into one word, so a file built for another
 /// topology or quantization is refused on load instead of being read as
 /// garbage. Packed the same way in `netfmt.py`.
@@ -81,16 +90,42 @@ const ENDGAME_DAMPERS: bool = false;
 
 // ---------------------------------------------------------------- features
 
+/// Whether a perspective whose own king stands on `king` sees the board
+/// reflected left to right: it does when the king is on files e–h.
+///
+/// This is the horizontal mirror every strong engine has and Atalaya lacked
+/// until 0.34. It costs no weights at all — the table is the same 772 rows —
+/// and it changes what those rows mean: a square is no longer "c3", it is "two
+/// files from my king's wing". King safety, pawn shelters and attacks on the
+/// castled king are the same pattern on either wing, and without the mirror
+/// the network had to learn each one twice, from half the examples each time.
+///
+/// The price is that a king crossing between the d and e files changes the
+/// meaning of every square for that perspective, so its half of the
+/// accumulator has to be rebuilt instead of updated (`push_portable`).
+#[inline(always)]
+fn mirrors(king: Square) -> bool {
+    king.file() >= 4
+}
+
+/// The mirror of `perspective` in `board`, from where its king stands.
+#[inline(always)]
+fn perspective_mirrors(board: &Board, perspective: Color) -> bool {
+    // A board without that king only exists in tests; it reads as unmirrored.
+    (board.pieces_of(perspective, PieceType::King).0.trailing_zeros() & 7) >= 4
+}
+
 /// Feature index of `piece` on `square`, seen from `perspective`.
 ///
-/// Two operations, no table. The square is mirrored vertically for Black, and
-/// the piece is "ours" or "theirs" relative to whoever is looking rather than
-/// white or black, which is what lets both perspectives share one weight
+/// Three operations, no table. The square is flipped vertically for Black,
+/// horizontally when the perspective's own king is on files e–h (`mirror`),
+/// and the piece is "ours" or "theirs" relative to whoever is looking rather
+/// than white or black, which is what lets both perspectives share one weight
 /// table. The king is `kind = 5`: one more piece, not an index into anything.
 #[inline(always)]
-fn piece_feature(perspective: Color, piece: Piece, square: Square) -> usize {
+fn piece_feature(perspective: Color, mirror: bool, piece: Piece, square: Square) -> usize {
     let p = perspective as usize;
-    let s = (square.0 as usize) ^ (56 * p);
+    let s = (square.0 as usize) ^ (56 * p) ^ (7 * mirror as usize);
     let theirs = (piece.color as usize != p) as usize;
     theirs * 384 + piece.kind as usize * 64 + s
 }
@@ -101,28 +136,32 @@ fn piece_feature(perspective: Color, piece: Piece, square: Square) -> usize {
 /// see by any route: a king on g1 with a rook on f1 is the same position as a
 /// king on g1 that can still castle. It changes at most once per side per
 /// game and depends on nothing else, so it keeps the invariant.
+///
+/// Under the mirror the two wings swap, like the squares do: the right that
+/// belongs to the h-file rook is, in a reflected board, the one on the a-file.
 #[inline(always)]
-fn castling_feature(perspective: Color, right: u8) -> usize {
+fn castling_feature(perspective: Color, mirror: bool, right: u8) -> usize {
     let owner = if right & (CastlingRights::WHITE_KINGSIDE | CastlingRights::WHITE_QUEENSIDE) != 0 {
         Color::White
     } else {
         Color::Black
     };
     let kingside = right & (CastlingRights::WHITE_KINGSIDE | CastlingRights::BLACK_KINGSIDE) != 0;
-    PIECE_FEATURES + ((owner != perspective) as usize) * 2 + kingside as usize
+    PIECE_FEATURES + ((owner != perspective) as usize) * 2 + (kingside != mirror) as usize
 }
 
 fn for_each_active_feature(board: &Board, perspective: Color, mut visit: impl FnMut(usize)) {
+    let mirror = perspective_mirrors(board, perspective);
     for color in [Color::White, Color::Black] {
         for kind in PieceType::ALL {
             for square in board.pieces_of(color, kind) {
-                visit(piece_feature(perspective, Piece::new(color, kind), square));
+                visit(piece_feature(perspective, mirror, Piece::new(color, kind), square));
             }
         }
     }
     for right in RIGHTS {
         if board.castling.has(right) {
-            visit(castling_feature(perspective, right));
+            visit(castling_feature(perspective, mirror, right));
         }
     }
 }
@@ -298,18 +337,17 @@ impl Net {
     }
 }
 
-/// The network compiled into the binary: `atalaya-256-b3ef7165`, trained on 72 M
+/// The network compiled into the binary: `atalaya-256-c5417606`, trained on 72 M
 /// raw positions of Vigia's own self-play — corpora v2 and v3, both played and
 /// labelled by earlier versions of the engine — with lambda = 0.75, so a quarter
-/// of the training target is the game result and not the search score
-/// (docs/PlanNNUE.md, phase 7, point 2).
+/// of the training target is the game result and not the search score, and
+/// with the horizontal mirror (docs/PlanNNUE.md, phase 7.5).
 ///
-/// Corpus v1, labelled by the classical evaluation, was in every net from 0.29 and
-/// is retired in 0.33: adding it on top of v2+v3 is indistinguishable from zero,
-/// while replacing it with fresh data is worth +32 Elo. Earlier nets, each
-/// recoverable from its release tag: `atalaya-256-ef81d9ad` (v1+v2, lambda 0.75,
-/// 0.32), `atalaya-256-0bd21a25` (v1+v2, lambda 1, 0.31) and
-/// `atalaya-256-6f8033fc` (v1 alone, 0.29 and 0.30).
+/// It is the network of 0.33 retrained with nothing changed but the mirror:
+/// same corpus, K, lambda, epochs and seed. Earlier nets, each recoverable from
+/// its release tag and none loadable by this code, whose magic they lack:
+/// `atalaya-256-b3ef7165` (0.33), `atalaya-256-ef81d9ad` (0.32),
+/// `atalaya-256-0bd21a25` (0.31) and `atalaya-256-6f8033fc` (0.29 and 0.30).
 ///
 /// Embedded with `include_bytes!` and not read from a file next to the
 /// executable, and not for convenience: the bench signs every experiment with
@@ -320,7 +358,7 @@ impl Net {
 /// It replaces `material-256.bin`, the hand-built network of phase 1, which
 /// stays in `nets/` because two tests below still pin its arithmetic: it is the
 /// only network whose every output can be recomputed by hand.
-static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-b3ef7165.bin");
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-c5417606.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();
@@ -352,6 +390,95 @@ pub fn embedded() -> &'static Net {
 // before its removal lands. Wrapping arithmetic still arrives at the right
 // value, is what a debug build needs in order not to panic there, and compiles
 // to the same `paddw`/`psubw` in release.
+
+/// Everything `push` reads off the board about one move, gathered once.
+struct Change {
+    mv: Move,
+    moving: Piece,
+    placed: Piece,
+    captured: Option<(Piece, Square)>,
+    castle_rook: Option<(Piece, Square, Square)>,
+    lost_rights: u8,
+}
+
+/// One perspective's half of slot `ply + 1`, from the same half of slot `ply`.
+///
+/// `#[inline(always)]` and called once per colour with the colour written out,
+/// so each call is specialised: the perspective flip and the "ours/theirs"
+/// split fold into constants.
+#[inline(always)]
+fn update_half(
+    net: &Net,
+    board: &Board,
+    perspective: Color,
+    source: &[i16; HIDDEN],
+    destination: &mut [i16; HIDDEN],
+    change: &Change,
+) {
+    // The mirror before the move. For every move but a king crossing the d/e
+    // boundary it is also the mirror after it; that one case is rebuilt by the
+    // caller, over whatever this writes.
+    let mirror = perspective_mirrors(board, perspective);
+
+    // R1: the copy from the parent and the one change every move has (the
+    // piece leaving its square and arriving on another) in one pass.
+    let added = net.feature_row(piece_feature(perspective, mirror, change.placed, change.mv.to));
+    let removed = net.feature_row(piece_feature(perspective, mirror, change.moving, change.mv.from));
+    for (d, ((s, a), r)) in destination.iter_mut().zip(source.iter().zip(added).zip(removed)) {
+        *d = s.wrapping_add(*a).wrapping_sub(*r);
+    }
+
+    if let Some((piece, square)) = change.captured {
+        sub_row(destination, net.feature_row(piece_feature(perspective, mirror, piece, square)));
+    }
+    if let Some((rook, from, to)) = change.castle_rook {
+        add_row(destination, net.feature_row(piece_feature(perspective, mirror, rook, to)));
+        sub_row(destination, net.feature_row(piece_feature(perspective, mirror, rook, from)));
+    }
+    for right in RIGHTS {
+        if change.lost_rights & right != 0 {
+            sub_row(destination, net.feature_row(castling_feature(perspective, mirror, right)));
+        }
+    }
+}
+
+/// `perspective`'s half for the position **after** the move, built from
+/// nothing and read off the board before it: the pieces that stay where they
+/// are, then the one that arrives, the rook of a castle and the rights that
+/// survive.
+///
+/// Kept out of line on purpose: it runs on about 3 % of the pushes of a search
+/// (9 % in a pawn ending) and, inlined, its setup was hoisted in front of the
+/// other 97 %. The price: one copy, SSE2, that the wide pushes call as it is.
+#[inline(never)]
+fn rebuild_half_after(net: &Net, board: &Board, perspective: Color, destination: &mut [i16; HIDDEN], change: &Change) {
+    let mirror = mirrors(change.mv.to);
+    destination.copy_from_slice(&net.ft_biases);
+    let vacated = [
+        Some(change.mv.from),
+        change.captured.map(|(_, square)| square),
+        change.castle_rook.map(|(_, from, _)| from),
+    ];
+    for color in [Color::White, Color::Black] {
+        for kind in PieceType::ALL {
+            for square in board.pieces_of(color, kind) {
+                if !vacated.contains(&Some(square)) {
+                    let feature = piece_feature(perspective, mirror, Piece::new(color, kind), square);
+                    add_row(destination, net.feature_row(feature));
+                }
+            }
+        }
+    }
+    add_row(destination, net.feature_row(piece_feature(perspective, mirror, change.placed, change.mv.to)));
+    if let Some((rook, _, to)) = change.castle_rook {
+        add_row(destination, net.feature_row(piece_feature(perspective, mirror, rook, to)));
+    }
+    for right in RIGHTS {
+        if board.castling.0 & !change.lost_rights & right != 0 {
+            add_row(destination, net.feature_row(castling_feature(perspective, mirror, right)));
+        }
+    }
+}
 
 #[inline(always)]
 fn add_row(destination: &mut [i16; HIDDEN], row: &[i16; HIDDEN]) {
@@ -396,8 +523,8 @@ fn divide_rounding(sum: i32) -> i32 {
 // The kernels above are written once, portably, and compiled three times: as
 // they are, for any x86-64 (SSE2, 8 lanes of i16), and inlined into functions
 // marked `#[target_feature]` for AVX2 (16 lanes) and for AVX-512 (32 lanes).
-// The accumulators pick one when they are built, from what the CPU running the
-// binary reports.
+// The accumulators pick one when they are built, from what the CPU reports.
+// All but `rebuild_half_after`: never inlined, it exists in its 8 lanes only.
 //
 // Not `-C target-cpu` for the whole binary, which would need no `unsafe` at
 // all: that binary dies with an illegal instruction on any CPU without the
@@ -543,8 +670,10 @@ impl Accumulators {
         self.slots[start..start + HIDDEN].try_into().unwrap()
     }
 
-    /// Rebuilds slot `ply` from nothing. Called once per search per thread, at
-    /// the root; the design guarantees nothing else ever needs it.
+    /// Rebuilds slot `ply` from nothing, both perspectives. Called once per
+    /// search per thread, at the root. During the search the only rebuild is
+    /// the half of a king that crosses the d/e boundary, and `push` does that
+    /// one itself (`rebuild_half_after`).
     pub(crate) fn refresh(&mut self, net: &Net, board: &Board, ply: usize) {
         for perspective in [Color::White, Color::Black] {
             let start = ply * SLOT + perspective as usize * HIDDEN;
@@ -622,34 +751,30 @@ impl Accumulators {
         // Rights only ever disappear during a move, never appear.
         let lost_rights = board.castling.0 & !Board::next_castling_rights(board.castling, mv.from, mv.to, moving).0;
 
+        let change = Change { mv, moving, placed, captured, castle_rook, lost_rights };
         let (parents, children) = self.slots.split_at_mut((ply + 1) * SLOT);
         let parent = &parents[ply * SLOT..];
-        let child = &mut children[..SLOT];
-        for perspective in [Color::White, Color::Black] {
-            let p = perspective as usize;
-            let source: &[i16; HIDDEN] = parent[p * HIDDEN..(p + 1) * HIDDEN].try_into().unwrap();
-            let destination: &mut [i16; HIDDEN] = (&mut child[p * HIDDEN..(p + 1) * HIDDEN]).try_into().unwrap();
+        let (white, black) = children[..SLOT].split_at_mut(HIDDEN);
+        let white: &mut [i16; HIDDEN] = white.try_into().unwrap();
+        let black: &mut [i16; HIDDEN] = black.try_into().unwrap();
 
-            // R1: the copy from the parent and the one change every move has
-            // (the piece leaving its square and arriving on another) in one pass.
-            let added = net.feature_row(piece_feature(perspective, placed, mv.to));
-            let removed = net.feature_row(piece_feature(perspective, moving, mv.from));
-            for (d, ((s, a), r)) in destination.iter_mut().zip(source.iter().zip(added).zip(removed)) {
-                *d = s.wrapping_add(*a).wrapping_sub(*r);
-            }
+        // The two perspectives are written out, not looped over. With a loop
+        // LLVM keeps one body for both, and anything conditional inside it —
+        // the rebuild below, when it lived here — is set up once in the shared
+        // header and paid by every move. Measured on the identical tree: the
+        // push that crosses nothing went from 117 ticks to 194 with the rebuild
+        // inside the loop, and back to 133 like this.
+        update_half(net, board, Color::White, parent[..HIDDEN].try_into().unwrap(), white, &change);
+        update_half(net, board, Color::Black, parent[HIDDEN..2 * HIDDEN].try_into().unwrap(), black, &change);
 
-            if let Some((piece, square)) = captured {
-                sub_row(destination, net.feature_row(piece_feature(perspective, piece, square)));
-            }
-            if let Some((rook, from, to)) = castle_rook {
-                add_row(destination, net.feature_row(piece_feature(perspective, rook, to)));
-                sub_row(destination, net.feature_row(piece_feature(perspective, rook, from)));
-            }
-            for right in RIGHTS {
-                if lost_rights & right != 0 {
-                    sub_row(destination, net.feature_row(castling_feature(perspective, right)));
-                }
-            }
+        // A king crossing between the d and e files — queenside castling
+        // included — flips the mirror of its own perspective: every square
+        // means something else from here on and there is no parent to update
+        // from. That half is rebuilt, over the update just written, which was
+        // computed in the old frame and is simply discarded.
+        if moving.kind == PieceType::King && mirrors(mv.from) != mirrors(mv.to) {
+            let half = if moving.color == Color::White { white } else { black };
+            rebuild_half_after(net, board, moving.color, half, &change);
         }
     }
 
@@ -838,7 +963,7 @@ mod tests {
     /// wings, en passant, promotions with and without capture, and rooks
     /// captured on their home corners (which destroys a right the capturing
     /// side does not own).
-    const WALK_POSITIONS: [(&str, u32); 7] = [
+    const WALK_POSITIONS: [(&str, u32); 9] = [
         ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 3),
         (KIWIPETE, 3),
         ("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", 4),
@@ -846,6 +971,12 @@ mod tests {
         ("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", 3),
         ("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", 3),
         ("rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", 3),
+        // The mirror's own cases: a king walking back and forth across the
+        // d/e boundary, capturing as it crosses, once for each colour. Long
+        // castling, the other crossing, is in the two positions above with
+        // `KQkq` and nothing in between.
+        ("k7/8/8/3n4/4K3/8/8/8 w - - 0 1", 4),
+        ("8/8/8/4k3/3N4/8/8/K7 b - - 0 1", 4),
     ];
 
     struct Rng(u64);
@@ -940,6 +1071,13 @@ mod tests {
         let mut bad = good.clone();
         bad[0] = b'X';
         refused(&bad, "a wrong magic");
+        // The reason the magic changed in 0.34: a network trained without the
+        // horizontal mirror has every size this one has and none of its
+        // meaning. Without this line, accepting both magics would leave the
+        // whole suite green.
+        let mut bad = good.clone();
+        bad[..8].copy_from_slice(b"VIGIANN1");
+        refused(&bad, "a network from before the mirror");
         let mut bad = good.clone();
         bad[9] ^= 0x10;
         refused(&bad, "another architecture");
@@ -1011,15 +1149,101 @@ mod tests {
         // Pinned against literal numbers, not just against netfmt.py: if both
         // halves changed the same way, the golden vector alone would not see it.
         let white_king = Piece::new(Color::White, PieceType::King);
-        assert_eq!(piece_feature(Color::White, white_king, Square::new(4, 0)), 5 * 64 + 4);
-        assert_eq!(piece_feature(Color::Black, white_king, Square::new(4, 0)), 384 + 5 * 64 + 60);
+        assert_eq!(piece_feature(Color::White, false, white_king, Square::new(4, 0)), 5 * 64 + 4);
+        assert_eq!(piece_feature(Color::Black, false, white_king, Square::new(4, 0)), 384 + 5 * 64 + 60);
         let black_pawn = Piece::new(Color::Black, PieceType::Pawn);
-        assert_eq!(piece_feature(Color::Black, black_pawn, Square::new(0, 6)), 8);
-        assert_eq!(piece_feature(Color::White, black_pawn, Square::new(0, 6)), 384 + 48);
-        assert_eq!(castling_feature(Color::White, CastlingRights::WHITE_KINGSIDE), 769);
-        assert_eq!(castling_feature(Color::White, CastlingRights::BLACK_QUEENSIDE), 770);
-        assert_eq!(castling_feature(Color::Black, CastlingRights::BLACK_KINGSIDE), 769);
-        assert_eq!(castling_feature(Color::Black, CastlingRights::WHITE_QUEENSIDE), 770);
+        assert_eq!(piece_feature(Color::Black, false, black_pawn, Square::new(0, 6)), 8);
+        assert_eq!(piece_feature(Color::White, false, black_pawn, Square::new(0, 6)), 384 + 48);
+        assert_eq!(castling_feature(Color::White, false, CastlingRights::WHITE_KINGSIDE), 769);
+        assert_eq!(castling_feature(Color::White, false, CastlingRights::BLACK_QUEENSIDE), 770);
+        assert_eq!(castling_feature(Color::Black, false, CastlingRights::BLACK_KINGSIDE), 769);
+        assert_eq!(castling_feature(Color::Black, false, CastlingRights::WHITE_QUEENSIDE), 770);
+    }
+
+    #[test]
+    fn the_mirror_reflects_the_files_and_swaps_the_wings() {
+        // The king on e1 is the case every game starts from: it is on the
+        // e-h half, so White sees the board reflected and its own king on d1.
+        assert!(mirrors(Square::new(4, 0)) && mirrors(Square::new(7, 7)));
+        assert!(!mirrors(Square::new(3, 0)) && !mirrors(Square::new(0, 7)));
+        let white_king = Piece::new(Color::White, PieceType::King);
+        assert_eq!(piece_feature(Color::White, true, white_king, Square::new(4, 0)), 5 * 64 + 3);
+        // The two flips commute: for Black, e8 is flipped up to e1 and across to d1.
+        let black_king = Piece::new(Color::Black, PieceType::King);
+        assert_eq!(piece_feature(Color::Black, true, black_king, Square::new(4, 7)), 5 * 64 + 3);
+        // Any square and its reflection trade places, piece and owner untouched.
+        let knight = Piece::new(Color::Black, PieceType::Knight);
+        for square in 0..64u8 {
+            let reflected = Square(square ^ 7);
+            for perspective in [Color::White, Color::Black] {
+                assert_eq!(
+                    piece_feature(perspective, true, knight, Square(square)),
+                    piece_feature(perspective, false, knight, reflected)
+                );
+            }
+        }
+        // And the rights follow the rooks they belong to.
+        for perspective in [Color::White, Color::Black] {
+            for (short, long) in [
+                (CastlingRights::WHITE_KINGSIDE, CastlingRights::WHITE_QUEENSIDE),
+                (CastlingRights::BLACK_KINGSIDE, CastlingRights::BLACK_QUEENSIDE),
+            ] {
+                assert_eq!(castling_feature(perspective, true, short), castling_feature(perspective, false, long));
+                assert_eq!(castling_feature(perspective, true, long), castling_feature(perspective, false, short));
+            }
+        }
+    }
+
+    /// `fen` with every file reversed. Only meaningful without castling rights:
+    /// a king on d1 that may castle is not a position of this game.
+    fn reflect_fen(fen: &str) -> String {
+        let fields: Vec<&str> = fen.split_whitespace().collect();
+        assert_eq!(fields[2], "-", "reflect_fen needs a position without castling rights");
+        let placement: Vec<String> = fields[0].split('/').map(|rank| rank.chars().rev().collect()).collect();
+        let en_passant = match fields[3] {
+            "-" => "-".to_string(),
+            square => {
+                let file = (b'a' + (b'h' - square.as_bytes()[0])) as char;
+                format!("{file}{}", &square[1..])
+            }
+        };
+        format!("{} {} - {} {} {}", placement.join("/"), fields[1], en_passant, fields[4], fields[5])
+    }
+
+    #[test]
+    fn a_position_and_its_reflection_evaluate_the_same() {
+        // What the mirror buys, stated as an invariant that holds for any
+        // weights whatsoever: left and right are the same to the network.
+        // Before 0.34 this was false, and nothing but training data pushed the
+        // two wings towards agreeing.
+        let net = random_net(11);
+        let mut fens = Vec::new();
+        for fen in [
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "8/8/8/4k3/8/8/4P3/4K3 w - - 0 1",
+            "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+            "rnbq1rk1/ppp1ppbp/5np1/3pP3/3P4/2N2N2/PPP2PPP/R1BQ1RK1 b - - 0 7",
+            "k7/8/8/3n4/4K3/8/8/8 w - - 0 1",
+        ] {
+            collect_positions(&mut Board::from_fen(fen).unwrap(), 2, &mut fens);
+        }
+        let mut accumulators = Accumulators::new(1);
+        let mut compared = 0;
+        for fen in fens.iter().filter(|fen| fen.split_whitespace().nth(2) == Some("-")) {
+            let board = Board::from_fen(fen).unwrap();
+            let reflected = Board::from_fen(&reflect_fen(fen)).unwrap();
+            accumulators.refresh(&net, &board, 0);
+            // `raw_white` and not `evaluate_white`: the KPK shortcut and the
+            // insufficient-material scale answer before the network does, and
+            // the seeds with the kings on the d and e files are exactly those.
+            // Through them this compared 0 with 0 and never saw the boundary.
+            let score = accumulators.raw_white(&net, &board, 0);
+            accumulators.refresh(&net, &reflected, 0);
+            let reflected_score = accumulators.raw_white(&net, &reflected, 0);
+            assert_eq!(score, reflected_score, "{fen} scores {score}, its reflection scores {reflected_score}");
+            compared += 1;
+        }
+        assert!(compared > 500, "only {compared} positions compared: the test would pass on nothing");
     }
 
     #[test]

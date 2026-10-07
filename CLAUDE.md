@@ -17,7 +17,7 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 404 tests (264 motor, 129 banco, 3 generador, 8 harness viejo)
+cargo test --release                   # 406 tests (266 motor, 129 banco, 3 generador, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
 cargo build --release
@@ -159,6 +159,41 @@ de nodos/segundo compra ~0,52 plies.
   de la evaluación clásica, queda jubilado. **Pero eso no demuestra que el volumen
   esté saturado**: lo que se añadió era el corpus más viejo, no volumen cualquiera.
   Lo separa una red entrenada con v3 solo contra la de v2+v3, pendiente.
+- **Desde 0.34 la red lleva espejo horizontal, y eso cambia tres cosas a la vez.**
+  (1) El formato: magia `VIGIANN2`; una red anterior tiene los mismos tamaños y se
+  rechaza al cargar, que es lo que se quiere. (2) El índice de rasgo se calcula en
+  **tres sitios** —`src/nnue.rs`, `tools/nnue/netfmt.py` y, vectorizado,
+  `tools/nnue/dataset.py`— y tienen que coincidir: el vector dorado ata los dos
+  primeros y `tools/nnue/check_rasgos.py` el tercero. Tocar uno sin los otros
+  entrena una red sobre un espacio de entrada y la juega sobre otro, sin un solo
+  error. (3) Los checkpoints declaran su `indexado` y `quantize.py` se niega a
+  cuantizar uno que no lo traiga: los 18 `.pt` anteriores al espejo no se pueden
+  recuantizar con las herramientas de hoy.
+- **`banco velocidad` resuelve ±2 % por pasada en esta máquina**, que nunca está
+  en reposo. Para un efecto del 1 % hacen falta unas doce: `--pasadas 12`, y mirar
+  el error típico antes de citar nada. La versión anterior tenía un sesgo propio
+  del 6 % y daba bandas estrechas: **una banda estrecha no es ausencia de sesgo**.
+  Se calibra midiendo un binario contra su propia copia, que tiene que dar 1,00.
+- **Y por debajo de ~2 % no resuelve entre dos binarios, por muchas pasadas que
+  se den.** Dos compilaciones del mismo fuente (solo cambia la versión de
+  `Cargo.toml`) se llevan 2 puntos, y un binario y su copia byte a byte, 1, tres
+  veces de tres. El error típico mide la repetibilidad de un par de ficheros, no
+  eso. Así se coló un «−1,75 %» para el coste del espejo que era del 4 al 6 %.
+  Reglas: **guardar la salida** de toda cifra que se cite
+  (`banco/resultados/<id>-velocidad/`), medir un efecto pequeño en más de una
+  compilación, y compilar el candidato ya con su número de versión final. La
+  causa está sin demostrar; se sospecha de la alineación de los datos de la red
+  (§4 de `docs/BancoPruebas.md`).
+- **El tope de una tanda de decisión se calcula, no se elige a ojo**:
+  `python tools/potencia_sprt.py --elo <efecto> --tope <parejas>`. Con
+  `elo0=0, elo1=5` y 4.000 parejas, un efecto real de +7 Elo se queda sin
+  decisión **una de cada dos veces** y uno de +5, tres de cada cuatro; con 8.000,
+  el 14 % y el 39 %. `034-espejo-A` costó una tanda entera por no mirarlo.
+- **Un entrenamiento largo puede morir sin traza** (ha pasado más de una vez con
+  procesos largos en esta máquina: constan el generador del 15 de septiembre, con
+  código de salida 9, y el entrenamiento del espejo, en la época 9). `train.py --reanudar` continúa de forma exacta,
+  bit a bit; lanzarlo siempre dentro de un bucle que lo relance y apunte el código
+  de salida.
 - **Los checkpoints anteriores a 0.32 no son de la última época.** `train.py`
   guardaba el de **mejor validación**, y eso no era «casi la última» como se creyó:
   `atalaya-v2.pt` se quedó en la **época 30 de 60**, y es la base de

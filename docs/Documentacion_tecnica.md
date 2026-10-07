@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.33.0 (`Cargo.toml`).
+**Versión:** 0.34.0 (`Cargo.toml`).
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -48,7 +48,8 @@ src/
   bin/banco/         # banco de pruebas: SPRT, velocidad, EPD (ver §8)
   bin/generador.rs   # datos de la red NNUE: corpus de autojuego, vector dorado y evaluar una red
 nets/
-  material-256.bin   # la red empotrada: la de la fase 1, solo material, sin entrenar
+  atalaya-256-<sha>.bin  # la red empotrada (§4); las anteriores, en su etiqueta de versión
+  material-256.bin   # la de la fase 1, solo material, sin entrenar: la usan los tests
 banco/
   configs/           # configuraciones de experimento (JSON)
   libros/            # libros de aperturas, versionados y congelados
@@ -56,6 +57,7 @@ banco/
 tools/calibration/   # pipeline Python de calibración del eval (ver §9)
 tools/nnue/          # la red en Python: formato, vector dorado, lector del corpus, entrenador, cuantizador
 tools/analiza_tanda.py  # profundidad por motor y finales de una tanda del banco
+tools/potencia_sprt.py  # antes de lanzar una tanda: probabilidad de que no decida, según efecto y tope
 docs/                # esta documentación y el plan de la red (PlanNNUE.md)
 Release/             # ejecutables congelados por versión, ignorados por git
 datos/               # corpus de entrenamiento de la red, ignorado por git
@@ -533,10 +535,26 @@ La suma anterior se multiplica al final por `escala/64`. Casos:
 
 Desde 0.28 el motor tiene una segunda evaluación, **Atalaya-256**, diseñada y
 argumentada en `docs/PlanNNUE.md`. La red empotrada es
-**`atalaya-256-b3ef7165`, entrenada con 72 millones de posiciones del propio
+**`atalaya-256-c5417606`, entrenada con 72 millones de posiciones del propio
 Vigía** —los corpus **v2 y v3**, los dos jugados y etiquetados por versiones
-anteriores del motor— **y con λ = 0,75**, es decir dando un cuarto del peso del
-objetivo al resultado de la partida en vez de todo a la puntuación (0.33).
+anteriores del motor—, **con λ = 0,75**, es decir dando un cuarto del peso del
+objetivo al resultado de la partida en vez de todo a la puntuación, **y con
+espejo horizontal** (0.34): cada perspectiva ve el tablero reflejado de izquierda
+a derecha cuando su propio rey está en las columnas e–h.
+
+El espejo no añade un peso y cambia el formato: la magia del fichero pasa a
+`VIGIANN2`, porque una red sin espejo tiene exactamente los mismos tamaños y
+ninguno de sus significados, y cargada con el código nuevo evaluaría basura sin
+dar error. Trae también la **primera excepción a la invariante** del acumulador:
+cuando un rey cruza entre las columnas d y e —enroque largo incluido— su mitad se
+reconstruye en vez de actualizarse. Pasa en el 3 % de los movimientos de una
+búsqueda y cuesta **entre un 4 % y un 6 % de nodos/segundo**, medido con árbol
+idéntico: −3,79 % ± 0,25 % el código tal como se publica y −5,95 % ± 0,39 % el
+binario que jugó el banco, que son el mismo fuente compilado con otro número de
+versión. (Aquí ponía −1,75 % ± 1,07 %: no se reprodujo y no quedó salida
+guardada; lo encontró la revisión previa a publicar. Fase 7.5 del plan.) Los
++8,5 Elo son netos de ese coste, porque se midieron por tiempo.
+La anterior, `atalaya-256-b3ef7165`, era la misma red sin espejo (0.33).
 
 El corpus **v1**, que venía de la evaluación clásica y estuvo dentro de todas las
 redes desde 0.29, **queda jubilado en 0.33**: añadirlo encima de v2+v3 no se
@@ -608,7 +626,9 @@ décimas dice que el límite pasó a ser el tamaño del corpus.
 
 **La arquitectura.** `772 → 2×256 → 1`: 768 rasgos planos de pieza y casilla
 vistos desde cada bando —propia o ajena, con la casilla espejada para las
-negras— más los 4 derechos de enroque; un acumulador `i16` por perspectiva;
+negras y, desde 0.34, reflejada de izquierda a derecha cuando el rey propio está
+en las columnas e–h— más los 4 derechos de enroque, que intercambian flanco con
+ese reflejo; un acumulador `i16` por perspectiva;
 SCReLU cuantizada (`clamp(a, 0, 127)² >> 4`); y una capa de salida troceada en
 8 cubos por número de piezas, con el mapa de cubos en la cabecera del fichero.
 201.992 parámetros y 404.128 bytes, empotrados con `include_bytes!`.
@@ -617,6 +637,15 @@ SCReLU cuantizada (`clamp(a, 0, 127)² >> 4`); y una capa de salida troceada en
 pieza, así que una jugada cambia como mucho un puñado de rasgos y el acumulador
 **nunca se reconstruye durante una búsqueda**. Una jugada de rey cuesta lo mismo
 que una de peón. El único refresco completo es en la raíz, una vez por hilo.
+
+**Desde 0.34 tiene una excepción**, la que trae el espejo: este depende de la
+columna del rey propio, así que la jugada de rey que cruza entre las columnas d
+y e —enroque largo incluido— reconstruye su mitad del acumulador dentro de `push`
+(`rebuild_half_after`) y ya no cuesta lo que una de peón. El «nunca» de arriba
+valió de 0.29 a 0.33 y se deja escrito por eso. El refresco de las dos
+perspectivas sigue siendo solo el de la raíz, y la otra perspectiva y cualquier
+otra jugada siguen siendo incrementales; frecuencia y coste, al principio de
+este apartado.
 
 **Qué se conserva de la HCE**, porque es exacto y barato: el oráculo KPK
 *delante* de la red y la regla de material insuficiente *detrás* (escala 0).
@@ -724,6 +753,13 @@ la búsqueda, y `push_avx2`, `output_sum_avx2`, `push_avx512` y `output_sum_avx5
 salen como funciones propias, porque no se pueden inlinear en código sin esas
 instrucciones. Son las que corren en una CPU moderna: revisar solo la portable deja
 sin ver justo la que se ejecuta.
+
+**Con una excepción desde 0.34**: `rebuild_half_after`, la reconstrucción del rey
+que cruza. Lleva `#[inline(never)]` y ningún `#[target_feature]`, así que en el
+binario hay **una sola copia, a 8 carriles**, y `push_avx2` y `push_avx512` la
+llaman tal cual (384 `paddw` sobre `xmm`, ningún `ymm` ni `zmm`). Es deliberado
+a medias: fuera de línea tenía que estar, y compilarla bajo cada juego de
+instrucciones queda como candidato del carril de velocidad.
 
 #### Cómo se evita que se rompa en silencio
 
@@ -1633,6 +1669,37 @@ usarse para aprobar un cambio.
   Lo separa un experimento que queda pendiente y cuesta una hora de GPU: una red
   con v3 solo contra la de v2+v3 (§7, punto 2, del plan).
 
+- **0.34.0 — el espejo horizontal de la red.** **+8,5 Elo [+0,8, +16,2]** sobre
+  0.33. Lo usan diez de diez motores de primera fila (§10.4 del plan), y es lo
+  único de esa tabla que Vigía no tenía y podía adoptar sin pedir más corpus: no
+  añade un parámetro. Misma red, mismo corpus, misma K, mismo λ y misma semilla que 0.33;
+  cambia el indexado de los rasgos y el código que lo mantiene.
+
+  **Hicieron falta dos experimentos, y está bien que conste.** El primero agotó sus
+  4.000 parejas con el LLR en +2,49 de +2,94 y, por la preinscripción, el espejo
+  no entró. El segundo, preinscrito y commiteado antes de lanzar, con tope de
+  8.000 y la cláusula de que no habría tercero, aceptó en 3.565 parejas. Tres
+  tandas independientes: +7,3, +8,5 y +8,8.
+
+  De propina, tres cosas que valen más que los 8 Elo: el **banco de velocidad
+  calibrado** (el anterior tenía un sesgo propio del 6 % que una banda estrecha
+  disimulaba), el **entrenador que reanuda** de forma exacta tras un corte, y los
+  **checkpoints que declaran su indexado**, para que el cuantizador no pueda
+  sellar como nueva una red entrenada con el formato viejo.
+
+  **Y dos cifras mías que la revisión previa a publicar desmintió**, las dos
+  escritas sin su medida al lado. El coste del espejo no era −1,75 % de
+  nodos/segundo sino **de un 4 a un 6 %** (de 9 a 13 Elo, ya descontados en los
+  +8,5 porque se jugó por tiempo), y de la medida original no había quedado ni
+  la salida. Y con +7 Elo y 4.000 parejas no decidir no pasa «una de cada
+  cuatro veces» sino **una de cada dos**: el tope de la primera tanda estaba mal
+  puesto desde el principio. De la primera sale que `banco velocidad` no
+  resuelve por debajo de ~2 % entre dos binarios (§4 de `docs/BancoPruebas.md`)
+  y que el carril de velocidad vale ahora más que el propio espejo; de la
+  segunda, `tools/potencia_sprt.py`, para calcular el tope antes de lanzar. La
+  corrección del espejo, en cambio, aguantó: las ocho mutaciones del núcleo que
+  se le aplicaron mueren en los tests.
+
 ---
 
 ## 10. Mapa de los hallazgos de las revisiones
@@ -1699,7 +1766,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 264 del motor + 129 del banco + 3 del generador + 8 del harness antiguo
+cargo test --release              # 266 del motor + 129 del banco + 3 del generador + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

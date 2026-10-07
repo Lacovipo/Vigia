@@ -31,7 +31,10 @@ MAX_ACTIVE_FEATURES = 36        # 32 piezas + 4 derechos de enroque
 MAX_ACTIVATION = (QA * QA) >> 4  # 1008
 
 HEADER_LEN = 128
-MAGIC = b"VIGIANN1"
+# VIGIANN2 desde 0.34: el espejo horizontal cambia lo que significa cada índice
+# de rasgo sin cambiar un solo tamaño, así que ARCH no distingue una red con
+# espejo de una sin él. Con otra magia, la del otro tipo se rechaza al cargar.
+MAGIC = b"VIGIANN2"
 # Empaquetado igual que `nnue::ARCH`: rasgos | anchura | QA | log2(QB).
 ARCH = (FEATURES << 22) | (HIDDEN << 12) | (QA << 5) | QB_LOG2
 WEIGHTS_LEN = FEATURES * HIDDEN * 2 + HIDDEN * 2 + MAX_BUCKETS * 2 * HIDDEN * 2 + MAX_BUCKETS * 4
@@ -51,22 +54,37 @@ _RIGHT_OF_CHAR = {'K': WK, 'Q': WQ, 'k': BK, 'q': BQ}
 
 
 # ------------------------------------------------------------- los rasgos
-def piece_feature(persp, color, kind, sq):
+def mirrors(king_sq):
+    """Si una perspectiva cuyo rey está en `king_sq` ve el tablero reflejado de
+    izquierda a derecha: sí cuando su rey está en las columnas e-h.
+
+    Igual que `nnue::mirrors`. No cuesta un solo peso —la tabla sigue teniendo
+    772 filas— y cambia lo que significan: una casilla deja de ser "c3" y pasa a
+    ser "a dos columnas del flanco de mi rey", que es el mismo patrón en las dos
+    alas y sin espejo había que aprenderlo dos veces.
+    """
+    return (king_sq & 7) >= 4
+
+
+def piece_feature(persp, mirror, color, kind, sq):
     """Índice de rasgo de una pieza vista desde `persp` (0 blancas, 1 negras).
 
-    La casilla se espeja verticalmente para las negras (`sq ^ 56`), y la pieza
-    es "propia" o "ajena" respecto de quien mira, no blanca o negra. Así las
-    dos perspectivas comparten la misma tabla de pesos.
+    La casilla se voltea verticalmente para las negras (`sq ^ 56`),
+    horizontalmente si el rey propio de `persp` está en e-h (`sq ^ 7`), y la
+    pieza es "propia" o "ajena" respecto de quien mira, no blanca o negra. Así
+    las dos perspectivas comparten la misma tabla de pesos.
     """
-    s = sq ^ (56 * persp)
+    s = sq ^ (56 * persp) ^ (7 if mirror else 0)
     theirs = 1 if color != persp else 0
     return theirs * 384 + kind * 64 + s
 
 
-def castling_feature(persp, right):
+def castling_feature(persp, mirror, right):
+    """Con el espejo las dos alas se intercambian, igual que las casillas: el
+    derecho de la torre de la columna h es, en un tablero reflejado, el de la a."""
     owner = WHITE if right & (WK | WQ) else BLACK
     kingside = 1 if right & (WK | BK) else 0
-    return PIECE_FEATURES + (1 if owner != persp else 0) * 2 + kingside
+    return PIECE_FEATURES + (1 if owner != persp else 0) * 2 + (kingside ^ (1 if mirror else 0))
 
 
 def parse_fen(fen):
@@ -95,8 +113,12 @@ def parse_fen(fen):
 
 def active_features(fen, persp):
     pieces, _, bits = parse_fen(fen)
-    features = [piece_feature(persp, c, k, s) for (c, k, s) in pieces]
-    features += [castling_feature(persp, r) for r in RIGHTS if bits & r]
+    # El espejo lo decide el rey PROPIO de la perspectiva (tipo 5). Sin ese rey
+    # —solo en posiciones de prueba— se lee como sin espejo, igual que en Rust.
+    kings = [s for (c, k, s) in pieces if k == 5 and c == persp]
+    mirror = mirrors(kings[0]) if kings else False
+    features = [piece_feature(persp, mirror, c, k, s) for (c, k, s) in pieces]
+    features += [castling_feature(persp, mirror, r) for r in RIGHTS if bits & r]
     return sorted(features)
 
 

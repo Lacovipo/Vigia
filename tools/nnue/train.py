@@ -175,6 +175,8 @@ def main():
     ap.add_argument('--validacion', type=float, default=0.02, help='fracción de partidas')
     ap.add_argument('--umbral-cubo', type=int, default=1_000_000)
     ap.add_argument('--semilla', type=int, default=1)
+    ap.add_argument('--reanudar', action='store_true',
+                    help='continuar desde --salida si existe y es de este mismo entrenamiento')
     args = ap.parse_args()
 
     torch.manual_seed(args.semilla)
@@ -208,7 +210,36 @@ def main():
         return total / max(1, sum(len(t[0]) for t in val_tensores))
 
     mejor, mejor_epoca = float('inf'), 0
-    for epoca in range(args.epocas):
+    primera = 0
+    # Lo que identifica un entrenamiento: si algo de esto cambia, no es el mismo
+    # y reanudarlo mezclaría dos redes en un fichero. El corpus se identifica
+    # por su sha y no por cómo se escribió la ruta: `datos/v3` y su ruta absoluta
+    # son el mismo entrenamiento, y comparar la grafía lo rechazaba.
+    ajenos = ('reanudar', 'salida', 'directorios')
+    identidad = {c: v for c, v in vars(args).items() if c not in ajenos}
+    if args.reanudar and os.path.exists(args.salida):
+        ck = torch.load(args.salida, map_location=dispositivo, weights_only=False)
+        previa = {c: v for c, v in ck.get('args', {}).items() if c not in ajenos}
+        if 'optimizador' not in ck:
+            sys.exit('%s no guarda el estado del optimizador (es anterior a la reanudación): '
+                     'no se puede continuar, hay que empezar de cero.' % args.salida)
+        if ck.get('indexado') != ds.INDEXADO:
+            sys.exit('%s se entrenó con otros rasgos (%r, y este entrenador usa %r): no se reanuda.'
+                     % (args.salida, ck.get('indexado'), ds.INDEXADO))
+        if previa != identidad or ck['sha_corpus'] != corpus.sha:
+            sys.exit('%s es de otro entrenamiento (cambian los argumentos o el corpus): '
+                     'no se reanuda.' % args.salida)
+        modelo.load_state_dict(ck['modelo'])
+        optimizador.load_state_dict(ck['optimizador'])
+        planificador.load_state_dict(ck['planificador'])
+        # El generador ya ha sorteado la muestra de validación, igual que la
+        # primera vez; ahora salta al punto en que quedó tras la última época
+        # terminada, para que la siguiente baraje exactamente lo que habría
+        # barajado sin el corte.
+        rng.bit_generator.state = ck['rng']
+        mejor, mejor_epoca, primera = ck['mejor'], ck['mejor_epoca'], ck['epoca']
+        print('reanudado desde la epoca %d de %d' % (primera, args.epocas))
+    for epoca in range(primera, args.epocas):
         orden = rng.permutation(corpus.entrenamiento)
         cola = queue.Queue(maxsize=8)
 
@@ -248,11 +279,22 @@ def main():
         # La red que se guarda es siempre la de la última época terminada: así
         # una interrupción deja algo utilizable y el fichero final es el de la
         # época 60, no el de un mínimo de validación que con λ < 1 es ruido.
+        #
+        # Y lleva dentro lo que hace falta para seguir —optimizador, plan de tasa
+        # de aprendizaje y generador—, porque en esta máquina un proceso largo
+        # puede morir sin traza y sin culpa suya (ha pasado más de una vez). Se
+        # escribe a un temporal y se renombra: un corte a mitad de escritura no
+        # puede dejar sin fichero a la reanudación.
+        temporal = args.salida + '.tmp'
         torch.save({
             'modelo': modelo.state_dict(), 'n_cubos': n_cubos, 'cubo': tabla, 'k': args.k,
             'sha_corpus': corpus.sha, 'posiciones': int(len(corpus.entrenamiento)),
             'epoca': epoca + 1, 'validacion': val, 'validacion_cp': val_cp, 'args': vars(args),
-        }, args.salida)
+            'optimizador': optimizador.state_dict(), 'planificador': planificador.state_dict(),
+            'rng': rng.bit_generator.state, 'mejor': mejor, 'mejor_epoca': mejor_epoca,
+            'indexado': ds.INDEXADO,
+        }, temporal)
+        os.replace(temporal, args.salida)
     print('epoca %d guardada -> %s (mejor validacion: %.6f en la epoca %d)'
           % (args.epocas, args.salida, mejor, mejor_epoca))
 

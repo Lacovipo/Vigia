@@ -25,7 +25,9 @@ HalfKP con cubos de rey se queda en 3,4 muestras efectivas por parámetro (1,8 e
 más pobre). Y con rasgos que no dependen de ninguna otra pieza, el acumulador **nunca se
 recalcula durante una búsqueda** —una jugada de rey cuesta exactamente lo mismo que una de
 peón—, lo que elimina de raíz el único riesgo del proyecto que nadie ha podido cuantificar
-todavía. La HCE no desaparece del todo: sobreviven las tres cosas que son *exactas* y
+todavía. (**Desde 0.34 hay una excepción**, que llegó con el espejo horizontal: el rey
+que cruza entre las columnas d y e obliga a reconstruir media red; ver la fase 7.5.) La
+HCE no desaparece del todo: sobreviven las tres cosas que son *exactas* y
 cuestan casi nada (el oráculo KPK, el factor de escala de final y la detección de material
 insuficiente), y se tira todo lo que es *aproximado*, que es el 94 % de su coste.
 
@@ -163,17 +165,27 @@ compartiendo la misma tabla de pesos:
 
 ```rust
 // persp: 0 = blancas, 1 = negras.
-// Square es rank*8 + file (A1 = 0), luego el espejado vertical es sq ^ 56.
+// Square es rank*8 + file (A1 = 0), luego el volteo vertical es sq ^ 56
+// y el horizontal sq ^ 7.
+// mirror (desde 0.34): el rey PROPIO de la perspectiva está en las columnas e-h.
 #[inline(always)]
-fn feature_index(persp: usize, piece_color: usize, kind: usize, sq: usize) -> usize {
-    let s = sq ^ (56 * persp);            // orientación de la perspectiva
+fn feature_index(persp: usize, mirror: bool, piece_color: usize, kind: usize, sq: usize) -> usize {
+    let s = sq ^ (56 * persp) ^ (7 * mirror as usize);
     let theirs = (piece_color != persp) as usize;
     theirs * 384 + kind * 64 + s          // 0..767
 }
 ```
 
-Dos operaciones y ni una consulta a tabla. El rey es `kind = 5`: **una pieza más**, no un
-índice. Un XOR y dos sumas en tiempo de ejecución.
+Tres operaciones y ni una consulta a tabla. El rey es `kind = 5`: **una pieza más**, no un
+índice. Dos XOR y dos sumas en tiempo de ejecución.
+
+**El espejo horizontal (0.34).** Cuando el rey propio de la perspectiva está en las
+columnas e–h, esa perspectiva ve el tablero reflejado de izquierda a derecha. No añade un
+peso —la tabla sigue teniendo 772 filas— y cambia lo que significan: una casilla deja de
+ser «c3» y pasa a ser «a dos columnas del flanco de mi rey». Con él, una posición y su
+reflejo evalúan exactamente igual para cualquier red. Como el rey propio queda siempre en
+a–d tras reflejar, 32 de las 64 filas del rey propio no se usan nunca; se dejan, porque
+quitarlas cambia los tamaños y no compra nada.
 
 **4 de derechos de enroque**, índices 768..771: `768 + relative_side * 2 + kingside`, donde
 `relative_side` es 0 si el derecho es del bando que mira. Es el único dato de la posición
@@ -181,11 +193,18 @@ que 768 rasgos planos no pueden ver por ningún camino —un rey en g1 con torre
 idéntico a un rey en g1 que todavía puede enrocar— y es exactamente la clase de
 información de seguridad del rey que más cuesta aprender de forma aditiva. Cambia como
 mucho una vez por bando y por partida, y es un rasgo de una sola entidad, así que **no
-rompe la invariante de §4**.
+rompe la invariante de §4**. Con el espejo, el flanco de rey y el de dama se
+intercambian igual que las casillas: `kingside ^ mirror`.
 
 **La invariante que define la arquitectura, y que hay que poder enunciar en una línea:**
 *ningún rasgo depende de más de una pieza, luego toda jugada cambia como mucho 4 rasgos
 por perspectiva y el acumulador nunca se recalcula desde cero durante una búsqueda.*
+
+**Con una excepción desde 0.34, y hay que enunciarla igual de corta:** *el espejo depende
+de la columna del rey propio, así que cuando ese rey cruza entre las columnas d y e
+—enroque largo incluido— su mitad del acumulador se reconstruye.* Ocurre en el 3 % de los
+movimientos de una búsqueda (9 % en un final de peones) y cuesta entre un 4 % y un 6 % de
+nodos/segundo (aquí ponía −1,75 %, que no se reprodujo: fase 7.5). La otra perspectiva, y cualquier otra jugada, siguen siendo incrementales.
 
 Activos por posición: entre 5 y 36 por perspectiva (32 piezas + 4 banderas).
 
@@ -353,7 +372,7 @@ Cabecera de 128 B, todo little-endian:
 
 | campo | bytes | contenido |
 |---|---|---|
-| magic | 8 | `VIGIANN1` |
+| magic | 8 | `VIGIANN2` desde 0.34 (de 0.29 a 0.33, `VIGIANN1`; cambió con el espejo horizontal, porque una red sin espejo tiene los mismos tamaños y `ARCH` no las distingue: el cargador rechaza la antigua, fase 7.5) |
 | versión de arquitectura | 4 | rasgos, N, n_cubos, QA, QB empaquetados; **el cargador aborta si no cuadra con las constantes compiladas** |
 | K | 2 | la escala de la sigmoide con la que se entrenó (documental) |
 | n_cubos | 1 | 1..8 |
@@ -444,6 +463,12 @@ refrescos, en ninguna posición, jamás.** Es la consecuencia directa de la inva
 §3.1, y es la que hace que una jugada de rey cueste lo mismo que una de peón — en un final
 donde el 45,9 % de las jugadas son de rey (medido).
 
+**I5 dejó de ser cierta tal cual en 0.34.** El refresco de las dos perspectivas sigue
+siendo solo el de la raíz, pero `push` reconstruye la mitad de un rey que cruza entre las
+columnas d y e (`rebuild_half_after`). El «jamás» de arriba se conserva como estaba
+escrito porque es lo que se diseñó y lo que se sostuvo de 0.29 a 0.33; la excepción, su
+frecuencia y su coste están en §3.1.
+
 **I6 — `board.rs` no cambia**, salvo un refactor de cinco líneas: extraer de
 `update_castling_rights` (`board.rs:426`) una función pura
 
@@ -463,6 +488,7 @@ comparte**, porque duplicarla es exactamente donde estaría el bug.
 | captura (al paso incluido) | 3 | 6 |
 | promoción | 2, o 3 con captura | 4 ó 6 |
 | **jugada de rey** | **2** | **4** |
+| jugada de rey que cruza d/e (desde 0.34) | la mitad propia entera: ~13 filas de media | 2 en la otra perspectiva + la reconstrucción |
 | enroque | 4 (rey + torre) | 8 |
 | cambio de derechos de enroque | +1 ó +2 | +2 ó +4 |
 
@@ -1681,7 +1707,7 @@ vez:
    HCE, sigue aportando o ya estorba—, y esta vez con las dos redes guardadas en la misma
    época, que es justo lo que le faltó a `031-v2-contra-v1v2`.
 
-### Fase 7.5 — el espejo horizontal: +7 probable, y sin decisión
+### Fase 7.5 — el espejo horizontal: +8,5 Elo, a la segunda (0.34)
 
 Lo único de la tabla de §10.4 que Vigía no tenía y podía tener sin más corpus.
 Cada perspectiva ve el tablero reflejado de izquierda a derecha cuando su propio
@@ -1704,7 +1730,12 @@ enroque intercambian flanco. La tabla de pesos no cambia de tamaño.
 - **La magia del fichero pasa a `VIGIANN2`**, y el checkpoint declara con qué
   indexado se entrenó. Lo segundo lo encontraron tres revisores por separado: el
   cuantizador sellaba con la magia nueva cualquier checkpoint, también los 18
-  entrenados sin espejo.
+  entrenados sin espejo. Una salvedad: el checkpoint de la red publicada
+  (`nets/atalaya-v2v3-espejo.pt`) lleva la marca **puesta a mano** —lo dice él
+  mismo en `indexado_sellado_a_mano`—, porque su entrenamiento terminó antes de
+  que `train.py` supiera escribirla. Que es cierta está comprobado aparte:
+  recalcular su validación con los rasgos de hoy da 0,012382, idéntica a la
+  guardada, y con los rasgos sin espejo da 0,019584.
 
 **La revisión adversarial no encontró fallos de corrección** (782.044 nodos con
 29.661 cruces de rey, comparados contra un refresco y contra un oráculo aparte),
@@ -1715,7 +1746,31 @@ común. Y el comentario «tan raro que sale gratis» era falso: en la búsqueda 
 cruce ocurre en el 3 % de los movimientos y en el 9 % en un final de peones.
 
 **Coste medido, con árbol idéntico** (la red simétrica de §4 de
-`docs/BancoPruebas.md`): **−1,75 % ± 1,07 %** de nodos/segundo, unos 2 a 4 Elo.
+`docs/BancoPruebas.md`): **entre −3,8 % y −6,0 % de nodos/segundo**, según la
+compilación. Al cambio de 2,26 Elo por 1 % son de 9 a 13 Elo, que **ya van
+descontados** en las cifras de abajo, porque las tres tandas se jugaron por
+tiempo: lo que el espejo aporta a la evaluación es más que su neto.
+
+> **Corrección de la revisión previa a publicar.** Aquí ponía «−1,75 % ± 1,07 %,
+> unos 2 a 4 Elo», y la misma cifra está en las preinscripciones commiteadas de
+> `034-espejo-A` y `-A-estimacion`, que no se reescriben. **No se reproduce**:
+> dos revisores, por separado y con los mismos binarios, midieron −5,8 % y
+> −6,4 %, y de la medida original no quedó ni la salida. Remedido, 12 pasadas
+> cada una, nodos idénticos en las 12 posiciones, y esta vez con la salida
+> guardada en `banco/resultados/034-espejo-velocidad/`:
+>
+> | comparación | nodos/segundo |
+> |---|---|
+> | espejo contra 0.33, el código tal como se publica (`Vigia 0.34-sym.exe`) | −3,79 % ± 0,25 % |
+> | espejo contra 0.33, el binario que jugó el banco (`Vigia 0.34-espejo-sym.exe`) | −5,95 % ± 0,39 % |
+> | con la red de verdad, el publicado contra el que jugó (`Vigia 0.34.exe` contra `Vigia 0.34-espejo.exe`) | −0,55 % ± 0,32 % |
+> | calibración: `Vigia 0.33-sym.exe` contra su propia copia | +0,90 % ± 0,35 % |
+>
+> Las dos primeras filas son **el mismo fuente**: solo cambia el número de
+> versión de `Cargo.toml`, que recoloca el código. Dos puntos de diferencia. Y
+> con la red de verdad esos mismos dos códigos quedan a medio punto. O sea que
+> el coste es «de un 4 a un 6 %» y no se puede decir más fino con este
+> instrumento; por qué, en §4 de `docs/BancoPruebas.md`.
 
 **Señal previa**: con el mismo corpus, K, λ y semilla, la validación baja de
 0,012462 a 0,012382.
@@ -1725,30 +1780,76 @@ cruce ocurre en el 3 % de los movimientos y en el 9 % en un final de peones.
 | `034-espejo-A` (decisión, `elo0=0`, `elo1=5`) | agota 4.000 parejas con el LLR en **+2,49 de +2,94**: sin decisión. +7,3 Elo [+1,2, +13,5], LOS 99,1 % |
 | `034-espejo-A-estimacion` (tope fijo) | **+8,5 Elo** [+0,8, +16,2] en 2.500 parejas, LOS 98,5 % |
 
-**No entra en `main`.** La preinscripción decía, antes de jugar, que sin decisión
-el espejo no se publica: añade un formato de red y una reconstrucción en el
-núcleo, y esa complejidad solo se paga con ganancia *medida con el criterio
-declarado*. Las dos tandas coinciden en unos +7 Elo y las dos excluyen el cero,
-así que lo más probable es que el efecto sea real y de ese tamaño; pero «lo más
-probable» es justo lo que la preinscripción existe para no aceptar. Ampliar la
-tanda porque iba bien sería la parada opcional de manual.
+**Primero no entró, y después sí: hicieron falta dos experimentos.** La
+preinscripción de `034-espejo-A` decía, antes de jugar, que sin decisión el espejo
+no se publicaba, y sin decisión salió. Se cumplió: no entró. Ampliar aquella tanda
+porque iba ganando habría sido la parada opcional de manual.
 
-Lo que sí se sabe ahora, y es la aportación del experimento:
+El fallo era de diseño del experimento, no del espejo: con un efecto de +7 y un
+tope de 4.000 parejas, no decidir pasa **una de cada dos veces** (54 %; con el
+tope de 8.000 baja al 14 %). Aquí, y en la preinscripción commiteada de
+`034-espejo-B`, ponía «una de cada cuatro»: era una cifra sin calcular y falsa
+por un factor dos, que encontró la revisión previa a publicar. No cambia el
+criterio ni las tres ramas preinscritas, pero sí la lección, que es más dura: el
+tope de la primera tanda estaba mal puesto desde el principio. Desde ahora se
+calcula antes de lanzar, con `tools/potencia_sprt.py` (§7 de
+`docs/BancoPruebas.md`). Así que se hizo
+lo que corresponde, y lo decidió el usuario, no quien quería que saliera bien: un
+experimento **nuevo**, `034-espejo-B`, con otra semilla, el mismo criterio, un
+tope de 8.000 parejas y su preinscripción **commiteada antes de lanzar** (`65b151c`),
+incluida la rama que lo hace imposible de trampear: *si tampoco decide, se
+descarta y no hay tercera tanda*.
 
-- El espejo **a secas, sobre una red plana**, vale del orden de +7 Elo. Los diez
-  motores de §10.4 lo usan, pero con cubos de rey, que es donde ahorra de verdad;
-  solo, da el significado relativo al flanco del rey y poco más.
-- La apuesta escrita antes de lanzar —«entre +5 y +15, con probabilidad real de
-  quedarse en sin decisión»— salió, que no es consuelo pero sí calibra: con un
-  efecto de +7 y un tope de 4.000 parejas, este desenlace era de esperar una de
-  cada cuatro veces. **El tope era corto para lo que se quería medir**, y eso se
-  sabía antes de jugar.
+| tanda | resultado |
+|---|---|
+| `034-espejo-B` (confirmación) | **`acepta_h1`** en 3.565 parejas. +8,8 Elo [+2,4, +15,2], LOS 99,7 % |
 
-El código queda guardado como parche, con su red (`atalaya-256-c5417606`), listo
-para un experimento de confirmación que se preinscriba como tal, o como base de
-los cubos de rey de la fase 7.7, que lo necesitan de todos modos.
+**El espejo entra en `main` y se publica como 0.34.** Tres tandas independientes
+dan +7,3, +8,5 y +8,8. La cifra que se cita es la del medio, **+8,5 Elo
+[+0,8, +16,2]**, porque es la única de tope fijo; la de la confirmación va sesgada
+al alza por haber parado al cruzar.
+
+Con una reserva que hay que dejar escrita junto al resultado: es la segunda
+prueba formal sobre el mismo binario, así que el riesgo de haber aceptado algo
+que no vale es de cerca del 10 %, no del 5 % habitual. Esa es la cota nominal,
+dos pruebas a α = 0,05, y es la que se asumió al preinscribir. Simulado después
+con los topes reales sale menos, porque una tanda que agota el tope no acepta
+nada: con efecto real cero, la de 4.000 parejas acepta el 1,2 % de las veces y
+la de 8.000 el 3,0 %, unas cuatro de cada cien entre las dos.
+
+Lo que se sabe ahora, y es la aportación del experimento:
+
+- El espejo **a secas, sobre una red plana**, vale del orden de +8 Elo netos. Los
+  diez motores de §10.4 lo usan, pero con cubos de rey, que es donde ahorra de
+  verdad; solo, da el significado relativo al flanco del rey y poco más. Es además
+  el suelo sobre el que van los cubos de rey de la fase 7.7.
+- La apuesta escrita antes de lanzar la primera tanda —«entre +5 y +15, con
+  probabilidad real de quedarse en sin decisión»— salió en sus dos mitades.
+- **El coste de velocidad se puede recuperar, en parte, y vale más de lo que se
+  creyó.** Sale sobre todo de reconstruir media red en el 3 % de los
+  movimientos (15 filas de media por reconstrucción): quitar esa llamada de una
+  copia del código devolvió entre +1,7 % y +6 % según la compilación, medido
+  por los revisores. Una caché de acumuladores por perspectiva y mitad (lo que
+  §10.2 descartó como «tablas Finny» cuando la arquitectura no tenía este
+  problema) la dejaría en una diferencia de pocas filas. Ahora sí lo tiene, y es
+  un candidato del carril de velocidad. Antes que ella hay uno más barato: la
+  reconstrucción está compilada una sola vez, a 8 carriles, y la llaman también
+  los caminos de AVX2 y AVX-512 (§4 de `docs/Documentacion_tecnica.md`).
+  Aquí ponía que la caché recuperaría «el −1,75 %»; la cifra era falsa.
 
 ### Fase 7.4 — el corpus deja de pagar, y se cierra la via (0.34 no existe)
+
+> **Nota de 0.34.** El título y el «0.33 sigue siendo la release» de más abajo
+> eran ciertos cuando se escribieron. El número 0.34 lo ocupó después el espejo
+> horizontal de la fase 7.5; lo que no se publicó, y sigue sin publicarse, es la
+> red de `v3+v4` de esta fase.
+>
+> Las redes de estas tandas y la de `033-volumen-v3-solo` no pertenecen a ninguna
+> etiqueta y salen de `nets/` en 0.34. Se recuperan del commit que las introdujo:
+> `atalaya-256-029d3397` (v3 solo) con
+> `git show b8fe0da:nets/atalaya-256-029d3397.bin`, y `atalaya-256-b00327e6`
+> (v3+v4) y `atalaya-256-4f4a32ec` (v2+v3+v4) de `00a1e4e`. Las otras dos que
+> salen, `b3ef7165` y `fe9a48f3`, están en la etiqueta `0.33`.
 
 Dos experimentos, los dos sin decision, y juntos cierran una linea de trabajo que
 venia dando de comer desde 0.31.
@@ -1939,7 +2040,7 @@ todo lo aproximado.
 | **`PP_3Wide`** (pares de peones) | Mover un peón toca hasta 15 pares por perspectiva = 30 columnas. A ~25 % de jugadas de peón son +22 % de presupuesto por una sola familia de rasgos |
 | **Ancho 1024 y capas ocultas densas** (`1024→32→32→1`) | Una capa 512×32 cuesta **2.485 ns derateados = 3,8 veces el presupuesto entero de una evaluación**. Ni con AVX2 cabe (607 ns, el 92 % ella sola). Vigía puede permitirse *menos* red que Stockfish precisamente porque su nodo es barato: 657 ns es poco, y el 30 % de poco es poco |
 | **Pesos i8** | Medido: sin SSSE3 no hay `pmaddubsw` y LLVM ensancha a i16 igualmente (1.688 vs 1.679 ns, empate); con AVX2 el i8 es un 32 % *peor*. La danza u8×i8 es una optimización de un ISA que este binario no tiene |
-| **Cubos de rey, tablas Finny y camino híbrido** para el rey | 150 líneas, 32–64 KB por hilo y un diff de tableros cacheados para tapar un problema que la arquitectura elegida **no tiene**. Superficie de bugs pura en una primera red |
+| **Cubos de rey, tablas Finny y camino híbrido** para el rey | 150 líneas, 32–64 KB por hilo y un diff de tableros cacheados para tapar un problema que la arquitectura elegida **no tiene**. Superficie de bugs pura en una primera red. **Desde 0.34 sí lo tiene, en pequeño**: con el espejo, el 3 % de los movimientos reconstruye media red (entre −4 % y −6 % de nodos/segundo; aquí ponía −1,75 %). Una caché por perspectiva y mitad es ahora un candidato del carril de velocidad, no una idea descartada |
 | **Compresión LEB128** | 394 KiB no justifican 50 líneas de descompresor. Con 98 MB, a Stockfish sí |
 | **Doble activación sqr+clip concatenada, el atajo `fc_0[30]−fc_0[31]`, PSQT paralelo, `permute_weights`, `nnz_helper.h`** | Optimizaciones y afinados de una arquitectura que no es esta. `nnz_helper.h` son 171 líneas de `vpcompress`/`pext` |
 | **La mezcla final con optimismo, complejidad y amortiguación por regla de 50** (`evaluate.cpp:50-72`) | Vigía no tiene esos términos, y añadirlos a la vez que la red rompería «una mejora cada vez» |
@@ -2022,7 +2123,9 @@ Lo que se lee ahí, por orden de lo que le importa a Vigía:
   arquitectura mayor que el espejo o la anchura y va detrás de los dos.
 
 **Orden que sale de aquí, una cosa cada vez:** el espejo (sin coste de parámetros);
-después la anchura, N = 384, cuyo peaje está medido en ~2,9 % de nodos/segundo; y solo
+después la anchura, N = 384, cuyo peaje está **estimado** en ~3 % de nodos/segundo
+(la mitad de lo que cuesta ejecutar dos veces la ruta de la red de 256; sin medir aún
+con una red de 384); y solo
 con más corpus, de 2 a 4 cubos de rey con factorizador.
 
 ## 11. Documentación que hay que actualizar al terminar

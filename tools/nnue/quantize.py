@@ -55,6 +55,18 @@ def main():
     args = ap.parse_args()
 
     ck = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
+    # Los pesos solo significan algo junto al indexado de rasgos con que se
+    # entrenaron, y la magia del `.bin` la escribe ESTE fichero, no aquel
+    # entrenamiento. Sin esta comprobación, recuantizar hoy un checkpoint
+    # anterior al espejo da una red con la magia nueva que el motor carga sin
+    # queja y evalúa con otro indexado, con cifras verosímiles — y la medida del
+    # error de cuantización de más abajo no lo ve, porque alimenta el modelo
+    # flotante y la red entera con los mismos rasgos.
+    if ck.get('indexado') != ds.INDEXADO:
+        raise SystemExit(
+            '%s se entrenó con otros rasgos (%r) que los que escribe este cuantizador (%r): no se cuantiza. '
+            'Un checkpoint sin esa marca es anterior al espejo horizontal.'
+            % (args.checkpoint, ck.get('indexado'), ds.INDEXADO))
     n_cubos, tabla = ck['n_cubos'], ck['cubo']
     ft_w, ft_b, salida, sesgo = a_enteros(ck['modelo'], n_cubos)
 

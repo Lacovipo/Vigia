@@ -125,6 +125,14 @@ def casillas_y_piezas(datos):
     return casillas, nibbles, valido
 
 
+# Cómo se calculan los índices de rasgo. Va dentro de cada checkpoint, y
+# `quantize.py` se niega a cuantizar uno que no lo traiga o traiga otro: los
+# pesos solo significan algo junto al indexado con que se entrenaron, y la magia
+# del `.bin` la pone el cuantizador de hoy, no el entrenamiento de entonces.
+# Cambiar `rasgos` obliga a cambiar esta cadena.
+INDEXADO = 'espejo-h'
+
+
 def rasgos(datos):
     """Rasgos activos vistos por las blancas y por las negras: dos matrices
     (n, 36) de índices ordenados, rellenas con PAD. Misma definición que
@@ -136,12 +144,20 @@ def rasgos(datos):
     meta = np.ascontiguousarray(datos['meta']).astype(np.int32)
     resultado = []
     for persp in (0, 1):
-        piezas = (color != persp) * 384 + tipo * 64 + (casillas ^ (56 * persp))
+        # El espejo horizontal: lo decide el rey PROPIO de la perspectiva, y es
+        # verdadero cuando está en las columnas e-h (`nnue::mirrors`). Cada
+        # registro tiene exactamente un rey de cada color, así que el máximo
+        # sobre la fila lo localiza sin bucle.
+        es_mi_rey = valido & (tipo == 5) & (color == persp)
+        columna_rey = np.where(es_mi_rey, casillas & 7, 0).max(axis=1)
+        espejo = (columna_rey >= 4).astype(np.int32)
+        piezas = (color != persp) * 384 + tipo * 64 + (casillas ^ (56 * persp) ^ (7 * espejo[:, None]))
         piezas = np.where(valido, piezas, PAD)
         enroques = np.full((n, 4), PAD, dtype=np.int32)
-        # Bits 1-4 de meta: K Q k q. Dueño 0 = blancas; corto 1 = flanco de rey.
+        # Bits 1-4 de meta: K Q k q. Dueño 0 = blancas; corto 1 = flanco de rey,
+        # que con el espejo se intercambia con el largo.
         for j, (bit, dueno, corto) in enumerate(((2, 0, 1), (4, 0, 0), (8, 1, 1), (16, 1, 0))):
-            indice = PIECE_FEATURES + (2 if dueno != persp else 0) + corto
+            indice = PIECE_FEATURES + (2 if dueno != persp else 0) + (corto ^ espejo)
             enroques[:, j] = np.where(meta & bit != 0, indice, PAD)
         todos = np.concatenate([piezas, enroques], axis=1)
         todos.sort(axis=1)

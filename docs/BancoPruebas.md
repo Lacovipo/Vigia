@@ -433,7 +433,10 @@ nodos—, en la que siempre le tocaba medir segundo al mismo motor.
 
 **Calibrado como se calibra un instrumento**: midiendo algo de resultado
 conocido. Un binario contra su propia copia, 12 pasadas, con la máquina cargada:
-**0,992 ± 0,76 %**. Compatible con 1,00, sin tendencia.
+**0,992 ± 0,76 %**. Compatible con 1,00, sin tendencia. (Tres calibraciones
+posteriores dieron 1,008, 1,009 y 1,014, todas del mismo lado: no es sesgo del
+instrumento sino algo que distingue de verdad a un fichero de su copia. Está
+más abajo, en «Lo que las pasadas no ven».)
 
 **Y su resolución, que hay que conocer antes de usarlo**: una pasada sola se
 mueve ±2 % (entre 0,956 y 1,041 en esa calibración). Doce pasadas dejan el error
@@ -447,12 +450,56 @@ aprueba nada. Y un motor que no repite sus propios nodos de una búsqueda a la
 siguiente se rechaza con un error, porque entonces no es determinista y el
 criterio no significa nada.
 
+#### Lo que las pasadas no ven: dos ficheros del mismo código (0.34)
+
+La tercera vez, y la encontró la revisión previa a publicar 0.34. El coste del
+espejo horizontal quedó escrito como «−1,75 % ± 1,07 %» en cuatro documentos y
+dos preinscripciones. Dos revisores lo repitieron por separado con los mismos
+binarios y les salió −5,8 % y −6,4 %. **De la medida original no quedó ni la
+salida**, así que no se puede saber qué se midió.
+
+Al remedirlo, con 12 pasadas y nodos idénticos, salió algo peor que una cifra
+equivocada (salidas en `banco/resultados/034-espejo-velocidad/`):
+
+| comparación | resultado |
+|---|---|
+| espejo contra 0.33, compilado como `0.34.0` | −3,79 % ± 0,25 % |
+| espejo contra 0.33, **el mismo fuente** compilado como `0.33.0` | −5,95 % ± 0,39 % |
+| esos dos mismos códigos entre sí, pero con la red de verdad empotrada | −0,55 % ± 0,32 % |
+| un binario contra **su propia copia**, byte a byte | +0,90 % ± 0,35 % |
+
+La última fila no es un accidente: los revisores la midieron otras dos veces el
+mismo día y les dio +0,84 % ± 0,45 % y +1,40 % ± 0,50 %. Y no es un sesgo de
+posición del instrumento, porque cada comparación que se repitió con los
+motores cambiados de sitio dio la inversa exacta (0,9416 y 1/1,0620; 0,9360 y
+1/1,0683).
+
+> **El error típico de las pasadas mide la repetibilidad de un par de ficheros,
+> no lo que separa a dos compilaciones.** Dos compilaciones del mismo fuente se
+> llevan dos puntos, y un fichero y su copia, uno. Doce pasadas más no lo
+> arreglan: lo miden mejor.
+
+Qué se hace con esto, mientras no se sepa la causa:
+
+- **`banco velocidad` no resuelve por debajo de ~2 % entre dos binarios**, diga
+  lo que diga su error típico. Un cambio de velocidad pequeño se mide en **más
+  de una compilación** de cada lado y se cita el intervalo que cubren.
+- **La salida de toda cifra que se cite se guarda**, en
+  `banco/resultados/<id>-velocidad/`, igual que el resumen de una tanda.
+- La causa está sin demostrar. La sospechosa es la **alineación de los datos**:
+  la tabla de rasgos y los acumuladores son `Box<[i16]>`, que el montón alinea a
+  16 bytes, y AVX-512 los lee de 64 en 64; dónde caigan depende de lo que se
+  haya reservado antes, que cambia con la compilación y hasta con el nombre del
+  fichero. Es una hipótesis y es lo primero del carril de velocidad
+  (`docs/MejorasPendientes.md`), porque si es cierta arregla el motor y el
+  instrumento a la vez.
+
 #### El truco de la red simétrica, para medir un cambio que sí mueve los nodos
 
 Un cambio en la evaluación mueve los nodos por definición, así que el criterio
 de arriba parece dejarlo fuera. No siempre: si el cambio es **de indexado** y no
 de pesos, se puede construir una red con la que el código viejo y el nuevo
-calculen exactamente los mismos enteros. Para el espejo horizontal que se probó en 0.34 fue
+calculen exactamente los mismos enteros. Para el espejo horizontal de 0.34 fue
 copiar cada fila de las columnas e–h de su reflejo: con esos pesos, leer con
 espejo o sin él da lo mismo, el árbol es idéntico y la diferencia de reloj es el
 coste puro del código nuevo. Idea de la revisión adversarial de 0.34, y la
@@ -690,6 +737,46 @@ Así que cuando una tanda pueda terminar en empate —y una de hipótesis pegada
 El desempate por defecto, salvo que el experimento diga otra cosa: **se queda la
 opción más barata de mantener y la que simplifica lo que viene**, y el coste
 máximo de equivocarse se anota con el intervalo en la mano.
+
+### Y el tope se calcula, no se elige a ojo (0.34)
+
+`034-espejo-A` se lanzó con 4.000 parejas para un efecto que se esperaba «entre
++5 y +15», agotó el tope con el LLR en +2,49 de +2,94 y, por su preinscripción,
+el espejo no entró. Hizo falta una segunda tanda entera. Al contarlo se escribió
+que con +7 Elo «no decidir pasa una de cada cuatro veces», y así quedó hasta en
+la preinscripción de la confirmación. **Nadie lo había calculado: pasa una de
+cada dos.** Simulando el SPRT del banco (`elo0=0`, `elo1=5`, α = β = 0,05) con
+la forma de las parejas de las tres tandas del espejo:
+
+| efecto real | tope | `acepta_h1` | `acepta_h0` | sin decisión |
+|---:|---:|---:|---:|---:|
+| 0 | 4.000 | 1,2 % | 22,8 % | **76,0 %** |
+| 0 | 8.000 | 3,0 % | 58,0 % | 39,0 % |
+| +5 | 4.000 | 23,4 % | 1,3 % | **75,3 %** |
+| +5 | 8.000 | 58,1 % | 3,0 % | 38,8 % |
+| +7 | 4.000 | 45,4 % | 0,2 % | **54,4 %** |
+| +7 | 8.000 | 85,7 % | 0,5 % | 13,8 % |
+| +8,5 | 4.000 | 63,3 % | 0,1 % | 36,6 % |
+| +8,5 | 8.000 | 95,8 % | 0,1 % | 4,1 % |
+| +10 | 4.000 | 79,6 % | 0,0 % | 20,4 % |
+| +10 | 8.000 | 99,2 % | 0,0 % | 0,8 % |
+
+```bash
+python tools/potencia_sprt.py --elo 0 5 7 8.5 10 --tope 4000 8000
+```
+
+Tres cosas que salen de la tabla y que antes no estaban escritas en ningún sitio:
+
+- **Un tope de 4.000 parejas no decide casi nada por debajo de +10 Elo.** Con un
+  efecto de +5, que es justo lo que `elo1` dice querer detectar, tres de cada
+  cuatro tandas terminan sin decisión. Y este proyecto ya vive de efectos de
+  +5 a +10.
+- **El tope se elige para el efecto más pequeño que se quiere poder aprobar**,
+  no para el que se espera, y la probabilidad de no decidir se escribe **con su
+  cifra** en la preinscripción, junto a la rama de «sin decisión».
+- **Una tanda con tope acepta H1 por error menos del α nominal** (1,2 % y 3,0 %
+  con efecto cero), porque agotar el tope no es aceptar. El precio de esa
+  prudencia es exactamente la columna de la derecha.
 
 **Cómo desactivar la parada**, sin trucar `alpha`: `stats.rs` tiene un test,
 `identical_hypotheses_give_zero_llr`, que fija que con `elo0 = elo1` el LLR
@@ -991,9 +1078,15 @@ desde los resultados) cada vez que se lee.
 2. Implementar **una sola** mejora. Nunca varias a la vez: si el resultado
    sale mal no se sabe cuál fue.
 3. Si el cambio es de solo velocidad → `banco velocidad`. Si los nodos
-   cambian, no lo era: sigue por el paso 4.
+   cambian, no lo era: sigue por el paso 4. La salida se guarda, y un efecto
+   de menos del 2 % se mide en más de una compilación (§4).
 4. `banco sprt` contra la release cerrada anterior, con `elo0=0, elo1=5`.
-   Avisar antes de cuántas CPUs se van a ocupar.
+   Avisar antes de cuántas CPUs se van a ocupar. **El tope de parejas se
+   calcula** con `tools/potencia_sprt.py` para el efecto más pequeño que se
+   quiera poder aprobar, y la probabilidad de no decidir va en la
+   preinscripción (§7). El candidato se compila **ya con el número de versión
+   con el que se publicaría**: cambiarlo después recoloca el código, y el
+   binario que se publica deja de ser el que se midió.
 5. Leer el resultado con honestidad. `acepta_h0` con esas hipótesis no
    significa "empeora", significa "no llega a +5 Elo".
 6. Si el resultado es malo y no se sabe por qué, mirar `partidas.pgn`
@@ -1031,7 +1124,7 @@ desde los resultados) cada vez que se lee.
 | Reanudación desde una tanda truncada a 3 parejas | resultado final idéntico a la tanda completa |
 | Reanudar con otro control de búsqueda | rechazado por firma distinta |
 | `banco velocidad` de un binario contra sí mismo | nodos idénticos en las 12 posiciones; ±4 % de ruido en nodos/segundo |
-| Suite completa | 404 tests (264 motor + 129 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
+| Suite completa | 406 tests (266 motor + 129 banco + 3 generador + 8 harness antiguo), 0 avisos de clippy |
 
 ### Experimentos registrados
 
@@ -1059,7 +1152,8 @@ desde los resultados) cada vez que se lee.
 | `032-lambda-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas, tope fijo: **+21,0 Elo** [+13,3, +28,7] |
 | `032-epocas-de-cola` | el control de 0.32: λ = 1 en la época 60 vs la época 57 de 0.31 | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,3 Elo [−8,6, +15,2]. La cola de entrenamiento que separaba las dos redes no compra nada |
 | `034-espejo-A` | red con espejo horizontal vs 0.33, decisión | `movetime` 100 ms | agota 4.000 parejas con LLR +2,49 de +2,94: **sin decisión**. +7,3 Elo [+1,2, +13,5] |
-| `034-espejo-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas: +8,5 Elo [+0,8, +16,2]. No entra en `main` por preinscripción |
+| `034-espejo-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas: **+8,5 Elo** [+0,8, +16,2]. Es la cifra de 0.34 |
+| `034-espejo-B` | la confirmación, preinscrita antes de lanzar, tope 8.000 | `movetime` 100 ms | 3.565 parejas: **`acepta_h1`**, +8,8 Elo [+2,4, +15,2]. El espejo entra |
 | `032-lambda-050` | red con λ = 0,50 vs 0.31, cribado | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,1 Elo [−9,1, +15,4]. El óptimo de λ no está por debajo de 0,75 |
 | `033-v1v2v3-contra-v2v3` | red de 108 M vs red de 72 M: qué aporta añadir el corpus v1 | `movetime` 100 ms | 1.000 parejas, tope fijo: +2,1 Elo [−9,9, +14,1], LOS 63 %. Sin decisión: v1 ya no aporta |
 | `033-corpus-v3-A` | red de v2+v3 (0.33) vs 0.32 | `movetime` 100 ms | 950 parejas: **`acepta_h1`**, +26,8 Elo |
