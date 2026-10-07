@@ -1,0 +1,74 @@
+{
+  "_": "Fase 7.5, la CONFIRMACION del espejo horizontal. Es un experimento nuevo, no la",
+  "_2": "continuacion de 034-espejo-A: otra semilla, otro tope, y preinscrito como tal.",
+  "_antecedente": "034-espejo-A agoto 4.000 parejas con el LLR en +2,49 de +2,94: sin decision,",
+  "_antecedente_2": "con +7,3 Elo [+1,2, +13,5]. Su tanda de cifra dio +8,5 [+0,8, +16,2]. Por la",
+  "_antecedente_3": "preinscripcion de entonces el espejo NO entro en main. El fallo fue de diseno:",
+  "_antecedente_4": "con un efecto de +7 y ese tope, no decidir pasa una de cada cuatro veces.",
+  "_por_que_no_es_parada_opcional": "Ampliar la tanda anterior porque iba ganando lo seria. Esto",
+  "_por_que_no_es_parada_opcional_2": "no reutiliza su LLR ni sus partidas: empieza de cero, con el mismo criterio",
+  "_por_que_no_es_parada_opcional_3": "de siempre (elo0=0, elo1=5, alpha=beta=0,05) y un tope con potencia para el",
+  "_por_que_no_es_parada_opcional_4": "efecto que la piloto sugiere. Lo que la hace imposible de trampear es la",
+  "_por_que_no_es_parada_opcional_5": "tercera rama de abajo. Decidido por el usuario el 07/10/2026 (opcion B).",
+  "_preinscripcion": "Declarado ANTES de jugar, y commiteado antes de lanzar:",
+  "_preinscripcion_2": "acepta_h1 -> el espejo entra en main y se publica como 0.34. La cifra que se",
+  "_preinscripcion_3": "cita es la de 034-espejo-A-estimacion (+8,5 [+0,8, +16,2]), que es de tope",
+  "_preinscripcion_4": "fijo y no puede pararse sola; la de esta tanda saldra sesgada al alza.",
+  "_preinscripcion_5": "acepta_h0 -> el espejo se descarta. Definitivo.",
+  "_preinscripcion_6": "sin decision -> el espejo se descarta. Definitivo, y NO HAY TERCERA TANDA:",
+  "_preinscripcion_7": "dos experimentos formales sin decidir son la respuesta, no un motivo para",
+  "_preinscripcion_8": "un tercero. Si mas adelante hacen falta cubos de rey, el espejo se medira",
+  "_preinscripcion_9": "dentro de ese cambio, no por separado otra vez.",
+  "_familia": "Segunda prueba formal sobre el mismo candidato (binario 2007d6b24bfc71e9). Con",
+  "_familia_2": "dos pruebas a alpha = 0,05 el riesgo de aceptar algo que no vale sube a ~10 %.",
+  "_familia_3": "Se asume y se dice: las dos estimaciones independientes rondan +7 con LOS 99 %.",
+  "_ruido": "Cuatro workers con la maquina a medio gas, como siempre. Pareada: la carga",
+  "_ruido_2": "ensancha el intervalo, no lo desplaza.",
+  "esquema": 1,
+  "id": "034-espejo-B",
+  "candidato": {
+    "nombre": "0.34-espejo",
+    "ruta": "Release/Vigia 0.34-espejo.exe",
+    "opciones": {
+      "Hash": 32,
+      "Threads": 1
+    }
+  },
+  "base": {
+    "nombre": "0.33",
+    "ruta": "Release/Vigia 0.33.exe",
+    "opciones": {
+      "Hash": 32,
+      "Threads": 1
+    }
+  },
+  "libro": {
+    "fichero": "banco/libros/vigia-20000.epd",
+    "semilla": 20261008,
+    "barajar": true
+  },
+  "busqueda": {
+    "movetime_ms": 100
+  },
+  "partidas": {
+    "max_parejas": 8000,
+    "workers": 4,
+    "max_plies": 300,
+    "margen_ms": 10000,
+    "saludo_ms": 10000
+  },
+  "adjudicacion": {
+    "resign_cp": 900,
+    "resign_plies": 4,
+    "tablas_cp": 12,
+    "tablas_plies": 8,
+    "tablas_desde_jugada": 40
+  },
+  "sprt": {
+    "elo0": 0.0,
+    "elo1": 5.0,
+    "alpha": 0.05,
+    "beta": 0.05
+  },
+  "salida": "banco/resultados/034-espejo-B"
+}
