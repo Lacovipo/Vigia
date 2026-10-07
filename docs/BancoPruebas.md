@@ -1058,6 +1058,8 @@ desde los resultados) cada vez que se lee.
 | `032-lambda-A` | lo mismo, decisión | `movetime` 100 ms | 1.049 parejas: **`acepta_h1`**, +23,6 Elo (sesgado al alza) |
 | `032-lambda-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas, tope fijo: **+21,0 Elo** [+13,3, +28,7] |
 | `032-epocas-de-cola` | el control de 0.32: λ = 1 en la época 60 vs la época 57 de 0.31 | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,3 Elo [−8,6, +15,2]. La cola de entrenamiento que separaba las dos redes no compra nada |
+| `034-espejo-A` | red con espejo horizontal vs 0.33, decisión | `movetime` 100 ms | agota 4.000 parejas con LLR +2,49 de +2,94: **sin decisión**. +7,3 Elo [+1,2, +13,5] |
+| `034-espejo-A-estimacion` | lo mismo, tope fijo | `movetime` 100 ms | 2.500 parejas: +8,5 Elo [+0,8, +16,2]. No entra en `main` por preinscripción |
 | `032-lambda-050` | red con λ = 0,50 vs 0.31, cribado | `movetime` 100 ms | 1.000 parejas, tope fijo: +3,1 Elo [−9,1, +15,4]. El óptimo de λ no está por debajo de 0,75 |
 | `033-v1v2v3-contra-v2v3` | red de 108 M vs red de 72 M: qué aporta añadir el corpus v1 | `movetime` 100 ms | 1.000 parejas, tope fijo: +2,1 Elo [−9,9, +14,1], LOS 63 %. Sin decisión: v1 ya no aporta |
 | `033-corpus-v3-A` | red de v2+v3 (0.33) vs 0.32 | `movetime` 100 ms | 950 parejas: **`acepta_h1`**, +26,8 Elo |

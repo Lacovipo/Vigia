@@ -1681,6 +1681,73 @@ vez:
    HCE, sigue aportando o ya estorba—, y esta vez con las dos redes guardadas en la misma
    época, que es justo lo que le faltó a `031-v2-contra-v1v2`.
 
+### Fase 7.5 — el espejo horizontal: +7 probable, y sin decisión
+
+Lo único de la tabla de §10.4 que Vigía no tenía y podía tener sin más corpus.
+Cada perspectiva ve el tablero reflejado de izquierda a derecha cuando su propio
+rey está en las columnas e–h: un XOR de 7 sobre la casilla, y los derechos de
+enroque intercambian flanco. La tabla de pesos no cambia de tamaño.
+
+**Lo que costó hacerlo bien**, que es más que la idea:
+
+- **Tres implementaciones que tienen que coincidir**: Rust, la referencia escalar
+  de Python y la vectorizada del entrenador. Vector dorado con 4.096 posiciones
+  idénticas en las dos perspectivas, y 24.000 comparaciones entre las dos de
+  Python sin una diferencia, con 3.135 posiciones en las que solo una perspectiva
+  lleva espejo.
+- **El rey que cruza entre las columnas d y e** —enroque largo incluido— cambia
+  el significado de todas las casillas para su perspectiva, y esa mitad del
+  acumulador se reconstruye en vez de actualizarse. Es la primera excepción a la
+  invariante sobre la que se diseñó Atalaya.
+- **Un invariante nuevo que antes era falso**: una posición y su reflejo evalúan
+  exactamente igual, para cualquier red.
+- **La magia del fichero pasa a `VIGIANN2`**, y el checkpoint declara con qué
+  indexado se entrenó. Lo segundo lo encontraron tres revisores por separado: el
+  cuantizador sellaba con la magia nueva cualquier checkpoint, también los 18
+  entrenados sin espejo.
+
+**La revisión adversarial no encontró fallos de corrección** (782.044 nodos con
+29.661 cruces de rey, comparados contra un refresco y contra un oráculo aparte),
+pero sí uno de velocidad que habría contaminado la medida: la reconstrucción
+escrita dentro del bucle de perspectivas encarecía **todos** los movimientos, no
+solo los que cruzan, porque el compilador sacaba su preparación a la cabecera
+común. Y el comentario «tan raro que sale gratis» era falso: en la búsqueda el
+cruce ocurre en el 3 % de los movimientos y en el 9 % en un final de peones.
+
+**Coste medido, con árbol idéntico** (la red simétrica de §4 de
+`docs/BancoPruebas.md`): **−1,75 % ± 1,07 %** de nodos/segundo, unos 2 a 4 Elo.
+
+**Señal previa**: con el mismo corpus, K, λ y semilla, la validación baja de
+0,012462 a 0,012382.
+
+| tanda | resultado |
+|---|---|
+| `034-espejo-A` (decisión, `elo0=0`, `elo1=5`) | agota 4.000 parejas con el LLR en **+2,49 de +2,94**: sin decisión. +7,3 Elo [+1,2, +13,5], LOS 99,1 % |
+| `034-espejo-A-estimacion` (tope fijo) | **+8,5 Elo** [+0,8, +16,2] en 2.500 parejas, LOS 98,5 % |
+
+**No entra en `main`.** La preinscripción decía, antes de jugar, que sin decisión
+el espejo no se publica: añade un formato de red y una reconstrucción en el
+núcleo, y esa complejidad solo se paga con ganancia *medida con el criterio
+declarado*. Las dos tandas coinciden en unos +7 Elo y las dos excluyen el cero,
+así que lo más probable es que el efecto sea real y de ese tamaño; pero «lo más
+probable» es justo lo que la preinscripción existe para no aceptar. Ampliar la
+tanda porque iba bien sería la parada opcional de manual.
+
+Lo que sí se sabe ahora, y es la aportación del experimento:
+
+- El espejo **a secas, sobre una red plana**, vale del orden de +7 Elo. Los diez
+  motores de §10.4 lo usan, pero con cubos de rey, que es donde ahorra de verdad;
+  solo, da el significado relativo al flanco del rey y poco más.
+- La apuesta escrita antes de lanzar —«entre +5 y +15, con probabilidad real de
+  quedarse en sin decisión»— salió, que no es consuelo pero sí calibra: con un
+  efecto de +7 y un tope de 4.000 parejas, este desenlace era de esperar una de
+  cada cuatro veces. **El tope era corto para lo que se quería medir**, y eso se
+  sabía antes de jugar.
+
+El código queda guardado como parche, con su red (`atalaya-256-c5417606`), listo
+para un experimento de confirmación que se preinscriba como tal, o como base de
+los cubos de rey de la fase 7.7, que lo necesitan de todos modos.
+
 ### Fase 7.4 — el corpus deja de pagar, y se cierra la via (0.34 no existe)
 
 Dos experimentos, los dos sin decision, y juntos cierran una linea de trabajo que
