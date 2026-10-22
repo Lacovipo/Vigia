@@ -35,3 +35,15 @@ real. La discrepancia es de alcance o de método.
   El motor debe devolver una jugada legal igualmente, y el score de raíz
   solo se reporta. El coste (comprobar reloj, repetición y material en la
   raíz) no compra ninguna decisión distinta. Se deja como está.
+
+- **Alinear a 64 bytes la tabla de rasgos y los acumuladores** (fila 7.5,
+  candidato (a) del carril de velocidad). Implementado como un tipo seguro
+  (`Aligned`: sobreasigna 31 `i16` y recuerda el inicio alineado, sin `unsafe`).
+  `banco velocidad --pasadas 12`, profundidad 12, hash 32, 1 hilo, nodos
+  idénticos en las 12 posiciones: **+0,44 % ± 0,49 %** (pasadas de 0,982x a
+  1,039x). Indistinguible de cero, así que no entra (salida en
+  `banco/velocidad/alineado-64-a.log`). Una sola compilación del cambio.
+  La hipótesis secundaria (explicar que una copia idéntica de un binario mida
+  un 1 % distinto) queda sin apoyo: el ruido por pasada fue de ±2 % con el
+  motor alineado igualmente. No volver a proponerlo salvo con otra
+  microarquitectura.
