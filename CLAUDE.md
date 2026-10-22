@@ -55,6 +55,7 @@ minutos. A 25.000 nodos, unos 4.
 | `docs/Documentacion_tecnica.md` | estado actual del motor, módulo a módulo |
 | `docs/MejorasPendientes.md` | qué hacer a continuación, priorizado, con cómo validar cada cosa |
 | `docs/Descartados.md` | propuestas rechazadas y por qué (no volver a proponerlas) |
+| `docs/Relevo.md` | dónde quedó todo al pasar a BurroCode, y qué sigue |
 | `docs/PlanNNUE.md` | el plan de la red NNUE, por fases, cada una con su criterio de aceptación |
 | `docs/_Info_humano.md` | recursos externos que el usuario pone a disposición. **Solo local**: no se publica porque lleva rutas de su equipo |
 
