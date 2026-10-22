@@ -137,7 +137,17 @@ fn handle_command(line: &str, engine: &mut Engine, out: &mut impl Write) -> bool
         "setoption" => cmd_setoption(engine, tokens),
         "ucinewgame" => cmd_ucinewgame(engine),
         "position" => cmd_position(engine, tokens),
-        "go" => cmd_go(engine, tokens),
+        "go" => {
+            // `go perft N` (Stockfish dialect) is a move-generator check,
+            // not a search: answered synchronously, never reaching `cmd_go`.
+            let mut peek = tokens.clone();
+            if peek.next() == Some("perft") {
+                cmd_perft(engine, peek, out);
+            } else {
+                cmd_go(engine, tokens);
+            }
+        }
+        "perft" => cmd_perft(engine, tokens, out),
         "stop" => cmd_stop(engine),
         "ponderhit" => cmd_ponderhit(engine),
         "eval" => cmd_eval(engine, out),
@@ -431,6 +441,35 @@ fn go_limits(engine: &Engine, tokens: SplitWhitespace) -> search::SearchLimits {
     limits
 }
 
+/// `perft N` / `go perft N`: counts the leaf nodes of the legal-move tree of
+/// the current position to depth N, in the near-universal "divide" format
+/// (Stockfish, Berserk...): one `<move>: <nodes>` line per root move, a
+/// blank line, then `Nodes searched: <total>`. This is the interface El
+/// Juez uses to validate the move generator against a reference engine.
+/// Depth 0 and missing/unparseable depth are treated as 1, as Stockfish does
+/// for a non-positive depth.
+fn cmd_perft(engine: &mut Engine, mut tokens: SplitWhitespace, out: &mut impl Write) {
+    join_search_thread(engine);
+    let depth = tokens.next().and_then(|t| t.parse::<u32>().ok()).unwrap_or(1).max(1);
+    let mut board = engine.board.clone();
+    let mut total: u64 = 0;
+    for mv in movegen::legal_moves_scratch(&mut board) {
+        let nodes = if depth == 1 {
+            1
+        } else {
+            let undo = board.make_move(mv);
+            let n = movegen::perft(&mut board, depth - 1);
+            board.unmake_move(mv, undo);
+            n
+        };
+        total += nodes;
+        let _ = writeln!(out, "{mv}: {nodes}");
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Nodes searched: {total}");
+    let _ = out.flush();
+}
+
 fn cmd_go(engine: &mut Engine, tokens: SplitWhitespace) {
     join_search_thread(engine);
 
@@ -655,6 +694,18 @@ mod tests {
         assert!(out.contains("id name"));
         assert!(out.contains("uciok"));
         assert!(keep_going);
+    }
+
+    #[test]
+    fn perft_and_go_perft_print_divide_and_total() {
+        for cmd in ["perft 3", "go perft 3"] {
+            let (out, keep_going) = run_command(cmd);
+            assert!(keep_going);
+            assert!(out.contains("e2e4: 600\n"), "{out}");
+            assert!(out.contains("\n\nNodes searched: 8902\n"), "{out}");
+        }
+        let (out, _) = run_command("perft 1");
+        assert!(out.contains("Nodes searched: 20\n"));
     }
 
     #[test]
