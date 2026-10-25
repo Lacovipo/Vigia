@@ -40,3 +40,9 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 - La preinscripción, rama «sin decisión» incluida, se commitea antes de lanzar.
 - Una banda estrecha no es ausencia de sesgo: calibrar contra algo conocido.
 - Revisión adversarial antes de publicar: siempre encontró algo.
+
+## Actualización (25-oct-2026)
+
+- (b) hecho y commiteado (`0f864a2`, +1,81 % nps ± 0,29 %); sin liberar: se junta con la próxima red.
+- (c) caché de acumuladores: **descartada por estimación**. El rebuild corre en ~3 % de los push; techo ~1 % nps. No compensa la complejidad.
+- **Peaje de N = 384 medido** (red 256 rellena con ceros a 384: mismas salidas, nodos idénticos): **−1,93 % nps ± 0,32 %** (`banco/velocidad/n384-peaje.log`), no el ~3 % estimado. Siguiente: entrenar Atalaya-384 (parametrizar HIDDEN en `train.py`/`netfmt.py`/`quantize.py`/`nnue.rs`).
