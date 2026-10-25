@@ -1,0 +1,29 @@
+{
+  "_": "N=384 (atalaya-384-aaad4166, mismo corpus v2+v3, lambda 0.75) contra 0.34.0, a movetime 100 ms: incluye el coste de velocidad. Cribado de cifra, 2 workers (limite de 2 CPUs).",
+  "esquema": 1,
+  "id": "035-n384-estimacion",
+
+  "candidato": {
+    "nombre": "0.34-n384",
+    "ruta": "target/release/vigia-384.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "base": {
+    "nombre": "0.34.0",
+    "ruta": "target/release/vigia-034-base.exe",
+    "opciones": { "Hash": 32, "Threads": 1 }
+  },
+
+  "libro": { "fichero": "banco/libros/vigia-20000.epd", "semilla": 20261025, "barajar": true },
+
+  "busqueda": { "movetime_ms": 100 },
+
+  "partidas": { "max_parejas": 1500, "workers": 2, "max_plies": 300, "margen_ms": 10000, "saludo_ms": 10000 },
+
+  "adjudicacion": { "resign_cp": 900, "resign_plies": 4, "tablas_cp": 12, "tablas_plies": 8, "tablas_desde_jugada": 40 },
+
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+
+  "salida": "banco/resultados/035-n384-estimacion"
+}

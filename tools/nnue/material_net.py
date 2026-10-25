@@ -93,7 +93,7 @@ def main():
     check_by_hand(net)
 
     raiz = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    destino = os.path.join(raiz, 'nets', 'material-256.bin')
+    destino = os.path.join(raiz, 'nets', 'material-%d.bin' % nf.HIDDEN)
     os.makedirs(os.path.dirname(destino), exist_ok=True)
     sha = nf.write_net(destino, ft_w, ft_b, out_w, out_b, bucket_of, nf.MAX_BUCKETS)
 

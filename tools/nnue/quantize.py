@@ -70,11 +70,11 @@ def main():
     n_cubos, tabla = ck['n_cubos'], ck['cubo']
     ft_w, ft_b, salida, sesgo = a_enteros(ck['modelo'], n_cubos)
 
-    temporal = os.path.join(args.salida, 'atalaya-256-temporal.bin')
+    temporal = os.path.join(args.salida, 'atalaya-%d-temporal.bin' % nf.HIDDEN)
     os.makedirs(args.salida, exist_ok=True)
     sha = nf.write_net(temporal, ft_w, ft_b, salida, sesgo, tabla, n_cubos,
                        k=int(round(ck['k'])), corpus_sha=ck['sha_corpus'], positions=ck['posiciones'])
-    destino = os.path.join(args.salida, 'atalaya-256-%s.bin' % sha[:8])
+    destino = os.path.join(args.salida, 'atalaya-%d-%s.bin' % (nf.HIDDEN, sha[:8]))
     os.replace(temporal, destino)
     red = nf.read_net(destino)
     # La validación del objetivo depende de λ y no se puede comparar entre redes

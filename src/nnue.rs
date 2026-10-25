@@ -37,7 +37,7 @@ use crate::types::{CastlingRights, Color, Move, MoveFlag, Piece, PieceType, Squa
 pub const FEATURES: usize = 772;
 const PIECE_FEATURES: usize = 768;
 /// Accumulator width per perspective.
-pub const HIDDEN: usize = 256;
+pub const HIDDEN: usize = 384;
 /// Output buckets stored in the file. A network may use fewer (`n_buckets`);
 /// the unused ones stay in the file as zeros so its size never changes.
 pub const MAX_BUCKETS: usize = 8;
@@ -358,7 +358,7 @@ impl Net {
 /// It replaces `material-256.bin`, the hand-built network of phase 1, which
 /// stays in `nets/` because two tests below still pin its arithmetic: it is the
 /// only network whose every output can be recomputed by hand.
-static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-256-c5417606.bin");
+static EMBEDDED: &[u8] = include_bytes!("../nets/atalaya-384-aaad4166.bin");
 
 pub fn embedded() -> &'static Net {
     static NET: OnceLock<Net> = OnceLock::new();
@@ -1485,9 +1485,9 @@ mod tests {
     /// arithmetic by hand are worth keeping: it is the only network whose
     /// every output can be recomputed with a pencil.
     fn material_net() -> Net {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets").join("material-256.bin");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets").join("material-384.bin");
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        Net::from_bytes(&bytes).expect("material-256.bin must load")
+        Net::from_bytes(&bytes).expect("material-384.bin must load")
     }
 
     #[test]

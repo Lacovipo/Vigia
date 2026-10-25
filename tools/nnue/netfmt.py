@@ -16,12 +16,13 @@ así que ya vienen con los derechos de enroque saneados por el propio motor.
 Sin dependencias: `struct` y `hashlib` son de la biblioteca estándar.
 """
 import hashlib
+import os
 import struct
 
 # --------------------------------------------------------- la arquitectura
 FEATURES = 772
 PIECE_FEATURES = 768
-HIDDEN = 256
+HIDDEN = int(os.environ.get("VIGIA_HIDDEN", "256"))  # 256 = la red publicada; 384 = experimento N=384
 MAX_BUCKETS = 8
 QA = 127
 QB_LOG2 = 5

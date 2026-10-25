@@ -56,9 +56,10 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dataset as ds  # noqa: E402
+import netfmt as nf  # noqa: E402
 from corpus_stats import cubos_con_regla  # noqa: E402
 
-HIDDEN = 256
+HIDDEN = nf.HIDDEN
 CLIP_FT = 6.0
 CLIP_OUT = 127.0
 CLIP_SESGO_SALIDA = 2000.0
