@@ -450,8 +450,14 @@ fn update_half(
 /// Kept out of line on purpose: it runs on about 3 % of the pushes of a search
 /// (9 % in a pawn ending) and, inlined, its setup was hoisted in front of the
 /// other 97 %. The price: one copy, SSE2, that the wide pushes call as it is.
-#[inline(never)]
-fn rebuild_half_after(net: &Net, board: &Board, perspective: Color, destination: &mut [i16; HIDDEN], change: &Change) {
+#[inline(always)]
+fn rebuild_half_after_portable(
+    net: &Net,
+    board: &Board,
+    perspective: Color,
+    destination: &mut [i16; HIDDEN],
+    change: &Change,
+) {
     let mirror = mirrors(change.mv.to);
     destination.copy_from_slice(&net.ft_biases);
     let vacated = [
@@ -478,6 +484,39 @@ fn rebuild_half_after(net: &Net, board: &Board, perspective: Color, destination:
             add_row(destination, net.feature_row(castling_feature(perspective, mirror, right)));
         }
     }
+}
+
+/// `rebuild_half_after_portable` compiled for the instruction set `simd`, out of line.
+#[inline(never)]
+fn rebuild_half_after(
+    simd: Simd,
+    net: &Net,
+    board: &Board,
+    perspective: Color,
+    destination: &mut [i16; HIDDEN],
+    change: &Change,
+) {
+    match simd {
+        // SAFETY: as in `Accumulators::push`: the variant exists only if the CPU
+        // reported every feature the kernel is compiled with.
+        #[cfg(target_arch = "x86_64")]
+        Simd::Avx512 => unsafe { rebuild_avx512(net, board, perspective, destination, change) },
+        #[cfg(target_arch = "x86_64")]
+        Simd::Avx2 => unsafe { rebuild_avx2(net, board, perspective, destination, change) },
+        Simd::Portable => rebuild_half_after_portable(net, board, perspective, destination, change),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn rebuild_avx2(net: &Net, board: &Board, perspective: Color, destination: &mut [i16; HIDDEN], change: &Change) {
+    rebuild_half_after_portable(net, board, perspective, destination, change)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+fn rebuild_avx512(net: &Net, board: &Board, perspective: Color, destination: &mut [i16; HIDDEN], change: &Change) {
+    rebuild_half_after_portable(net, board, perspective, destination, change)
 }
 
 #[inline(always)]
@@ -524,7 +563,7 @@ fn divide_rounding(sum: i32) -> i32 {
 // they are, for any x86-64 (SSE2, 8 lanes of i16), and inlined into functions
 // marked `#[target_feature]` for AVX2 (16 lanes) and for AVX-512 (32 lanes).
 // The accumulators pick one when they are built, from what the CPU reports.
-// All but `rebuild_half_after`: never inlined, it exists in its 8 lanes only.
+// `rebuild_half_after` is the same, behind an out-of-line dispatcher.
 //
 // Not `-C target-cpu` for the whole binary, which would need no `unsafe` at
 // all: that binary dies with an illegal instruction on any CPU without the
@@ -774,7 +813,7 @@ impl Accumulators {
         // computed in the old frame and is simply discarded.
         if moving.kind == PieceType::King && mirrors(mv.from) != mirrors(mv.to) {
             let half = if moving.color == Color::White { white } else { black };
-            rebuild_half_after(net, board, moving.color, half, &change);
+            rebuild_half_after(self.simd, net, board, moving.color, half, &change);
         }
     }
 
