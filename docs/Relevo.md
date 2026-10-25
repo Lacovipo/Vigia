@@ -8,6 +8,7 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 
 - **Release vigente: 0.34.0** (etiqueta `0.34`, commit `b72b05e`): red Atalaya-256
   con espejo horizontal, +8,5 Elo [+0,8, +16,2] sobre 0.33 a 100 ms por jugada.
+- Validada por El Juez (oct. 2026): comparar liberar APROBADO vs 0.33, run 20261022-204707-comparar-839470 (5551 parejas, SPRT acepta H1). (a) alinear a 64 B descartado (+0,44 % ± 0,49 % nps).
 - 406 tests, clippy en cero. Binarios congelados en `Release/` (fuera de git).
 
 ## Cómo trabaja el usuario conmigo
