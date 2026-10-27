@@ -48,6 +48,9 @@ const LMR_FULL_DEPTH_MOVES: usize = 4;
 /// conservative (less reduction) side of that range, fitting a move
 /// ordering that's decent but not top-engine grade.
 const LMR_BASE: f64 = 0.75;
+/// Each this many points of (history + continuation history) take one ply
+/// off a quiet move's reduction (negative history adds one per this many).
+const LMR_HISTORY_DIVISOR: i32 = 8192;
 const LMR_DIVISOR: f64 = 2.5;
 /// Late move *pruning*: past this many quiet moves at a shallow depth, the
 /// rest are skipped outright instead of merely reduced — with sensible
@@ -1513,6 +1516,11 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         }
 
         let moved_piece = board.piece_at(mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
+        let move_hist = if is_quiet {
+            ctx.history[mv.from.0 as usize][mv.to.0 as usize] + ctx.cont_history_score(ply, moved_piece, mv.to)
+        } else {
+            0
+        };
         let mv_child_depth = if Some(mv) == tt_move { child_depth + tt_move_extension } else { child_depth };
         ctx.nnue_push(board, mv, ply);
         let undo = board.make_move(mv);
@@ -1530,7 +1538,18 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         // scout blind to any quiet refutation).
         let can_reduce = move_index >= LMR_FULL_DEPTH_MOVES && depth >= LMR_MIN_DEPTH && is_quiet && !in_check && !gives_check;
         let reduction = if can_reduce {
-            lmr_reduction(depth, move_index).min(mv_child_depth.saturating_sub(1))
+            // Index by quiets already searched (captures lead the list and
+            // would inflate the index), then adjust: less in PV nodes and
+            // when improving, more otherwise, and by the move's own history.
+            let mut r = lmr_reduction(depth, quiets_tried + 1) as i32;
+            if is_pv_node {
+                r -= 1;
+            }
+            if !improving {
+                r += 1;
+            }
+            r -= move_hist / LMR_HISTORY_DIVISOR;
+            (r.max(0) as u32).min(mv_child_depth.saturating_sub(1))
         } else {
             0
         };

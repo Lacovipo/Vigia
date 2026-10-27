@@ -1,0 +1,13 @@
+{
+  "_": "LMR indexada por quiets_tried+1, -1 en PV, +1 si no improving, menos historia/8192, contra 0.35.0 (Release/Vigia 0.35.exe). Preinscripcion: si el Elo del IC excluye 0 al alza -> acumular y llevar al Juez; si IC cruza 0 -> ajustar divisor/terminos una vez; si IC negativo -> descartar. Cribado de cifra, 2 workers.",
+  "esquema": 1,
+  "id": "036-lmr-historia-estimacion",
+  "candidato": { "nombre": "0.36-lmr", "ruta": "Release/vigia-036-lmr.exe", "opciones": { "Hash": 32, "Threads": 1 } },
+  "base": { "nombre": "0.35.0", "ruta": "Release/Vigia 0.35.exe", "opciones": { "Hash": 32, "Threads": 1 } },
+  "libro": { "fichero": "banco/libros/vigia-20000.epd", "semilla": 20261028, "barajar": true },
+  "busqueda": { "movetime_ms": 100 },
+  "partidas": { "max_parejas": 1500, "workers": 2, "max_plies": 300, "margen_ms": 10000, "saludo_ms": 10000 },
+  "adjudicacion": { "resign_cp": 900, "resign_plies": 4, "tablas_cp": 12, "tablas_plies": 8, "tablas_desde_jugada": 40 },
+  "sprt": { "elo0": 9.9, "elo1": 10.1, "alpha": 0.001, "beta": 0.001 },
+  "salida": "banco/resultados/036-lmr-historia-estimacion"
+}
