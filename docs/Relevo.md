@@ -46,3 +46,8 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 - (b) hecho y commiteado (`0f864a2`, +1,81 % nps ± 0,29 %); sin liberar: se junta con la próxima red.
 - (c) caché de acumuladores: **descartada por estimación**. El rebuild corre en ~3 % de los push; techo ~1 % nps. No compensa la complejidad.
 - **Peaje de N = 384 medido** (red 256 rellena con ceros a 384: mismas salidas, nodos idénticos): **−1,93 % nps ± 0,32 %** (`banco/velocidad/n384-peaje.log`), no el ~3 % estimado. Siguiente: entrenar Atalaya-384 (parametrizar HIDDEN en `train.py`/`netfmt.py`/`quantize.py`/`nnue.rs`).
+
+## Actualización (27-oct-2026)
+
+- **0.35.0 (Atalaya-384) LIBERADA por El Juez**: comparar liberar APROBADO vs 0.34.0, run 20261025-105119-comparar-94ba3c (1010 parejas, sha256 516f201bf93a); solidez APTO 20261025-103256-solidez-51baae. El +24,6 de la tanda esta sesgado al alza; cifra del banco propio: +19,3 (IC 8,6..30,1).
+- Release vigente: 0.35.0. Siguiente: cubos de rey con factorizador.
