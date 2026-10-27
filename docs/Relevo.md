@@ -51,3 +51,7 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 
 - **0.35.0 (Atalaya-384) LIBERADA por El Juez**: comparar liberar APROBADO vs 0.34.0, run 20261025-105119-comparar-94ba3c (1010 parejas, sha256 516f201bf93a); solidez APTO 20261025-103256-solidez-51baae. El +24,6 de la tanda esta sesgado al alza; cifra del banco propio: +19,3 (IC 8,6..30,1).
 - Release vigente: 0.35.0. Siguiente: cubos de rey con factorizador.
+
+## Actualización (28-oct-2026)
+
+- Cubos de rey (2) + factorizador, N=384: **descartado por validación** (0.012521 final, 0.012342 mejor en ép. 6, vs 0.012250 de la 384 sin cubos; cp 0.008935 vs 0.008664). Sobreajusta con el corpus actual. Rama `descartado/cubos-rey-kb2`. Release vigente sigue siendo 0.35.0.

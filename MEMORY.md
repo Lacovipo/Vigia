@@ -8,3 +8,4 @@
 - Siguiente: cubos de rey con factorizador (docs/MejorasPendientes.md).
 - Compilar/probar: `cargo test --release`, `cargo clippy --release --all-targets`, `cargo build --release`.
 - Máx. 2 CPUs.
+- DESCARTADO: cubos de rey (2) con factorizador sobre N=384: validación final 0.012521 (mejor 0.012342, ép. 6) frente a 0.012250 sin cubos; sobreajuste (corpus ~72 M). Código en rama `descartado/cubos-rey-kb2`; main limpio. Reabrir solo con más corpus.
