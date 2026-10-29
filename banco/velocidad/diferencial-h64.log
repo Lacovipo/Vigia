@@ -1,0 +1,20 @@
+832 posiciones, profundidad 11, Hash 64, semilla 20261029
+A = Release/Vigia 0.36.exe
+B = target/release/vigia.exe
+  50/832  iguales 50  distintas 0  (16 s)
+  100/832  iguales 100  distintas 0  (28 s)
+  150/832  iguales 150  distintas 0  (40 s)
+  200/832  iguales 200  distintas 0  (52 s)
+  250/832  iguales 250  distintas 0  (64 s)
+  300/832  iguales 300  distintas 0  (75 s)
+  350/832  iguales 350  distintas 0  (85 s)
+  400/832  iguales 400  distintas 0  (97 s)
+  450/832  iguales 450  distintas 0  (107 s)
+  500/832  iguales 500  distintas 0  (120 s)
+  550/832  iguales 550  distintas 0  (129 s)
+  600/832  iguales 600  distintas 0  (138 s)
+  650/832  iguales 650  distintas 0  (148 s)
+  700/832  iguales 700  distintas 0  (158 s)
+  750/832  iguales 750  distintas 0  (167 s)
+  800/832  iguales 800  distintas 0  (181 s)
+RESULTADO: 832 iguales, 0 distintas, de 832 (191 s)

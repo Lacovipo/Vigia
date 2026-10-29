@@ -71,3 +71,11 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 - Descartado: atajo de SEE en quiescencia (−0,11 % ± 0,70 %, `see-shortcut-i.log`), quitado antes de commitear.
 - Verificado: 422 tests (282 motor), clippy en 0 con y sin `perfil`, perft profundos (`--ignored`) OK.
 - **Siguiente: El Juez** (perft completa, solidez liberar, comparar liberar 0.37.0 vs `juez036/`). Si APROBADO: copiar a `Release/Vigia 0.37.exe`, etiqueta `0.37`, anotar aquí y en `MEMORY.md`. Luego, carril de velocidad: acumulador perezoso y selección en vez de ordenación (`docs/MejorasPendientes.md`).
+
+### Preinscripción del Juez para 0.37.0 (escrita y commiteada antes de lanzar)
+
+- Candidato: `juez037/vigia.exe` (sha256 a77c208db78f…, «Vigia 0.37.0», commit d4c7a20 + documentación). Base: `juez036/vigia.exe` (3aa98d187b18…, «Vigia 0.36.0»).
+- Cambio sometido a prueba: velocidad pura, mismo árbol (+49,75 % nodos/s ± 0,49 %; `tools/diferencial.py` idéntico en 2.528 posiciones, puntuación/nodos/variante por profundidad; ver §8.9 del documento técnico).
+- Si gana el candidato (APROBADO): liberar 0.37.0 → `Release/Vigia 0.37.exe`, etiqueta `0.37`, anotar en MEMORY.md, Relevo.md y la documentación; seguir con el carril de velocidad (acumulador perezoso, selección en vez de ordenación) con 0.37.0 de base.
+- Si gana la base (RECHAZADO): no liberar. Sería inesperado con +50 % de velocidad a árbol idéntico: investigar antes de nada (carga del Juez, relojes, TT bajo carga) y no tocar la búsqueda.
+- Si no hay decisión: no liberar y no relanzar a ciegas; mirar profundidad media y relojes del veredicto para entender por qué un +50 % de velocidad no decide; una sola ampliación.

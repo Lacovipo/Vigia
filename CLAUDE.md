@@ -31,6 +31,7 @@ Validar un cambio (detalle completo en `docs/BancoPruebas.md`):
 ```bash
 ./target/release/banco.exe humo --motor target/release/vigia.exe   # ¿mide bien el banco?
 ./target/release/banco.exe velocidad --motor <nuevo> --contra <viejo>  # solo velocidad
+python -I tools/diferencial.py --a <viejo> --b <nuevo>  # ¿misma búsqueda en cientos de posiciones? (cambios "exactos")
 ./target/release/banco.exe sprt --config banco/configs/<experimento>.json  # fuerza
 ```
 

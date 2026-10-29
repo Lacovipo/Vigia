@@ -60,6 +60,7 @@ tools/calibration/   # pipeline Python de calibración del eval (ver §9)
 tools/nnue/          # la red en Python: formato, vector dorado, lector del corpus, entrenador, cuantizador
 tools/analiza_tanda.py  # profundidad por motor y finales de una tanda del banco
 tools/potencia_sprt.py  # antes de lanzar una tanda: probabilidad de que no decida, según efecto y tope
+tools/diferencial.py    # dos binarios UCI: ¿la misma búsqueda, profundidad a profundidad? (cambios de solo velocidad)
 docs/                # esta documentación y el plan de la red (PlanNNUE.md)
 Release/             # ejecutables congelados por versión, ignorados por git
 datos/               # corpus de entrenamiento de la red, ignorado por git
@@ -1010,7 +1011,18 @@ material.
   `threads_sharing_the_table_never_read_an_entry_nobody_stored` lo estresa con
   cuatro hilos escribiendo y leyendo 4.096 claves sobre 8 huecos, con campos
   que son función de la clave, de modo que una mezcla de dos escritores se
-  vería como un campo que no cuadra. Además, `prefetch` del hueco del hijo
+  vería como un campo que no cuadra. **Límites conocidos**, señalados por la
+  revisión previa a 0.37 y aceptados: (1) una lectura rota (`data` nuevo con
+  el `check` viejo) solo se acepta si la clave sondeada coincide con
+  `check_viejo ^ data_nuevo`, o sea con la probabilidad (2⁻⁶⁴) de una colisión
+  corriente de 64 bits: es la limitación del esquema XOR de Hyatt, no un fallo
+  del código; (2) dos escritores simultáneos de la misma clave y generación
+  pueden dejar la entrada menos profunda, porque ambos leyeron el hueco vacío
+  (con el `Mutex` el reemplazo era atómico): cuesta una entrada, nunca una
+  respuesta equivocada; (3) la puntuación se guarda en 16 bits con recorte a
+  ±32767, por encima de los ±30000 del mate: solo una evaluación de más de
+  32767 cp (más de 29 damas de ventaja, en FEN que ninguna partida produce)
+  cambiaría, y esa ya se confundía con un mate. Además, `prefetch` del hueco del hijo
   antes de hacer la jugada (`Board::hash_after_approx`, exacta salvo por la
   casilla *al paso*): la sonda llega varias decenas de nanosegundos después y
   el hueco ya está en caché.
@@ -1616,6 +1628,21 @@ que vale es la directa.** Se midió con un binario de la misma fuente que se
 publica (la compilación final difiere solo en el módulo de tests; el sha256 de
 cada compilación cambia aunque el código sea el mismo, por la cabecera del
 ejecutable).
+
+**Prueba diferencial.** `banco velocidad` comprueba que los nodos coinciden en
+12 posiciones a profundidad 12; `tools/diferencial.py` lo comprueba en miles y
+en cada iteración: puntuación, nodos y variante principal de cada profundidad,
+más la jugada elegida, de 0.36.0 frente a 0.37.0 con un hilo. Las posiciones
+son 32 fijas que rompen cosas (mates, ahogados, jaque doble, clavadas, al paso,
+promociones, reloj de 50 jugadas, finales de peones, la de 218 jugadas), las
+del libro del banco y partidas aleatorias jugadas desde el libro, con las
+jugadas legales que da el propio motor. Cuatro tandas, **2.528 posiciones,
+ninguna distinta**: 832 a profundidad 11 con la tabla de 64 MB; 432 a
+profundidad 12 con la tabla de 1 MB, para que los reemplazos sean constantes y
+cualquier diferencia de política se vea; y dos de 632 con partidas aleatorias
+largas (hasta 150 jugadas, que llegan a finales), con tablas de 4 y de 64 MB
+(`banco/velocidad/diferencial-*.log`). Es la prueba que hay que repetir en
+cualquier cambio que prometa «el mismo árbol».
 
 **Con varios hilos.** `banco velocidad` se niega a medirlo (exige nodos
 deterministas y con Lazy SMP no lo son: «el mismo motor visitó 234145 nodos y
