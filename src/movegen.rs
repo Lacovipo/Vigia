@@ -2,7 +2,8 @@ use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::eval;
 use crate::magic;
-use crate::types::{CastlingRights, Color, Move, MoveFlag, PieceType, Square};
+use crate::perfil;
+use crate::types::{CastlingRights, Color, Move, MoveFlag, MoveList, PieceType, Square};
 
 // ---------------------------------------------------------------------
 // Precomputed attack tables, built once at compile time.
@@ -328,6 +329,7 @@ pub fn is_square_attacked(board: &Board, sq: Square, by_color: Color) -> bool {
 /// dying on a hand-built position is a worse failure mode than one extra
 /// branch on a path that never fires in a real game.
 pub fn is_in_check(board: &Board, color: Color) -> bool {
+    let _phase = perfil::enter(perfil::CHECK);
     match board.pieces_of(color, PieceType::King).lsb() {
         Some(king_sq) => is_square_attacked(board, king_sq, color.opposite()),
         None => false,
@@ -348,6 +350,7 @@ pub fn is_in_check(board: &Board, color: Color) -> bool {
 /// piece it becomes rather than with a pawn. `gives_check_matches_make_move`
 /// pins all of that against the make/unmake answer over whole move trees.
 pub fn gives_check(board: &Board, mv: Move) -> bool {
+    let _phase = perfil::enter(perfil::CHECK);
     let us = board.side_to_move;
     let Some(king_sq) = board.pieces_of(us.opposite(), PieceType::King).lsb() else {
         return false;
@@ -415,7 +418,7 @@ pub fn gives_check(board: &Board, mv: Move) -> bool {
 // Pseudo-legal move generation.
 // ---------------------------------------------------------------------
 
-fn push_pawn_move(from: Square, to: Square, is_promotion: bool, is_capture: bool, moves: &mut Vec<Move>) {
+fn push_pawn_move(from: Square, to: Square, is_promotion: bool, is_capture: bool, moves: &mut MoveList) {
     if is_promotion {
         let flags = if is_capture {
             [
@@ -441,7 +444,16 @@ fn push_pawn_move(from: Square, to: Square, is_promotion: bool, is_capture: bool
     }
 }
 
-fn generate_pawn_moves(board: &Board, color: Color, occ: Bitboard, opp: Bitboard, moves: &mut Vec<Move>) {
+/// `NOISY` selects the variant quiescence uses: captures, en passant and
+/// promotions only. It is a const parameter, not a runtime flag, so each
+/// variant is compiled with the branches it does not need already gone.
+fn generate_pawn_moves<const NOISY: bool>(
+    board: &Board,
+    color: Color,
+    occ: Bitboard,
+    opp: Bitboard,
+    moves: &mut MoveList,
+) {
     let (dir, start_rank, promo_rank): (i8, u8, u8) = match color {
         Color::White => (1, 1, 7),
         Color::Black => (-1, 6, 0),
@@ -456,9 +468,13 @@ fn generate_pawn_moves(board: &Board, color: Color, occ: Bitboard, opp: Bitboard
         let single_to = Square::new(from.file(), to_rank as u8);
 
         if !occ.contains(single_to) {
-            push_pawn_move(from, single_to, to_rank as u8 == promo_rank, false, moves);
+            let promotes = to_rank as u8 == promo_rank;
+            // The noisy variant wants the pushes that promote and no others.
+            if !NOISY || promotes {
+                push_pawn_move(from, single_to, promotes, false, moves);
+            }
 
-            if from.rank() == start_rank {
+            if !NOISY && from.rank() == start_rank {
                 let double_to = Square::new(from.file(), (from.rank() as i8 + 2 * dir) as u8);
                 if !occ.contains(double_to) {
                     moves.push(Move::new(from, double_to, MoveFlag::DoublePawnPush));
@@ -476,40 +492,52 @@ fn generate_pawn_moves(board: &Board, color: Color, occ: Bitboard, opp: Bitboard
     }
 }
 
-fn generate_knight_moves(board: &Board, color: Color, own: Bitboard, occ: Bitboard, moves: &mut Vec<Move>) {
+fn generate_knight_moves<const NOISY: bool>(
+    board: &Board,
+    color: Color,
+    own: Bitboard,
+    occ: Bitboard,
+    moves: &mut MoveList,
+) {
+    // Where a move may land: anywhere that is not ours, or, noisy, only on an
+    // enemy piece. The squares come out in the same order either way.
+    let reach = if NOISY { occ & !own } else { !own };
     for from in board.pieces_of(color, PieceType::Knight) {
-        for to in Bitboard(KNIGHT_ATTACKS[from.0 as usize]) & !own {
+        for to in Bitboard(KNIGHT_ATTACKS[from.0 as usize]) & reach {
             let flag = if occ.contains(to) { MoveFlag::Capture } else { MoveFlag::Quiet };
             moves.push(Move::new(from, to, flag));
         }
     }
 }
 
-fn generate_king_moves(board: &Board, color: Color, own: Bitboard, occ: Bitboard, moves: &mut Vec<Move>) {
+fn generate_king_moves<const NOISY: bool>(
+    board: &Board,
+    color: Color,
+    own: Bitboard,
+    occ: Bitboard,
+    moves: &mut MoveList,
+) {
+    let reach = if NOISY { occ & !own } else { !own };
     for from in board.pieces_of(color, PieceType::King) {
-        for to in Bitboard(KING_ATTACKS[from.0 as usize]) & !own {
+        for to in Bitboard(KING_ATTACKS[from.0 as usize]) & reach {
             let flag = if occ.contains(to) { MoveFlag::Capture } else { MoveFlag::Quiet };
             moves.push(Move::new(from, to, flag));
         }
     }
 }
 
-fn generate_sliding_moves(
+fn generate_sliding_moves<const NOISY: bool>(
     board: &Board,
     color: Color,
     own: Bitboard,
     occ: Bitboard,
     kind: PieceType,
-    moves: &mut Vec<Move>,
+    attacks: impl Fn(Square, Bitboard) -> Bitboard,
+    moves: &mut MoveList,
 ) {
-    let attacks_fn: fn(Square, Bitboard) -> Bitboard = match kind {
-        PieceType::Bishop => bishop_attacks,
-        PieceType::Rook => rook_attacks,
-        PieceType::Queen => queen_attacks,
-        _ => unreachable!("generate_sliding_moves solo admite piezas deslizantes"),
-    };
+    let reach = if NOISY { occ & !own } else { !own };
     for from in board.pieces_of(color, kind) {
-        for to in attacks_fn(from, occ) & !own {
+        for to in attacks(from, occ) & reach {
             let flag = if occ.contains(to) { MoveFlag::Capture } else { MoveFlag::Quiet };
             moves.push(Move::new(from, to, flag));
         }
@@ -519,7 +547,7 @@ fn generate_sliding_moves(
 #[allow(clippy::too_many_arguments)]
 fn try_add_castle(
     board: &Board,
-    moves: &mut Vec<Move>,
+    moves: &mut MoveList,
     right: u8,
     king_from: Square,
     king_to: Square,
@@ -544,7 +572,7 @@ fn try_add_castle(
     moves.push(Move::new(king_from, king_to, flag));
 }
 
-fn generate_castling(board: &Board, moves: &mut Vec<Move>) {
+fn generate_castling(board: &Board, moves: &mut MoveList) {
     let color = board.side_to_move;
     let opponent = color.opposite();
     let rank = match color {
@@ -582,19 +610,43 @@ fn generate_castling(board: &Board, moves: &mut Vec<Move>) {
 }
 
 pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
-    let mut moves = Vec::with_capacity(48);
+    generate_pseudo_legal_list(board).to_vec()
+}
+
+/// The pseudo-legal moves of the side to move, on the stack. The search uses
+/// this one; the `Vec` flavour above is for callers that are not hot.
+pub fn generate_pseudo_legal_list(board: &Board) -> MoveList {
+    generate_moves::<false>(board)
+}
+
+/// Only the noisy pseudo-legal moves: captures, en passant captures and every
+/// promotion (a quiet push to the last rank included), in exactly the relative
+/// order `generate_pseudo_legal_list` gives them. The order matters:
+/// quiescence sorts them stably, so equal scores keep it, and the search stays
+/// move for move what it was when it generated everything and threw the quiet
+/// moves away (`noisy_list_is_the_noisy_part_of_the_full_list` pins it).
+pub(crate) fn generate_noisy_list(board: &Board) -> MoveList {
+    generate_moves::<true>(board)
+}
+
+fn generate_moves<const NOISY: bool>(board: &Board) -> MoveList {
+    let _phase = perfil::enter(if NOISY { perfil::GENNOISY } else { perfil::GENFULL });
+    let mut moves = MoveList::new();
     let color = board.side_to_move;
     let own = board.color_occupied(color);
     let opp = board.color_occupied(color.opposite());
     let occ = own | opp;
 
-    generate_pawn_moves(board, color, occ, opp, &mut moves);
-    generate_knight_moves(board, color, own, occ, &mut moves);
-    generate_sliding_moves(board, color, own, occ, PieceType::Bishop, &mut moves);
-    generate_sliding_moves(board, color, own, occ, PieceType::Rook, &mut moves);
-    generate_sliding_moves(board, color, own, occ, PieceType::Queen, &mut moves);
-    generate_king_moves(board, color, own, occ, &mut moves);
-    generate_castling(board, &mut moves);
+    generate_pawn_moves::<NOISY>(board, color, occ, opp, &mut moves);
+    generate_knight_moves::<NOISY>(board, color, own, occ, &mut moves);
+    generate_sliding_moves::<NOISY>(board, color, own, occ, PieceType::Bishop, bishop_attacks, &mut moves);
+    generate_sliding_moves::<NOISY>(board, color, own, occ, PieceType::Rook, rook_attacks, &mut moves);
+    generate_sliding_moves::<NOISY>(board, color, own, occ, PieceType::Queen, queen_attacks, &mut moves);
+    generate_king_moves::<NOISY>(board, color, own, occ, &mut moves);
+    // Castling never captures or promotes.
+    if !NOISY {
+        generate_castling(board, &mut moves);
+    }
 
     moves
 }
@@ -609,7 +661,7 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 /// holds a `&mut Board` of its own.
 pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
     let mut working = board.clone();
-    legal_moves_scratch(&mut working)
+    legal_moves_scratch(&mut working).to_vec()
 }
 
 /// King square, checking pieces and absolutely pinned pieces of the side to
@@ -722,35 +774,184 @@ fn legal_by_pins(board: &Board, mv: Move, info: &CheckInfo, us: Color) -> bool {
 /// `banco velocidad`, that filter was 27.9 % of the time spent per node --
 /// paid in full even in quiescence, which builds the whole legal list before
 /// the `stand_pat >= beta` cutoff that is its most frequent exit.
-pub(crate) fn legal_moves_scratch(working: &mut Board) -> Vec<Move> {
-    let us = working.side_to_move;
-    let mut moves = generate_pseudo_legal_moves(working);
-    let Some(info) = check_info(working, us) else {
-        // No king of ours: `is_in_check` answers `false` for such a
-        // position, so the filter this replaced kept every move. Keep that.
-        return moves;
+pub(crate) fn legal_moves_scratch(working: &mut Board) -> MoveList {
+    Vetting::new(working).legal(working)
+}
+
+/// Is the pseudo-legal `mv` legal? The one test behind everything that vets
+/// moves: [`legal_moves_scratch`] (all of them) and [`Vetting`] (the few
+/// quiescence is about to read).
+fn vet(working: &mut Board, mv: Move, info: &Option<CheckInfo>, us: Color) -> bool {
+    let Some(info) = info else {
+        return true;
     };
-    // `retain` in place rather than `filter().collect()`: the latter built a
-    // second `Vec` per node on top of the generator's own, and this is the
-    // single most frequently called allocation site in the engine.
-    moves.retain(|&mv| {
-        if mv.flag == MoveFlag::EnPassant {
-            // The one move that empties a square it never touches. It can
-            // uncover the king along a rank through the captured pawn and
-            // the capturing one at once, which no mask taken before the
-            // move can express, so it keeps paying make/unmake. It is well
-            // under 1 % of the moves generated: measured by doubling the
-            // filter for king and en passant moves alone, the two together
-            // are ~2 % of the time per node.
-            let undo = working.make_move(mv);
-            let legal = !is_in_check(working, us);
-            working.unmake_move(mv, undo);
-            legal
-        } else {
-            legal_by_pins(working, mv, &info, us)
+    if mv.flag == MoveFlag::EnPassant {
+        // The one move that empties a square it never touches. It can
+        // uncover the king along a rank through the captured pawn and
+        // the capturing one at once, which no mask taken before the
+        // move can express, so it keeps paying make/unmake. It is well
+        // under 1 % of the moves generated: measured by doubling the
+        // filter for king and en passant moves alone, the two together
+        // are ~2 % of the time per node.
+        let undo = working.make_move(mv);
+        let legal = !is_in_check(working, us);
+        working.unmake_move(mv, undo);
+        legal
+    } else {
+        legal_by_pins(working, mv, info, us)
+    }
+}
+
+/// What it takes to vet the side to move's pseudo-legal moves one at a time:
+/// where its king stands, who gives check and which of its pieces are pinned,
+/// worked out once for the node.
+///
+/// Quiescence reads a handful of captures out of a list of thirty-odd moves,
+/// and until 0.37 it generated them all and paid the legality test for every
+/// one before looking at any. With this it asks only for what it needs:
+/// whether the side is in check, whether it has *any* legal move (to tell mate
+/// and stalemate from "nothing worth capturing"), and, if it gets that far,
+/// the legal noisy moves or the evasions. The verdict for each move is exactly
+/// [`legal_moves_scratch`]'s, so the search is the same search.
+#[derive(Clone, Copy)]
+pub(crate) struct Vetting {
+    info: Option<CheckInfo>,
+    us: Color,
+}
+
+impl Vetting {
+    pub(crate) fn new(board: &Board) -> Vetting {
+        let _phase = perfil::enter(perfil::CHECKINFO);
+        let us = board.side_to_move;
+        Vetting { info: check_info(board, us), us }
+    }
+
+    /// Is the side to move in check? What `is_in_check` answers, read off the
+    /// data this already holds instead of attacking the king square again.
+    #[inline]
+    pub(crate) fn in_check(&self) -> bool {
+        self.info.is_some_and(|info| !info.checkers.is_empty())
+    }
+
+    /// Is the pseudo-legal `mv` legal? The verdict `legal_moves_scratch` gives it.
+    #[inline]
+    pub(crate) fn is_legal(&self, working: &mut Board, mv: Move) -> bool {
+        let _phase = perfil::enter(perfil::VET);
+        vet(working, mv, &self.info, self.us)
+    }
+
+    /// Every legal move, in generation order.
+    pub(crate) fn legal(&self, working: &mut Board) -> MoveList {
+        let _phase = perfil::enter(perfil::GENFULL);
+        let mut moves = generate_pseudo_legal_list(working);
+        self.retain_legal(working, &mut moves);
+        moves
+    }
+
+    /// The legal captures, en passant captures and promotions, in generation
+    /// order.
+    pub(crate) fn noisy_legal(&self, working: &mut Board) -> MoveList {
+        let _phase = perfil::enter(perfil::GENNOISY);
+        let mut moves = generate_noisy_list(working);
+        self.retain_legal(working, &mut moves);
+        moves
+    }
+
+    /// Drops the illegal moves from `moves`, keeping the rest in order.
+    pub(crate) fn retain_legal(&self, working: &mut Board, moves: &mut MoveList) {
+        // No king of ours: `is_in_check` answers `false` for such a position,
+        // so the filter this replaced kept every move. `vet` keeps that too.
+        if self.info.is_some() {
+            let _phase = perfil::enter(perfil::VET);
+            let (info, us) = (self.info, self.us);
+            moves.retain(|&mv| vet(working, mv, &info, us));
         }
-    });
-    moves
+    }
+
+    /// Does the side to move have any legal move at all?
+    ///
+    /// Looks for one and stops: pawn pushes first, because in nearly every
+    /// position some pawn can step forward, and the king last, because its
+    /// moves are the dear ones to vet. Castling is not tried: a legal castle
+    /// implies the king's one-step move towards the rook is legal too.
+    pub(crate) fn any_legal(&self, working: &mut Board) -> bool {
+        let _phase = perfil::enter(perfil::ANYLEGAL);
+        let Some(info) = &self.info else {
+            return !generate_pseudo_legal_list(working).is_empty();
+        };
+        let us = self.us;
+        let own = working.color_occupied(us);
+        let opp = working.color_occupied(us.opposite());
+        let occ = own | opp;
+        let (dir, start_rank): (i8, u8) = match us {
+            Color::White => (1, 1),
+            Color::Black => (-1, 6),
+        };
+        let pawn_attack_table = match us {
+            Color::White => &WHITE_PAWN_ATTACKS,
+            Color::Black => &BLACK_PAWN_ATTACKS,
+        };
+
+        for from in working.pieces_of(us, PieceType::Pawn) {
+            let single_to = Square::new(from.file(), (from.rank() as i8 + dir) as u8);
+            if !occ.contains(single_to) {
+                if legal_by_pins(working, Move::new(from, single_to, MoveFlag::Quiet), info, us) {
+                    return true;
+                }
+                // A double push can interpose where the single one cannot.
+                if from.rank() == start_rank {
+                    let double_to = Square::new(from.file(), (from.rank() as i8 + 2 * dir) as u8);
+                    if !occ.contains(double_to)
+                        && legal_by_pins(working, Move::new(from, double_to, MoveFlag::DoublePawnPush), info, us)
+                    {
+                        return true;
+                    }
+                }
+            }
+            for to in Bitboard(pawn_attack_table[from.0 as usize]) {
+                if opp.contains(to) {
+                    if legal_by_pins(working, Move::new(from, to, MoveFlag::Capture), info, us) {
+                        return true;
+                    }
+                } else if Some(to) == working.en_passant
+                    && vet(working, Move::new(from, to, MoveFlag::EnPassant), &self.info, us)
+                {
+                    return true;
+                }
+            }
+        }
+
+        for from in working.pieces_of(us, PieceType::Knight) {
+            for to in Bitboard(KNIGHT_ATTACKS[from.0 as usize]) & !own {
+                if legal_by_pins(working, Move::new(from, to, MoveFlag::Quiet), info, us) {
+                    return true;
+                }
+            }
+        }
+
+        for (kind, attacks) in [
+            (PieceType::Bishop, bishop_attacks as fn(Square, Bitboard) -> Bitboard),
+            (PieceType::Rook, rook_attacks),
+            (PieceType::Queen, queen_attacks),
+        ] {
+            for from in working.pieces_of(us, kind) {
+                for to in attacks(from, occ) & !own {
+                    if legal_by_pins(working, Move::new(from, to, MoveFlag::Quiet), info, us) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        for from in working.pieces_of(us, PieceType::King) {
+            for to in Bitboard(KING_ATTACKS[from.0 as usize]) & !own {
+                if legal_by_pins(working, Move::new(from, to, MoveFlag::Quiet), info, us) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -828,6 +1029,7 @@ fn is_promotion_rank(sq: Square, color: Color) -> bool {
 /// checked, which is the standard, well-tested simplification every engine
 /// using this classic swap algorithm makes.
 pub fn static_exchange_eval(board: &Board, mv: Move) -> i32 {
+    let _phase = perfil::enter(perfil::SEE);
     let to = mv.to;
     let mover_color = board.side_to_move;
 
@@ -1414,6 +1616,95 @@ mod tests {
             let mut board = Board::from_fen(fen).unwrap();
             assert_legality_agrees(&mut board, depth);
         }
+    }
+
+    /// Everything quiescence asks of the generator, against the full legal list
+    /// it replaced: the check flag, "is there any legal move", the legal noisy
+    /// moves and the noisy pseudo-legal ones, move for move and in order.
+    fn assert_quiescence_view_agrees(board: &mut Board) {
+        let fen = board.to_fen();
+        let legal = legal_moves_scratch(board);
+        let vetting = Vetting::new(board);
+        assert_eq!(vetting.in_check(), is_in_check(board, board.side_to_move), "in_check in {fen}");
+        assert_eq!(vetting.any_legal(board), !legal.is_empty(), "any_legal in {fen}");
+        assert_eq!(vetting.legal(board), legal, "legal in {fen}");
+
+        let noisy = |m: &&Move| m.is_capture() || m.promotion().is_some();
+        let legal_noisy: Vec<Move> = legal.iter().filter(noisy).copied().collect();
+        assert_eq!(vetting.noisy_legal(board), legal_noisy, "noisy_legal in {fen}");
+
+        let pseudo = generate_pseudo_legal_list(board);
+        let pseudo_noisy: Vec<Move> = pseudo.iter().filter(noisy).copied().collect();
+        assert_eq!(generate_noisy_list(board), pseudo_noisy, "noisy_list in {fen}");
+    }
+
+    fn walk_quiescence_view(board: &mut Board, depth: u32) {
+        assert_quiescence_view_agrees(board);
+        if depth > 0 {
+            for mv in legal_moves_scratch(board) {
+                let undo = board.make_move(mv);
+                walk_quiescence_view(board, depth - 1);
+                board.unmake_move(mv, undo);
+            }
+        }
+    }
+
+    #[test]
+    fn the_quiescence_view_matches_the_full_legal_list_over_the_reference_trees() {
+        let cases = [
+            ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 3),
+            (KIWIPETE_FEN, 3),
+            (POSITION3_FEN, 4),
+            (POSITION4_FEN, 3),
+            (POSITION5_FEN, 3),
+            (POSITION6_FEN, 3),
+            ("8/8/8/8/k1pP3R/8/8/4K3 b - d3 0 1", 3),
+            ("8/8/8/4k3/3Pp3/8/8/4K3 b - d3 0 1", 3),
+            ("4k3/r7/5N2/8/8/8/8/4R1K1 b - - 0 1", 3),
+            ("4r3/7b/4R3/5B2/r2NK3/3P4/8/1b5k w - - 0 1", 3),
+            // Mate (fool's mate), stalemate, and a king whose only way out is a
+            // pawn's double push interposing on the bishop's diagonal.
+            ("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3", 1),
+            ("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", 1),
+            ("4k3/b7/8/8/8/8/3P4/6K1 w - - 0 1", 3),
+        ];
+        for (fen, depth) in cases {
+            walk_quiescence_view(&mut Board::from_fen(fen).unwrap(), depth);
+        }
+    }
+
+    #[test]
+    fn the_quiescence_view_matches_the_full_legal_list_along_random_games() {
+        // Reference trees are dense in tactics but short; random games reach
+        // the endings (mates, stalemates, promotions, bare kings) they miss.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut mates, mut stalemates) = (0, 0);
+        for _ in 0..60 {
+            let mut board = Board::start_pos();
+            for _ in 0..200 {
+                assert_quiescence_view_agrees(&mut board);
+                let moves = legal_moves_scratch(&mut board);
+                if moves.is_empty() {
+                    if is_in_check(&board, board.side_to_move) {
+                        mates += 1;
+                    } else {
+                        stalemates += 1;
+                    }
+                    break;
+                }
+                board.make_move(moves[(next() % moves.len() as u64) as usize]);
+            }
+        }
+        // The fixed seed makes this the same games every time; if a change to
+        // the generator ever empties these counts the test has stopped looking
+        // at the cases that matter.
+        assert!(mates + stalemates > 0, "no random game reached a mate or a stalemate");
     }
 
     #[test]

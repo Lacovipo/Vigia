@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
 use crate::eval;
 use crate::movegen;
 use crate::nnue;
-use crate::types::{Color, Move, MoveFlag, PieceType, Square};
+use crate::perfil;
+use crate::types::{Color, Move, MoveFlag, PieceType, Square, MAX_MOVES};
 use crate::zobrist;
 
 pub const MATE_SCORE: i32 = 30_000;
@@ -154,6 +154,12 @@ const STOP_CHECK_INTERVAL: u64 = 2048;
 /// series of forced checks can extend all the way to `MAX_PLY` with no
 /// relation at all to the depth that was asked for.
 const CHECK_EXTENSION_PLY_FACTOR: u32 = 2;
+/// Words of the bitset that remembers which quiet moves of a node were already
+/// searched: one bit per position in the node's pseudo-legal list, which holds
+/// up to `MAX_MOVES` entries (a side that is pinned or in check has more
+/// candidates than legal moves). It was four words, 256 positions, until the
+/// list stopped being filtered before the loop.
+const TRIED_QUIETS_WORDS: usize = MAX_MOVES.div_ceil(64);
 
 #[derive(Clone, Default)]
 pub struct SearchLimits {
@@ -245,7 +251,6 @@ enum TtFlag {
 
 #[derive(Clone, Copy)]
 struct TtEntry {
-    key: u64,
     depth: u8,
     score: i32,
     flag: TtFlag,
@@ -286,16 +291,114 @@ fn tt_score_is_clock_compatible(entry: &TtEntry, board_clock: u16) -> bool {
 /// incrementally-maintained Zobrist hash. Within the same search, shallower
 /// entries are overwritten by deeper ones; across searches, `generation`
 /// lets a new search's entries win regardless of depth (see `store`).
+///
+/// Lock-free since 0.37. A slot is two words: the entry packed into 64 bits
+/// (`data`), and the position key XORed with it (`check`). A reader accepts a
+/// slot only when `check ^ data` gives back the full key it asked for, so a
+/// slot caught half-written by another thread (new `data` with the old
+/// `check`, or the reverse) reads as a miss; the price of a race is one lost
+/// entry, never a wrong one. Before this the whole table sat behind a single
+/// `Mutex`, and the phase profile (`src/perfil.rs`) put the table at 23 % of
+/// the search time, the lock itself and the cache miss on the slot together.
 struct TranspositionTable {
-    entries: Vec<Option<TtEntry>>,
+    entries: Vec<Slot>,
     mask: u64,
     /// Bumped once per `search()` call (i.e. once per UCI `go`), not once
     /// per node — see `store`. Wraps around after 256 searches, which only
     /// costs a slightly worse replacement choice for that one collision,
     /// never a correctness problem: `probe` always re-validates the full
     /// 64-bit key regardless of generation.
-    generation: u8,
+    generation: AtomicU8,
 }
+
+/// One table slot. 16 bytes and 16-aligned, so four fill a cache line and
+/// none straddles two.
+#[repr(C, align(16))]
+struct Slot {
+    check: AtomicU64,
+    data: AtomicU64,
+}
+
+/// Set in `data` for every stored entry; an empty slot (all zero) never has it,
+/// so it cannot be mistaken for an entry whose key happens to be zero.
+const DATA_VALID: u64 = 1 << 63;
+
+/// `MoveFlag`s in discriminant order, to unpack the 4 bits stored for a move.
+/// Sixteen entries so any 4 bits index it; the last two are never produced.
+const MOVE_FLAGS: [MoveFlag; 16] = [
+    MoveFlag::Quiet,
+    MoveFlag::DoublePawnPush,
+    MoveFlag::KingCastle,
+    MoveFlag::QueenCastle,
+    MoveFlag::Capture,
+    MoveFlag::EnPassant,
+    MoveFlag::PromoKnight,
+    MoveFlag::PromoBishop,
+    MoveFlag::PromoRook,
+    MoveFlag::PromoQueen,
+    MoveFlag::PromoCaptureKnight,
+    MoveFlag::PromoCaptureBishop,
+    MoveFlag::PromoCaptureRook,
+    MoveFlag::PromoCaptureQueen,
+    MoveFlag::Quiet,
+    MoveFlag::Quiet,
+];
+
+/// 17 bits: `from` (6), `to` (6), flag (4), and a presence bit on top.
+fn pack_move(mv: Option<Move>) -> u64 {
+    match mv {
+        Some(m) => (1 << 16) | (m.from.0 as u64) | ((m.to.0 as u64) << 6) | ((m.flag as u64) << 12),
+        None => 0,
+    }
+}
+
+/// The move in the low 16 bits of `bits`.
+#[inline(always)]
+fn unpack_move16(bits: u64) -> Move {
+    Move::new(Square((bits & 63) as u8), Square(((bits >> 6) & 63) as u8), MOVE_FLAGS[((bits >> 12) & 15) as usize])
+}
+
+fn unpack_move(bits: u64) -> Option<Move> {
+    (bits & (1 << 16) != 0).then(|| unpack_move16(bits))
+}
+
+impl TtEntry {
+    /// Layout of the 64 bits: depth 0–7, score (an `i16`) 8–23, bound 24–25,
+    /// move 26–42, generation 43–50, fifty-move counter 51–57, valid 63. Mate
+    /// scores stay below 31 000, comfortably inside the `i16`.
+    fn pack(&self) -> u64 {
+        DATA_VALID
+            | self.depth as u64
+            | ((self.score.clamp(-32_767, 32_767) as i16 as u16 as u64) << 8)
+            | ((self.flag as u64) << 24)
+            | (pack_move(self.best_move) << 26)
+            | ((self.generation as u64) << 43)
+            | ((self.halfmove_clock.min(127) as u64) << 51)
+    }
+
+    fn unpack(data: u64) -> TtEntry {
+        TtEntry {
+            depth: (data & 0xFF) as u8,
+            score: ((data >> 8) & 0xFFFF) as u16 as i16 as i32,
+            flag: match (data >> 24) & 3 {
+                0 => TtFlag::Exact,
+                1 => TtFlag::Lower,
+                _ => TtFlag::Upper,
+            },
+            best_move: unpack_move((data >> 26) & 0x1_FFFF),
+            generation: ((data >> 43) & 0xFF) as u8,
+            halfmove_clock: ((data >> 51) & 0x7F) as u8,
+        }
+    }
+}
+
+/// Bytes per slot the Hash budget is divided by. It is the size of the entry
+/// before the table went lock-free (24 bytes); keeping it makes `Hash=N` give
+/// the same number of slots as before, so the same collisions and the same
+/// nodes. The slots are 16 bytes, so the table uses two thirds of the budget.
+/// Filling all of it (half as many bytes per entry, twice the slots) is a
+/// change of the search and has to be measured as one.
+const SLOT_BUDGET_BYTES: usize = 24;
 
 /// Largest power of two `<= n`, or 1 if `n == 0`.
 fn floor_power_of_two(n: usize) -> usize {
@@ -306,15 +409,13 @@ fn floor_power_of_two(n: usize) -> usize {
     }
 }
 
-/// How many `Option<TtEntry>` slots `TranspositionTable::new(size_mb)`
-/// would allocate, without actually allocating them. Exists as its own
-/// function so tests can check the size math at large requested sizes
-/// (including `MAX_HASH_MB`) without the multi-hundred-MB-or-more real
-/// allocation that would otherwise imply — `TranspositionTable::new` itself
-/// just calls this.
+/// How many slots `TranspositionTable::new(size_mb)` would allocate, without
+/// actually allocating them. Exists as its own function so tests can check the
+/// size math at large requested sizes (including `MAX_HASH_MB`) without the
+/// multi-hundred-MB-or-more real allocation that would otherwise imply —
+/// `TranspositionTable::new` itself just calls this.
 pub(crate) fn slot_count_for(size_mb: usize) -> usize {
-    let entry_size = std::mem::size_of::<Option<TtEntry>>();
-    let raw_count = (size_mb * 1024 * 1024) / entry_size;
+    let raw_count = (size_mb * 1024 * 1024) / SLOT_BUDGET_BYTES;
     // The `& mask` indexing in `probe`/`store` needs an exact power of two,
     // but rounding *up* to one (as `next_power_of_two` would) can nearly
     // double the actual memory used right above almost every power-of-two
@@ -327,12 +428,16 @@ pub(crate) fn slot_count_for(size_mb: usize) -> usize {
 impl TranspositionTable {
     fn new(size_mb: usize) -> Self {
         let count = slot_count_for(size_mb);
-        TranspositionTable { entries: vec![None; count], mask: (count - 1) as u64, generation: 0 }
+        let entries = (0..count).map(|_| Slot { check: AtomicU64::new(0), data: AtomicU64::new(0) }).collect();
+        TranspositionTable { entries, mask: (count - 1) as u64, generation: AtomicU8::new(0) }
     }
 
-    fn clear(&mut self) {
-        self.entries.fill(None);
-        self.generation = 0;
+    fn clear(&self) {
+        for slot in &self.entries {
+            slot.data.store(0, Ordering::Relaxed);
+            slot.check.store(0, Ordering::Relaxed);
+        }
+        self.generation.store(0, Ordering::Relaxed);
     }
 
     /// Marks the start of a new search: without this, a deep entry stored
@@ -341,24 +446,56 @@ impl TranspositionTable {
     /// forever, permanently blocking that slot from ever reflecting the
     /// current position even though the old entry is no longer relevant to
     /// where the game actually is now.
-    fn new_search(&mut self) {
-        self.generation = self.generation.wrapping_add(1);
+    fn new_search(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    fn slot(&self, key: u64) -> &Slot {
+        &self.entries[(key & self.mask) as usize]
     }
 
     fn probe(&self, key: u64) -> Option<TtEntry> {
-        self.entries[(key & self.mask) as usize].filter(|e| e.key == key)
+        let slot = self.slot(key);
+        let data = slot.data.load(Ordering::Relaxed);
+        let check = slot.check.load(Ordering::Relaxed);
+        (data & DATA_VALID != 0 && check ^ data == key).then(|| TtEntry::unpack(data))
     }
 
-    fn store(&mut self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>, halfmove_clock: u8) {
-        let generation = self.generation;
-        let slot = &mut self.entries[(key & self.mask) as usize];
-        let should_replace = match slot {
-            Some(existing) => existing.key != key || existing.generation != generation || existing.depth <= depth,
-            None => true,
+    fn store(&self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>, halfmove_clock: u8) {
+        let generation = self.generation.load(Ordering::Relaxed);
+        let slot = self.slot(key);
+        let old_data = slot.data.load(Ordering::Relaxed);
+        let should_replace = if old_data & DATA_VALID == 0 {
+            true
+        } else {
+            let old_key = slot.check.load(Ordering::Relaxed) ^ old_data;
+            let old_generation = ((old_data >> 43) & 0xFF) as u8;
+            let old_depth = (old_data & 0xFF) as u8;
+            old_key != key || old_generation != generation || old_depth <= depth
         };
         if should_replace {
-            *slot = Some(TtEntry { key, depth, score, flag, best_move, generation, halfmove_clock });
+            let data = TtEntry { depth, score, flag, best_move, generation, halfmove_clock }.pack();
+            slot.data.store(data, Ordering::Relaxed);
+            slot.check.store(key ^ data, Ordering::Relaxed);
         }
+    }
+
+    /// Asks the CPU to start loading the slot for `key`, so that the probe a
+    /// few dozen nanoseconds later finds it in cache instead of waiting for
+    /// memory. A hint only: a wrong key costs a useless load, nothing else.
+    #[inline(always)]
+    fn prefetch(&self, key: u64) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+            // SAFETY: `_mm_prefetch` needs SSE, which every x86_64 CPU has,
+            // and it is only a hint: it cannot fault, whatever the address.
+            // The address here is a live slot of the table anyway.
+            unsafe { _mm_prefetch::<_MM_HINT_T0>(self.slot(key) as *const Slot as *const i8) };
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = key;
     }
 }
 
@@ -366,16 +503,17 @@ impl TranspositionTable {
 /// `search()` call: reused move after move (via [`Tt::clone_handle`]/`Arc`
 /// on the caller's side) so that transpositions discovered on one move stay
 /// useful on the next, and cleared only when the caller knows the game
-/// itself has restarted (UCI `ucinewgame`).
-pub struct Tt(Mutex<TranspositionTable>);
+/// itself has restarted (UCI `ucinewgame`). Shared by every Lazy SMP thread
+/// with no lock: see `TranspositionTable`.
+pub struct Tt(TranspositionTable);
 
 impl Tt {
     pub fn new(size_mb: usize) -> Self {
-        Tt(Mutex::new(TranspositionTable::new(size_mb)))
+        Tt(TranspositionTable::new(size_mb))
     }
 
     pub fn clear(&self) {
-        self.0.lock().unwrap().clear();
+        self.0.clear();
     }
 
     /// Number of slots in the table (a power of two derived from the size
@@ -383,35 +521,35 @@ impl Tt {
     /// `setoption name Hash` handler and its tests — can confirm a resize
     /// actually took effect, without exposing the table's internal layout.
     pub fn capacity(&self) -> usize {
-        self.0.lock().unwrap().entries.len()
+        self.0.entries.len()
     }
 
-    /// Locks just long enough to bump the generation counter — see
-    /// `TranspositionTable::new_search`. Must be called exactly once per
-    /// real `go`, not once per search thread (Fase 4): the generation marks
-    /// "a new search started", and bumping it once per helper thread would
-    /// make sibling threads' own fresh entries look mutually stale and
-    /// evict each other instead of reinforcing one another through the
-    /// shared table.
+    /// Bumps the generation counter — see `TranspositionTable::new_search`.
+    /// Must be called exactly once per real `go`, not once per search thread
+    /// (Fase 4): the generation marks "a new search started", and bumping it
+    /// once per helper thread would make sibling threads' own fresh entries
+    /// look mutually stale and evict each other instead of reinforcing one
+    /// another through the shared table.
     fn new_search(&self) {
-        self.0.lock().unwrap().new_search();
+        self.0.new_search();
     }
 
-    /// Locks just long enough to read one slot. Deliberately *not* held for
-    /// the whole search (unlike before Fase 4, when the caller kept a
-    /// `MutexGuard` for the entire iterative-deepening loop): with several
-    /// search threads sharing one `Tt`, a lock held that long would
-    /// serialize them completely, leaving Lazy SMP no faster than a single
-    /// thread.
+    #[inline(always)]
     fn probe(&self, key: u64) -> Option<TtEntry> {
-        self.0.lock().unwrap().probe(key)
+        let _phase = perfil::enter(perfil::TT);
+        self.0.probe(key)
     }
 
-    /// Locks just long enough to write one slot — see `probe` above for why
-    /// per-call locking (not one lock for the whole search) matters once
-    /// more than one thread shares this table.
+    #[inline(always)]
     fn store(&self, key: u64, depth: u8, score: i32, flag: TtFlag, best_move: Option<Move>, halfmove_clock: u8) {
-        self.0.lock().unwrap().store(key, depth, score, flag, best_move, halfmove_clock);
+        let _phase = perfil::enter(perfil::TT);
+        self.0.store(key, depth, score, flag, best_move, halfmove_clock);
+    }
+
+    /// See `TranspositionTable::prefetch`.
+    #[inline(always)]
+    fn prefetch(&self, key: u64) {
+        self.0.prefetch(key);
     }
 
     /// Marks the start of a real `go`. Public to the crate so the Lazy SMP
@@ -532,7 +670,7 @@ struct Context<'a> {
     pv_len: Vec<usize>,
     /// Scratch buffer reused by `order_moves_full`, so ordering a node's
     /// moves doesn't allocate once per node.
-    order_buffer: Vec<(i32, u16, Move)>,
+    order_keys: Vec<u64>,
     /// The network and this thread's accumulators, when the search runs with
     /// `SearchLimits::use_nnue`. `None` means the HCE exactly as before, which
     /// is also what every test that builds a `Context` by hand gets.
@@ -581,6 +719,7 @@ fn cont_history_index(prev_piece: PieceType, prev_to: Square, piece: PieceType, 
 /// opposite-signed errors into it, cancelling out or actively reinforcing
 /// the error instead of correcting it.
 fn pawn_hash(board: &Board) -> u64 {
+    let _phase = perfil::enter(perfil::CORR);
     let mut hash = 0u64;
     for sq in board.pieces_of(Color::White, PieceType::Pawn) {
         hash ^= zobrist::piece_square_key(Color::White, PieceType::Pawn, sq);
@@ -606,6 +745,7 @@ impl Context<'_> {
     /// than through the search.
     #[inline(always)]
     fn evaluate(&self, board: &Board, ply: u32) -> i32 {
+        let _phase = perfil::enter(perfil::EVAL);
         match &self.nnue {
             Some(state) => {
                 #[cfg(test)]
@@ -625,6 +765,7 @@ impl Context<'_> {
     /// call: see `nnue::Accumulators::push`.
     #[inline(always)]
     fn nnue_push(&mut self, board: &Board, mv: Move, ply: u32) {
+        let _phase = perfil::enter(perfil::PUSH);
         if let Some(state) = &mut self.nnue {
             state.accumulators.push(state.net, board, mv, ply as usize);
         }
@@ -633,6 +774,7 @@ impl Context<'_> {
     /// The null-move counterpart of `nnue_push`.
     #[inline(always)]
     fn nnue_null(&mut self, ply: u32) {
+        let _phase = perfil::enter(perfil::PUSH);
         if let Some(state) = &mut self.nnue {
             state.accumulators.copy_parent(ply as usize);
         }
@@ -738,6 +880,7 @@ impl Context<'_> {
     }
 
     fn store_killer(&mut self, ply: u32, mv: Move) {
+        let _phase = perfil::enter(perfil::HIST);
         let slot = &mut self.killers[ply as usize];
         if slot[0] != Some(mv) {
             slot[1] = slot[0];
@@ -752,6 +895,7 @@ impl Context<'_> {
     /// Applies a (positive or negative) gravity update to the flat history
     /// entry for `mv` — see `gravity` for why this replaces plain addition.
     fn update_history(&mut self, mv: Move, bonus: i32) {
+        let _phase = perfil::enter(perfil::HIST);
         gravity(&mut self.history[mv.from.0 as usize][mv.to.0 as usize], bonus);
     }
 
@@ -779,13 +923,25 @@ impl Context<'_> {
         }
     }
 
+    /// Where in `cont_history` the row for the move that led to `ply` starts
+    /// (`None` when no move did, as under a null move). A quiet move's entry is
+    /// `row + piece * 64 + to`: the same index `cont_history_index` computes, with
+    /// the part that does not depend on the move taken out so the ordering can
+    /// look it up once per node and not once per move.
+    #[inline(always)]
+    fn cont_history_row(&self, ply: u32) -> Option<usize> {
+        self.prev_move_at(ply).map(|(prev_piece, prev_to)| (prev_piece as usize * 64 + prev_to.0 as usize) * PIECE_TYPE_COUNT * 64)
+    }
+
     fn update_cont_history(&mut self, ply: u32, piece: PieceType, to: Square, bonus: i32) {
+        let _phase = perfil::enter(perfil::HIST);
         if let Some((prev_piece, prev_to)) = self.prev_move_at(ply) {
             gravity(&mut self.cont_history[cont_history_index(prev_piece, prev_to, piece, to)], bonus);
         }
     }
 
     fn correction_score(&self, pawn_hash: u64) -> i32 {
+        let _phase = perfil::enter(perfil::CORR);
         self.pawn_correction[pawn_hash as usize & (CORRECTION_HISTORY_SIZE - 1)]
     }
 
@@ -794,6 +950,7 @@ impl Context<'_> {
     /// via an exponential moving average weighted by how trustworthy this
     /// particular result was (deeper searches move it further).
     fn update_correction(&mut self, pawn_hash: u64, error: i32, depth: u32) {
+        let _phase = perfil::enter(perfil::CORR);
         let idx = pawn_hash as usize & (CORRECTION_HISTORY_SIZE - 1);
         let weight = (depth as i32 + 1).min(CORRECTION_WEIGHT_CAP);
         let entry = &mut self.pawn_correction[idx];
@@ -959,7 +1116,7 @@ pub(crate) fn search_inner(
         null_at_ply: vec![false; (MAX_PLY + 1) as usize],
         pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
         pv_len: vec![0; (MAX_PLY + 2) as usize],
-        order_buffer: Vec::with_capacity(64),
+        order_keys: Vec::with_capacity(512),
         nnue: nnue_state_for(limits.use_nnue, limits.nnue_instructions),
     };
     // The only full refresh of the accumulators in the whole search, once per
@@ -1041,7 +1198,9 @@ fn search_root_with_aspiration(board: &mut Board, depth: u32, prev_score: i32, c
 
 fn search_root(board: &mut Board, depth: u32, alpha_init: i32, beta: i32, ctx: &mut Context) -> (i32, Option<Move>) {
     ctx.clear_pv(0);
-    let mut moves = movegen::legal_moves_scratch(board);
+    // A `Vec` here, not the stack list: the root runs once per iteration, and
+    // `searchmoves` swaps in a different (shorter) collection.
+    let mut moves = movegen::legal_moves_scratch(board).to_vec();
     if let Some(restrict_to) = &ctx.search_moves {
         // `parse_go_limits` only ever produces a non-empty list (a
         // `searchmoves` naming nothing legal is dropped there rather than
@@ -1232,6 +1391,7 @@ fn lmr_reduction(depth: u32, move_index: usize) -> u32 {
 }
 
 fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, ctx: &mut Context, excluded: Option<Move>) -> i32 {
+    let _phase = perfil::enter(perfil::OTHER);
     ctx.nodes += 1;
     if ctx.should_stop() {
         return 0;
@@ -1392,6 +1552,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     {
         let se = static_eval.expect("guarded by is_some_and above");
         let reduction = NULL_MOVE_REDUCTION + depth / 3 + (((se - beta) / 200) as u32).min(3);
+        ctx.tt.prefetch(board.hash ^ zobrist::side_to_move_key());
         ctx.nnue_null(ply);
         let undo = board.make_null_move();
         // Nothing below a null move is reachable by legal play from the
@@ -1417,13 +1578,24 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // will have a TT move by then and search at full strength.
     let depth = if tt_move.is_none() && depth >= IIR_MIN_DEPTH { depth - 1 } else { depth };
 
-    let moves = movegen::legal_moves_scratch(board);
-    if moves.is_empty() {
-        return if in_check { -MATE_SCORE + ply as i32 } else { 0 };
-    }
-
+    // Since 0.37 the list is pseudo-legal and each move is vetted when the loop
+    // reaches it, not all of them up front: most nodes end on a cutoff after
+    // two or three moves, and vetting the other thirty was a tenth of the whole
+    // search. The moves that come out are the same, in the same order (an
+    // illegal one is simply skipped), and so is every count the loop keeps: see
+    // `legal_seen` below. Mate and stalemate are the nodes where the loop finds
+    // no legal move at all.
+    //
+    // Except in check, where a handful of evasions are all that is legal out
+    // of thirty-odd moves: ordering the rest first costs more than vetting
+    // them, so there the list is filtered before it is ordered.
+    let vetting = movegen::Vetting::new(board);
     let killers = ctx.killers_at(ply);
-    let mut ordered = moves;
+    let mut ordered = movegen::generate_pseudo_legal_list(board);
+    let vetted_up_front = in_check;
+    if vetted_up_front {
+        vetting.retain_legal(board, &mut ordered);
+    }
     order_moves_full(board, &mut ordered, tt_move, killers, ctx, ply);
 
     // Check extension: a position where the side to move is in check is
@@ -1461,7 +1633,9 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     }
 
     let mut best_score = -INF;
-    let mut best_move = ordered[0];
+    // Only a placeholder: the first move searched replaces it (any score beats
+    // `-INF`), and a node with no legal move returns before it is read.
+    let mut best_move = ordered.first().copied().unwrap_or(Move::new(Square(0), Square(0), MoveFlag::Quiet));
 
     // Futility pruning: at these shallow depths, if the static eval is
     // already so far below alpha that no quiet move could plausibly close
@@ -1477,7 +1651,18 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // move that actually worked, and that's exactly the ordering mistake the
     // history tables exist to unlearn. Without the malus, history scores
     // only ever grow and ordering stops distinguishing good from merely old.
-    let mut tried_quiets: Vec<(Move, PieceType)> = Vec::new();
+    //
+    // Kept as a bitset over positions in `ordered` (the pseudo-legal list: up
+    // to `MAX_MOVES`, see `TRIED_QUIETS_WORDS`) plus a count, instead of a
+    // `Vec` that grew 4, 8, 16, 32 through the heap inside the node. The moved
+    // piece is read back from the board at cutoff time: the node's position is
+    // restored by then, so it is the same piece the move was searched with.
+    let mut tried_quiets = [0u64; TRIED_QUIETS_WORDS];
+    let mut quiets_searched = 0usize;
+    // Legal moves met so far, the excluded one and the pruned ones included:
+    // exactly what the index into the all-legal list used to be, and what
+    // "first move", LMR's "late move" and futility's "not the first" are about.
+    let mut legal_seen = 0usize;
     // Whether any move was really searched. Only ever 0 in a singular
     // verification search, where the TT move (which move ordering puts
     // first) is the excluded one and everything else can be pruned away —
@@ -1485,7 +1670,13 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
     // true and handed out the extension for free.
     let mut moves_searched = 0u32;
 
-    for (move_index, mv) in ordered.into_iter().enumerate() {
+    for list_index in 0..ordered.len() {
+        let mv = ordered[list_index];
+        if !vetted_up_front && !vetting.is_legal(board, mv) {
+            continue;
+        }
+        let move_index = legal_seen;
+        legal_seen += 1;
         if Some(mv) == excluded {
             continue;
         }
@@ -1496,24 +1687,37 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         // "the 3rd quiet move" are very different things, and in a tactical
         // position with eight plausible captures the old form pruned
         // *every* quiet move at depth <= 2.
-        let quiets_tried = tried_quiets.len();
+        let quiets_tried = quiets_searched;
 
-        // Whether this move checks the opponent, answered without playing
-        // it (see `movegen::gives_check`). LMR already refused to reduce a
-        // checking move; LMP and futility used to discard them outright,
-        // which can throw away a quiet mate sitting past the threshold.
-        let gives_check = movegen::gives_check(board, mv);
-
-        if is_quiet && !gives_check && !in_check && alpha > -MATE_THRESHOLD && beta < MATE_THRESHOLD {
+        // Late move pruning and futility: skip a quiet move that is not a
+        // check. The cheap half of that is settled first; whether the move
+        // checks (see `movegen::gives_check`) is asked only when the answer
+        // can change what happens to it, which it cannot for a move that is
+        // going to be searched in full whatever it does.
+        let prune_candidate = is_quiet && !in_check && alpha > -MATE_THRESHOLD && beta < MATE_THRESHOLD && {
             // Late move pruning: at shallow depth, once this many quiet
             // moves have been searched without a cutoff, skip the rest.
             let lmp = depth <= LMP_MAX_DEPTH && quiets_tried >= lmp_threshold(depth, improving);
             let futile =
                 move_index > 0 && futility_eval.is_some_and(|se| se + FUTILITY_MARGIN[depth as usize] <= alpha);
-            if lmp || futile {
-                continue;
-            }
+            lmp || futile
+        };
+        let reduce_candidate = move_index >= LMR_FULL_DEPTH_MOVES && depth >= LMR_MIN_DEPTH && is_quiet && !in_check;
+        // Whether this move checks the opponent, answered without playing it.
+        // LMR refuses to reduce a checking move; LMP and futility used to
+        // discard them outright, which can throw away a quiet mate sitting
+        // past the threshold.
+        let gives_check = (prune_candidate || reduce_candidate) && movegen::gives_check(board, mv);
+        if prune_candidate && !gives_check {
+            continue;
         }
+
+        // Start loading the child's table slot now. Its probe comes only
+        // after the push and the make below and the child's own preamble, and
+        // a load issued this early has landed by then instead of stalling the
+        // search on memory (the table was a fifth of the time in the phase
+        // profile, mostly this wait).
+        ctx.tt.prefetch(board.hash_after_approx(mv));
 
         let moved_piece = board.piece_at(mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
         let move_hist = if is_quiet {
@@ -1536,7 +1740,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
         // `lmr_reduction`), clamped so the reduced search always keeps at
         // least 1 ply (dropping straight into quiescence would make the
         // scout blind to any quiet refutation).
-        let can_reduce = move_index >= LMR_FULL_DEPTH_MOVES && depth >= LMR_MIN_DEPTH && is_quiet && !in_check && !gives_check;
+        let can_reduce = reduce_candidate && !gives_check;
         let reduction = if can_reduce {
             // Index by quiets already searched (captures lead the list and
             // would inflate the index), then adjust: less in PV nodes and
@@ -1593,9 +1797,15 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
             // history tables exist to unlearn. Restricting the malus to
             // quiet cutoffs let quiet moves that keep failing in tactical
             // positions hold on to inflated scores indefinitely.
-            for &(tried_mv, tried_piece) in &tried_quiets {
-                ctx.update_history(tried_mv, -bonus);
-                ctx.update_cont_history(ply, tried_piece, tried_mv.to, -bonus);
+            for (word_index, &word) in tried_quiets.iter().enumerate() {
+                let mut bits = word;
+                while bits != 0 {
+                    let tried_mv = ordered[word_index * 64 + bits.trailing_zeros() as usize];
+                    bits &= bits - 1;
+                    let tried_piece = board.piece_at(tried_mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
+                    ctx.update_history(tried_mv, -bonus);
+                    ctx.update_cont_history(ply, tried_piece, tried_mv.to, -bonus);
+                }
             }
             break;
         }
@@ -1603,10 +1813,15 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
             break;
         }
         if is_quiet {
-            tried_quiets.push((mv, moved_piece));
+            tried_quiets[list_index >> 6] |= 1u64 << (list_index & 63);
+            quiets_searched += 1;
         }
     }
 
+    if legal_seen == 0 {
+        // Not one legal move: mate, or stalemate.
+        return if in_check { -MATE_SCORE + ply as i32 } else { 0 };
+    }
     if moves_searched == 0 {
         // Everything was excluded or pruned: report a fail-low bound rather
         // than the `-INF` sentinel, which is not a score any caller can use.
@@ -1664,6 +1879,7 @@ fn negamax(board: &mut Board, depth: u32, ply: u32, mut alpha: i32, beta: i32, c
 /// The mate test only runs on the rare path where a draw rule actually
 /// fired, so ordinary nodes still pay nothing but the three cheap checks.
 fn terminal_draw_score(board: &mut Board, ply: u32, ctx: &Context) -> Option<i32> {
+    let _phase = perfil::enter(perfil::DRAW);
     let fifty_move = board.halfmove_clock >= 100;
     if !fifty_move && !ctx.is_repetition(board.hash, board.halfmove_clock) && !eval::is_insufficient_material(board) {
         return None;
@@ -1686,6 +1902,7 @@ fn quiescence(board: &mut Board, alpha: i32, beta: i32, ply: u32, ctx: &mut Cont
 }
 
 fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx: &mut Context) -> i32 {
+    let _phase = perfil::enter(perfil::QS);
     if ctx.should_stop() {
         return 0;
     }
@@ -1745,16 +1962,20 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
     // storing below: `alpha` itself is raised as the search progresses.
     let alpha_orig = alpha;
 
-    let in_check = movegen::is_in_check(board, board.side_to_move);
-
-    // The full legal list is generated first and only then filtered down to
-    // the noisy moves, so that "no captures worth reading out" and "no legal
-    // move at all" stay distinguishable. Conflating them made quiescence
-    // score a stalemate as an ordinary static evaluation: from
-    // `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1` the engine used to *choose* Kd2,
-    // stalemating Black, and announce more than ten pawns of advantage.
-    let mut moves = movegen::legal_moves_scratch(board);
-    if moves.is_empty() {
+    // "No captures worth reading out" and "no legal move at all" have to stay
+    // distinguishable. Conflating them made quiescence score a stalemate as
+    // an ordinary static evaluation: from `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1`
+    // the engine used to *choose* Kd2, stalemating Black, and announce more
+    // than ten pawns of advantage.
+    //
+    // Since 0.37 that is settled without generating and vetting the whole
+    // list: one legal move is enough to rule out mate and stalemate, and only
+    // the moves quiescence will really read (a few captures, or the evasions
+    // when in check) are generated and vetted further down. The verdicts are
+    // the ones `legal_moves_scratch` gives; the nodes searched are identical.
+    let vetting = movegen::Vetting::new(board);
+    let in_check = vetting.in_check();
+    if !vetting.any_legal(board) {
         // Mate or stalemate: an exact, final value for this position that
         // no deeper search can improve on, so it is worth keeping.
         let score = if in_check { -MATE_SCORE + ply as i32 } else { 0 };
@@ -1773,6 +1994,7 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
     };
     let mut best_score = stand_pat;
     let mut best_move: Option<Move> = None;
+    let mut moves;
     if !in_check {
         if stand_pat >= beta {
             // Standing pat already fails high, so the true score is at
@@ -1791,14 +2013,20 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
         // from queening is exactly the kind of move that must not go
         // unresolved at the horizon, and SEE prices the promoted piece
         // poorly (see the note in `static_exchange_eval`).
-        moves.retain(|m| {
-            m.promotion().is_some() || (m.is_capture() && movegen::static_exchange_eval(board, *m) >= 0)
-        });
+        //
+        // Generated noisy-only and vetted for legality before SEE, the dearest
+        // of the tests, so SEE runs only on the legal captures.
+        moves = vetting.noisy_legal(board);
+        moves.retain(|m| m.promotion().is_some() || movegen::static_exchange_eval(board, *m) >= 0);
+    } else {
+        // Every evasion is read, quiet ones included.
+        moves = vetting.legal(board);
     }
 
-    order_moves_in_place(board, &mut moves);
+    order_noisy(board, &mut moves, ctx);
 
-    for mv in moves {
+    for move_index in 0..moves.len() {
+        let mv = moves[move_index];
         // Delta pruning: even winning this capture outright can't close
         // enough of the gap to alpha to matter, so don't bother reading it
         // out. Promotions are exempt since the extra promoted-piece value
@@ -1809,6 +2037,7 @@ fn quiescence_inner(board: &mut Board, mut alpha: i32, beta: i32, ply: u32, ctx:
             continue;
         }
 
+        ctx.tt.prefetch(board.hash_after_approx(mv));
         ctx.nnue_push(board, mv, ply);
         let undo = board.make_move(mv);
         ctx.path.push(board.hash);
@@ -1876,9 +2105,8 @@ fn store_quiescence(
 /// safe to try a null move without risking a zugzwang position where
 /// "passing" looks better than every legal move.
 fn has_non_pawn_material(board: &Board, color: Color) -> bool {
-    PieceType::ALL
-        .iter()
-        .any(|&kind| !matches!(kind, PieceType::Pawn | PieceType::King) && !board.pieces_of(color, kind).is_empty())
+    let pawns_and_king = board.pieces_of(color, PieceType::Pawn) | board.pieces_of(color, PieceType::King);
+    !(board.color_occupied(color) & !pawns_and_king).is_empty()
 }
 
 fn capture_victim_value(board: &Board, mv: Move) -> i32 {
@@ -1917,8 +2145,46 @@ fn move_order_score(board: &Board, mv: Move) -> i32 {
     }
 }
 
-fn order_moves_in_place(board: &Board, moves: &mut [Move]) {
-    moves.sort_by_key(|&m| std::cmp::Reverse(move_order_score(board, m)));
+/// The sort key of a move in an ordering: its score in the high bits, then its
+/// position in the list *reversed*, then the move itself. Sorted in descending
+/// order the best score comes first and, among equal scores, the move that was
+/// generated first: the order the pairs `(score, position)` gave when they were
+/// sorted as tuples with a comparison closure, and what a stable sort by score
+/// gives. As plain integers they sort several times faster, and the move rides
+/// in the low bits, so there is nothing to look up afterwards. A node has at
+/// most `MAX_MOVES` (320) moves, so 9 bits hold the position.
+#[inline(always)]
+fn order_key(score: i32, position: usize, mv: Move) -> u64 {
+    debug_assert!(position < 512);
+    (((score as i64 + (1 << 31)) as u64) << 25) | ((511 - position as u64) << 16) | (pack_move(Some(mv)) & 0xFFFF)
+}
+
+/// Writes the moves of `keys`, best first, over `moves`.
+#[inline(always)]
+fn write_back_by_key(moves: &mut [Move], keys: &mut [u64]) {
+    let _sort = perfil::enter(perfil::SORT);
+    keys.sort_unstable_by(|a, b| b.cmp(a));
+    for (dst, &key) in moves.iter_mut().zip(keys.iter()) {
+        *dst = unpack_move16(key);
+    }
+}
+
+/// Orders a quiescence node's moves by [`move_order_score`], best first,
+/// equal scores keeping generation order. That is what the stable
+/// `sort_by_key` this replaces did; here each key is computed once, into the
+/// buffer the context already keeps for `order_moves_full`, instead of twice
+/// per comparison. (The two uses never overlap: the buffer is taken out for
+/// the length of one ordering call and put back before any recursion.)
+fn order_noisy(board: &Board, moves: &mut [Move], ctx: &mut Context) {
+    let _phase = perfil::enter(perfil::ORDER);
+    if moves.len() < 2 {
+        return;
+    }
+    let mut keys = std::mem::take(&mut ctx.order_keys);
+    keys.clear();
+    keys.extend(moves.iter().enumerate().map(|(i, &m)| order_key(move_order_score(board, m), i, m)));
+    write_back_by_key(moves, &mut keys);
+    ctx.order_keys = keys;
 }
 
 /// Full move ordering for the main search: the transposition-table move
@@ -1932,7 +2198,14 @@ fn order_moves_in_place(board: &Board, moves: &mut [Move]) {
 /// the piece to a defender) are pushed below every quiet move instead:
 /// MVV-LVA alone can't tell a winning capture from a losing one, since it
 /// doesn't know whether the target square is defended.
-fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers: [Option<Move>; 2], ctx: &Context, ply: u32) -> i32 {
+fn move_order_score_full(
+    board: &Board,
+    mv: Move,
+    tt_move: Option<Move>,
+    killers: [Option<Move>; 2],
+    ctx: &Context,
+    cont_row: Option<usize>,
+) -> i32 {
     if tt_move == Some(mv) {
         return 1_000_000;
     }
@@ -1953,7 +2226,11 @@ fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers
         return 89_000;
     }
     let piece = board.piece_at(mv.from).map(|p| p.kind).unwrap_or(PieceType::Pawn);
-    ctx.history[mv.from.0 as usize][mv.to.0 as usize] + ctx.cont_history_score(ply, piece, mv.to)
+    let cont = match cont_row {
+        Some(row) => ctx.cont_history[row + piece as usize * 64 + mv.to.0 as usize],
+        None => 0,
+    };
+    ctx.history[mv.from.0 as usize][mv.to.0 as usize] + cont
 }
 
 /// Scores every move once into a scratch buffer owned by the `Context` and
@@ -1969,19 +2246,18 @@ fn move_order_score_full(board: &Board, mv: Move, tt_move: Option<Move>, killers
 /// large block of quiet moves that all score 0 early in a search would be
 /// permuted arbitrarily.
 fn order_moves_full(board: &Board, moves: &mut [Move], tt_move: Option<Move>, killers: [Option<Move>; 2], ctx: &mut Context, ply: u32) {
-    let mut buf = std::mem::take(&mut ctx.order_buffer);
-    buf.clear();
-    buf.extend(
+    let _phase = perfil::enter(perfil::ORDER);
+    let mut keys = std::mem::take(&mut ctx.order_keys);
+    keys.clear();
+    let cont_row = ctx.cont_history_row(ply);
+    keys.extend(
         moves
             .iter()
             .enumerate()
-            .map(|(i, &m)| (move_order_score_full(board, m, tt_move, killers, ctx, ply), i as u16, m)),
+            .map(|(i, &m)| order_key(move_order_score_full(board, m, tt_move, killers, ctx, cont_row), i, m)),
     );
-    buf.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    for (dst, src) in moves.iter_mut().zip(buf.iter()) {
-        *dst = src.2;
-    }
-    ctx.order_buffer = buf;
+    write_back_by_key(moves, &mut keys);
+    ctx.order_keys = keys;
 }
 
 #[cfg(test)]
@@ -2021,7 +2297,7 @@ mod tests {
             null_at_ply: vec![false; (MAX_PLY + 1) as usize],
             pv: vec![Move::new(Square(0), Square(0), MoveFlag::Quiet); ((MAX_PLY + 1) * MAX_PLY) as usize],
             pv_len: vec![0; (MAX_PLY + 2) as usize],
-            order_buffer: Vec::new(),
+            order_keys: Vec::new(),
             nnue: None,
         }
     }
@@ -2150,9 +2426,9 @@ mod tests {
         // request used to allocate a real 6 GB, which crashed. Checked via
         // the pure `slot_count_for` (no real allocation) across a spread of
         // sizes up to `MAX_HASH_MB`-scale, since the boundary depends on
-        // `size_of::<Option<TtEntry>>()`, which changes whenever `TtEntry`'s
-        // fields do.
-        let entry_size = std::mem::size_of::<Option<TtEntry>>();
+        // `SLOT_BUDGET_BYTES` and the real size of a `Slot`.
+        let entry_size = std::mem::size_of::<Slot>();
+        assert!(entry_size <= SLOT_BUDGET_BYTES);
         for size_mb in [1, 4, 16, 64, 256, 1024, 4096] {
             let used_bytes = slot_count_for(size_mb) * entry_size;
             assert!(
@@ -2173,7 +2449,7 @@ mod tests {
 
     #[test]
     fn store_keeps_a_deeper_entry_over_a_shallower_one_within_the_same_generation() {
-        let mut table = TranspositionTable::new(1);
+        let table = TranspositionTable::new(1);
         table.store(42, 10, 100, TtFlag::Exact, None, 0);
         table.store(42, 1, 200, TtFlag::Exact, None, 0); // no new_search() in between
         let entry = table.probe(42).unwrap();
@@ -2187,7 +2463,7 @@ mod tests {
         // winning this depth-preferred comparison forever, since the table
         // is kept alive for the whole game (see `Tt`) — even after the
         // game has moved well past where that entry is still relevant.
-        let mut table = TranspositionTable::new(1);
+        let table = TranspositionTable::new(1);
         table.store(42, 10, 100, TtFlag::Exact, None, 0);
 
         table.new_search();
@@ -2196,6 +2472,169 @@ mod tests {
         let entry = table.probe(42).unwrap();
         assert_eq!(entry.depth, 1);
         assert_eq!(entry.score, 200);
+    }
+
+    #[test]
+    fn order_keys_sort_by_score_descending_then_by_generation_order() {
+        // The ordering the keys replaced: tuples (score, position, move) sorted
+        // with a comparison closure. Scores here span every range the search
+        // produces, with many ties, and the moves cover every flag.
+        let board = Board::from_fen("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1").unwrap();
+        let moves = movegen::generate_pseudo_legal_list(&board);
+        assert!(moves.len() > 30);
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for round in 0..200 {
+            let scores: Vec<i32> = (0..moves.len())
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    match state % 7 {
+                        0 => 1_000_000,
+                        1 => 100_000 + (state >> 8) as i32 % 3_000,
+                        2 => 90_000 - (state >> 8) as i32 % 2,
+                        3 => -50_000 - (state >> 8) as i32 % 1_200,
+                        _ => (state >> 8) as i32 % 9 - 4 + if round % 2 == 0 { 0 } else { (state >> 20) as i32 % 60_000 - 30_000 },
+                    }
+                })
+                .collect();
+            let mut by_tuple: Vec<(i32, usize, Move)> =
+                moves.iter().enumerate().map(|(i, &m)| (scores[i], i, m)).collect();
+            by_tuple.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+
+            let mut keys: Vec<u64> = moves.iter().enumerate().map(|(i, &m)| order_key(scores[i], i, m)).collect();
+            let mut ordered = moves.to_vec();
+            write_back_by_key(&mut ordered, &mut keys);
+
+            let expected: Vec<Move> = by_tuple.iter().map(|t| t.2).collect();
+            assert_eq!(ordered, expected, "round {round}");
+        }
+    }
+
+    #[test]
+    fn the_most_crowded_known_position_overflows_no_per_node_buffer() {
+        // 218 legal moves, the most any position is known to offer. The
+        // per-node buffers (the move list, the bitset of quiet moves tried, the
+        // nine bits of position in the ordering keys) are sized for the
+        // pseudo-legal list of such a position, and one that fell a word short
+        // would panic here and nowhere else, in the middle of a game.
+        let fen = "R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNN1KB1 w - - 0 1";
+        let mut board = Board::from_fen(fen).unwrap();
+        assert_eq!(movegen::generate_legal_moves(&board).len(), 218);
+        const { assert!(TRIED_QUIETS_WORDS * 64 >= MAX_MOVES) };
+        // `order_key` keeps the position of a move in nine bits.
+        const { assert!(MAX_MOVES <= 512) };
+
+        // As an inner node (ply 1, full window), so that its loop walks all the
+        // moves with the bitset in use: searched from the root, the iteration
+        // ends on the mate in one (Qd2-b2) before it gets anywhere near.
+        let stop = AtomicBool::new(false);
+        let tt = Tt::new(1);
+        let shared_nodes = AtomicU64::new(0);
+        let mut ctx = test_context(&stop, &tt, &shared_nodes, board.hash);
+        let score = negamax(&mut board, 3, 1, -INF, INF, &mut ctx, None);
+        assert!(score >= MATE_THRESHOLD, "the mate in one was not found: {score}");
+        assert!(search_with_network(fen, 3).best_move.is_some());
+    }
+
+    #[test]
+    fn move_flags_table_matches_the_enum_discriminants() {
+        for (i, flag) in MOVE_FLAGS.iter().take(14).enumerate() {
+            assert_eq!(*flag as usize, i, "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn a_packed_entry_unpacks_to_the_same_entry() {
+        let moves = [
+            None,
+            Some(Move::new(Square(12), Square(28), MoveFlag::DoublePawnPush)),
+            Some(Move::new(Square(52), Square(60), MoveFlag::PromoCaptureQueen)),
+            Some(Move::new(Square(63), Square(0), MoveFlag::EnPassant)),
+        ];
+        for (n, best_move) in moves.into_iter().enumerate() {
+            for flag in [TtFlag::Exact, TtFlag::Lower, TtFlag::Upper] {
+                for score in [0, 1, -1, 123, -4567, MATE_SCORE + 127, -(MATE_SCORE + 127), 32_767, -32_767] {
+                    let entry = TtEntry {
+                        depth: (n * 70) as u8,
+                        score,
+                        flag,
+                        best_move,
+                        generation: 200 + n as u8,
+                        halfmove_clock: (n * 33) as u8,
+                    };
+                    let back = TtEntry::unpack(entry.pack());
+                    assert_eq!(
+                        (back.depth, back.score, back.best_move, back.generation, back.halfmove_clock),
+                        (entry.depth, entry.score, entry.best_move, entry.generation, entry.halfmove_clock)
+                    );
+                    assert!(back.flag == entry.flag);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_slot_whose_check_word_does_not_match_reads_as_a_miss() {
+        // What a reader sees when it catches a writer half way: new data next
+        // to an old check word. It has to be a miss, not a wrong hit.
+        let table = TranspositionTable::new(1);
+        table.store(42, 5, 77, TtFlag::Exact, None, 0);
+        assert!(table.probe(42).is_some());
+        let slot = table.slot(42);
+        slot.check.store(slot.check.load(Ordering::Relaxed) ^ 1, Ordering::Relaxed);
+        assert!(table.probe(42).is_none());
+    }
+
+    #[test]
+    fn an_empty_slot_never_matches_a_key_of_zero() {
+        assert!(TranspositionTable::new(1).probe(0).is_none());
+    }
+
+    #[test]
+    fn another_key_in_the_same_slot_misses_and_replaces_whatever_the_depth() {
+        let table = TranspositionTable::new(1);
+        let other = 42 + table.mask + 1;
+        table.store(42, 10, 100, TtFlag::Exact, None, 0);
+        assert!(table.probe(other).is_none());
+        table.store(other, 1, 5, TtFlag::Upper, None, 0);
+        assert!(table.probe(42).is_none());
+        assert_eq!(table.probe(other).unwrap().score, 5);
+    }
+
+    #[test]
+    fn threads_sharing_the_table_never_read_an_entry_nobody_stored() {
+        // Every entry's fields are a function of its key, so a hit that mixes
+        // two writers' words would show as a field that does not match.
+        fn expected(key: u64) -> (u8, i32, Option<Move>) {
+            let mv = Move::new(Square((key & 63) as u8), Square(((key >> 6) & 63) as u8), MoveFlag::Quiet);
+            ((key >> 3) as u8 % 100, ((key >> 7) % 20_001) as i32 - 10_000, Some(mv))
+        }
+        let table = TranspositionTable::new(1);
+        let hits = AtomicU64::new(0);
+        std::thread::scope(|scope| {
+            for t in 0..4u64 {
+                let (table, hits) = (&table, &hits);
+                scope.spawn(move || {
+                    let mut state = 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(t + 1);
+                    for _ in 0..200_000 {
+                        // 4096 distinct keys over 8 slots (the low bits pick the
+                        // slot): constant collisions and constant replacement.
+                        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                        let x = (state >> 33) % 4_096;
+                        let key = (1 << 40) | (x << 20) | (x % 8);
+                        let (depth, score, best_move) = expected(key);
+                        if state & 1 == 0 {
+                            table.store(key, depth, score, TtFlag::Exact, best_move, 3);
+                        } else if let Some(e) = table.probe(key) {
+                            assert_eq!((e.depth, e.score, e.best_move), (depth, score, best_move), "key {key:#x}");
+                            hits.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+        assert!(hits.load(Ordering::Relaxed) > 0, "the stress test never got a hit, so it checked nothing");
     }
 
     #[test]

@@ -47,3 +47,15 @@ real. La discrepancia es de alcance o de método.
   un 1 % distinto) queda sin apoyo: el ruido por pasada fue de ±2 % con el
   motor alineado igualmente. No volver a proponerlo salvo con otra
   microarquitectura.
+
+- **Atajo de SEE en quiescencia** («una captura que toma al menos lo que
+  arriesga tiene SEE ≥ 0, así que no se calcula»; paso 7 del carril de
+  velocidad de 0.37). Exacto en teoría, con un test que lo recorría sobre
+  árboles de referencia (hubo que excluir la primera y la octava fila:
+  `...Rxb8 axb8=Q` toma torre con torre y queda 800 por detrás). Medido con
+  `banco velocidad --pasadas 12`, profundidad 12, hash 32, 1 hilo y nodos
+  idénticos: **−0,11 % ± 0,70 %** (pasadas de 0,951x a 1,036x), o sea nada
+  (`banco/velocidad/see-shortcut-i.log`). Sin ganancia medible no compensa una
+  condición de exactitud más que vigilar: quitado antes de liberar. Reabrir
+  solo si un perfil por fases vuelve a señalar el SEE de quiescencia como
+  cuello.

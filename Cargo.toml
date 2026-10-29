@@ -1,6 +1,6 @@
 [package]
 name = "vigia"
-version = "0.36.0"
+version = "0.37.0"
 edition = "2021"
 
 [lib]
@@ -22,6 +22,16 @@ path = "src/bin/banco/main.rs"
 [[bin]]
 name = "generador"
 path = "src/bin/generador.rs"
+
+# Perfil de tiempo por fases: solo con `--features perfil` (src/perfil.rs).
+[[bin]]
+name = "perfil"
+path = "src/bin/perfil.rs"
+required-features = ["perfil"]
+
+[features]
+# Apagada por defecto: sin ella las guardas de fase no generan código.
+perfil = []
 
 [profile.release]
 lto = true

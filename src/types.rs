@@ -274,6 +274,148 @@ impl Move {
     }
 }
 
+/// Capacity of a [`MoveList`]. The most *legal* moves any position offers is
+/// 218; the pseudo-legal generator can exceed that only by what a pin or a
+/// check takes away, so 320 leaves a wide margin.
+pub const MAX_MOVES: usize = 320;
+
+/// A list of moves held entirely on the stack.
+///
+/// The search builds one per node, and quiescence (most of the nodes) builds
+/// one too. As a `Vec` that was a heap allocation and its release at every
+/// node: 35–45 ns each against ~12 ns for the array on this machine
+/// (micro-benchmark kept in `docs/MejorasPendientes.md`, 0.37), out of a node
+/// that costs ~590 ns. The storage is zero-initialised so the type needs no
+/// `unsafe`; that costs one 960-byte memset even for an empty list, so build
+/// one only where a list is really needed.
+#[derive(Clone)]
+pub struct MoveList {
+    moves: [Move; MAX_MOVES],
+    len: usize,
+}
+
+impl MoveList {
+    const FILLER: Move = Move { from: Square(0), to: Square(0), flag: MoveFlag::Quiet };
+
+    #[inline(always)]
+    pub fn new() -> MoveList {
+        MoveList { moves: [Self::FILLER; MAX_MOVES], len: 0 }
+    }
+
+    /// Appends `mv`. Past [`MAX_MOVES`] it panics (index out of range) rather
+    /// than silently dropping a move; no position can get there.
+    #[inline(always)]
+    pub fn push(&mut self, mv: Move) {
+        self.moves[self.len] = mv;
+        self.len += 1;
+    }
+
+    /// Keeps, in order, the moves for which `keep` is true. `keep` runs once
+    /// per move, front to back, exactly like `Vec::retain`: callers rely on
+    /// that when the test plays and takes back moves on a board.
+    pub fn retain<F: FnMut(&Move) -> bool>(&mut self, mut keep: F) {
+        let mut write = 0;
+        for read in 0..self.len {
+            let mv = self.moves[read];
+            if keep(&mv) {
+                self.moves[write] = mv;
+                write += 1;
+            }
+        }
+        self.len = write;
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+
+impl Default for MoveList {
+    fn default() -> MoveList {
+        MoveList::new()
+    }
+}
+
+impl std::ops::Deref for MoveList {
+    type Target = [Move];
+
+    #[inline(always)]
+    fn deref(&self) -> &[Move] {
+        &self.moves[..self.len]
+    }
+}
+
+impl std::ops::DerefMut for MoveList {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut [Move] {
+        &mut self.moves[..self.len]
+    }
+}
+
+impl PartialEq for MoveList {
+    fn eq(&self, other: &MoveList) -> bool {
+        **self == **other
+    }
+}
+
+impl PartialEq<Vec<Move>> for MoveList {
+    fn eq(&self, other: &Vec<Move>) -> bool {
+        **self == other[..]
+    }
+}
+
+impl fmt::Debug for MoveList {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<'a> IntoIterator for &'a MoveList {
+    type Item = &'a Move;
+    type IntoIter = std::slice::Iter<'a, Move>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// By-value iterator over a [`MoveList`] (it takes the list with it).
+pub struct MoveListIntoIter {
+    list: MoveList,
+    pos: usize,
+}
+
+impl Iterator for MoveListIntoIter {
+    type Item = Move;
+
+    #[inline]
+    fn next(&mut self) -> Option<Move> {
+        if self.pos < self.list.len {
+            let mv = self.list.moves[self.pos];
+            self.pos += 1;
+            Some(mv)
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let left = self.list.len - self.pos;
+        (left, Some(left))
+    }
+}
+
+impl ExactSizeIterator for MoveListIntoIter {}
+
+impl IntoIterator for MoveList {
+    type Item = Move;
+    type IntoIter = MoveListIntoIter;
+
+    fn into_iter(self) -> MoveListIntoIter {
+        MoveListIntoIter { list: self, pos: 0 }
+    }
+}
+
 impl fmt::Display for Move {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}{}", self.from, self.to)?;
@@ -344,5 +486,58 @@ mod tests {
     fn move_display_includes_promotion_suffix() {
         let mv = Move::new(Square::new(4, 6), Square::new(4, 7), MoveFlag::PromoQueen);
         assert_eq!(mv.to_string(), "e7e8q");
+    }
+
+    fn sample_moves(n: usize) -> Vec<Move> {
+        (0..n).map(|i| Move::new(Square((i % 64) as u8), Square(((i * 7 + 3) % 64) as u8), MoveFlag::Quiet)).collect()
+    }
+
+    #[test]
+    fn move_list_behaves_like_a_vec_of_moves() {
+        let expected = sample_moves(40);
+        let mut list = MoveList::new();
+        assert!(list.is_empty());
+        for &mv in &expected {
+            list.push(mv);
+        }
+        assert_eq!(list.len(), 40);
+        assert_eq!(list[7], expected[7]);
+        assert_eq!(list.to_vec(), expected);
+        assert!(list.contains(&expected[39]));
+        // By value, by reference and through the slice all agree.
+        assert_eq!(list.clone().into_iter().collect::<Vec<_>>(), expected);
+        assert_eq!((&list).into_iter().copied().collect::<Vec<_>>(), expected);
+        assert_eq!(list.clone().into_iter().len(), 40);
+    }
+
+    #[test]
+    fn move_list_retain_keeps_order_and_visits_each_move_once_in_order() {
+        let all = sample_moves(100);
+        let mut list = MoveList::new();
+        for &mv in &all {
+            list.push(mv);
+        }
+        let mut seen = Vec::new();
+        list.retain(|&mv| {
+            seen.push(mv);
+            mv.from.0 % 3 == 0
+        });
+        assert_eq!(seen, all, "keep must run once per move, front to back");
+        let kept: Vec<Move> = all.iter().copied().filter(|m| m.from.0 % 3 == 0).collect();
+        assert_eq!(list.to_vec(), kept);
+        list.clear();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn move_list_holds_the_largest_legal_position() {
+        // 218 is the known maximum of legal moves; the capacity must clear it
+        // with room for the pseudo-legal extras.
+        let mut list = MoveList::new();
+        for mv in sample_moves(MAX_MOVES) {
+            list.push(mv);
+        }
+        assert_eq!(list.len(), MAX_MOVES);
+        const { assert!(MAX_MOVES >= 218 + 64) };
     }
 }

@@ -17,10 +17,13 @@ sabe cuál fue.
 ## Órdenes de trabajo habituales
 
 ```bash
-cargo test --release                   # 406 tests (266 motor, 129 banco, 3 generador, 8 harness viejo)
+cargo test --release                   # 422 tests (282 motor, 129 banco, 3 generador, 8 harness viejo)
 cargo test --release -- --ignored      # + perft profundos, lentos a propósito
 cargo clippy --release --all-targets   # tiene que quedar en 0 avisos
+cargo clippy --release --features perfil --bin perfil --target-dir target-perfil  # idem, con el perfilador
 cargo build --release
+# tiempo de búsqueda por fases (src/perfil.rs): sin la feature `perfil` no genera código
+cargo build --release --features perfil --bin perfil --target-dir target-perfil
 ```
 
 Validar un cambio (detalle completo en `docs/BancoPruebas.md`):

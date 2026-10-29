@@ -1,0 +1,57 @@
+target\release\vigia.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       545      1675369  g1f3
+kiwipete                    1096236      2468      1776645  d5e6
+final-torres                 140866       228      2461326  b4f4
+promocion                   3104198      6043      2054464  g2h1q
+siciliana                    213113       570      1493604  e1g1
+cerrada                      678601      1441      1882447  d3h7
+india-rey                    205647       534      1538065  f6d7
+mediojuego-táctico           439370       973      1804463  f3e5
+damas-cambiadas              466334       978      1906373  f1e1
+final-alfiles                103914       196      2110304  h2g3
+final-peones                 126331       225      2242227  e1d2
+torre-y-peones               122976       174      2819548  c1d1
+TOTAL                       6926178     14383      1926165
+
+Release\vigia-037-movelist.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       553      1652208  g1f3
+kiwipete                    1096236      2621      1672683  d5e6
+final-torres                 140866       248      2270229  b4f4
+promocion                   3104198      6241      1989465  g2h1q
+siciliana                    213113       570      1494313  e1g1
+cerrada                      678601      1441      1882404  d3h7
+india-rey                    205647       553      1485653  f6d7
+mediojuego-táctico           439370       989      1775641  f3e5
+damas-cambiadas              466334       985      1891948  f1e1
+final-alfiles                103914       190      2187145  h2g3
+final-peones                 126331       220      2293695  e1d2
+torre-y-peones               122976       167      2930739  c1d1
+TOTAL                       6926178     14784      1873910
+
+=== Comparación a profundidad 12 ===
+A = target\release\vigia.exe
+B = Release\vigia-037-movelist.exe
+
+posición                   nodos/s A     nodos/s B       A/B
+inicial                      1675369       1652208     1.01x
+kiwipete                     1776645       1672683     1.06x
+final-torres                 2461326       2270229     1.08x
+promocion                    2054464       1989465     1.03x
+siciliana                    1493604       1494313     1.00x
+cerrada                      1882447       1882404     1.00x
+india-rey                    1538065       1485653     1.04x
+mediojuego-táctico           1804463       1775641     1.02x
+damas-cambiadas              1906373       1891948     1.01x
+final-alfiles                2110304       2187145     0.96x
+final-peones                 2242227       2293695     0.98x
+torre-y-peones               2819548       2930739     0.96x
+GLOBAL                       1926165       1873910     1.03x
+MEDIA GEOMÉTRICA                                      1.012x   (por posición: de 0.96x a 1.08x)
+
+Nodos idénticos en las 12 posiciones: el cambio es de solo velocidad y el resultado de arriba es la mejora limpia.
+Veredicto: más rápido (+1.2 % de nodos/segundo)
+
+=== 12 pasadas ===
+A/B = 1.0383x  (+3.83 % de nodos/segundo), error típico ±0.29 %, pasadas de 1.012x a 1.052x

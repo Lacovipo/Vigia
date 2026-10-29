@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::bitboard::Bitboard;
+use crate::perfil;
 use crate::types::{CastlingRights, Color, Move, MoveFlag, Piece, PieceType, Square};
 use crate::zobrist;
 
@@ -63,6 +64,11 @@ fn is_en_passant_capturable(mailbox: &[Option<Piece>; 64], ep: Square, capturing
 #[derive(Clone)]
 pub struct Board {
     pieces: [[Bitboard; 6]; 2],
+    /// Each color's pieces together (the OR of its six bitboards), kept in
+    /// step by `add_piece`/`remove_piece`. It used to be recomputed on every
+    /// call to `color_occupied`/`occupied`, which the generator, the check and
+    /// pin detection, SEE and the attack tests call many times per node.
+    by_color: [Bitboard; 2],
     mailbox: [Option<Piece>; 64],
     pub side_to_move: Color,
     pub castling: CastlingRights,
@@ -286,8 +292,10 @@ impl Board {
         let en_passant_hash_square =
             en_passant.filter(|&ep| is_en_passant_capturable(&mailbox, ep, side_to_move));
 
+        let by_color = pieces.map(|of_color| of_color.iter().fold(Bitboard::EMPTY, |acc, &bb| acc | bb));
         let mut board = Board {
             pieces,
+            by_color,
             mailbox,
             side_to_move,
             castling,
@@ -391,24 +399,26 @@ impl Board {
         self.pieces[color as usize][kind as usize]
     }
 
+    #[inline(always)]
     pub fn color_occupied(&self, color: Color) -> Bitboard {
-        self.pieces[color as usize]
-            .iter()
-            .fold(Bitboard::EMPTY, |acc, &bb| acc | bb)
+        self.by_color[color as usize]
     }
 
+    #[inline(always)]
     pub fn occupied(&self) -> Bitboard {
-        self.color_occupied(Color::White) | self.color_occupied(Color::Black)
+        self.by_color[0] | self.by_color[1]
     }
 
     fn add_piece(&mut self, piece: Piece, sq: Square) {
         self.pieces[piece.color as usize][piece.kind as usize].set(sq);
+        self.by_color[piece.color as usize].set(sq);
         self.mailbox[sq.0 as usize] = Some(piece);
         self.hash ^= zobrist::piece_square_key(piece.color, piece.kind, sq);
     }
 
     fn remove_piece(&mut self, piece: Piece, sq: Square) {
         self.pieces[piece.color as usize][piece.kind as usize].clear(sq);
+        self.by_color[piece.color as usize].clear(sq);
         self.mailbox[sq.0 as usize] = None;
         self.hash ^= zobrist::piece_square_key(piece.color, piece.kind, sq);
     }
@@ -479,6 +489,7 @@ impl Board {
     /// side to move. Legality (check safety) is the move generator's job, not
     /// this method's.
     pub fn make_move(&mut self, mv: Move) -> Undo {
+        let _phase = perfil::enter(perfil::MAKE);
         let moving = self
             .piece_at(mv.from)
             .expect("make_move: no hay pieza en la casilla de origen");
@@ -554,6 +565,7 @@ impl Board {
     }
 
     pub fn unmake_move(&mut self, mv: Move, undo: Undo) {
+        let _phase = perfil::enter(perfil::MAKE);
         let color = self.side_to_move.opposite();
         self.side_to_move = color;
 
@@ -589,6 +601,39 @@ impl Board {
             self.fullmove_number -= 1;
         }
         self.hash = undo.prev_hash;
+    }
+
+    /// The Zobrist hash `mv` is about to produce, worked out without playing
+    /// it. Exact for every move except a double pawn push that leaves a pawn
+    /// able to capture en passant (that square's key is left out). For
+    /// prefetching a transposition-table slot before the move is made, where
+    /// a miss costs one useless load and nothing else; `make_move` stays the
+    /// only source of the real hash.
+    #[inline]
+    pub fn hash_after_approx(&self, mv: Move) -> u64 {
+        let Some(moving) = self.piece_at(mv.from) else {
+            return self.hash;
+        };
+        let color = moving.color;
+        let mut hash = self.hash ^ zobrist::side_to_move_key() ^ zobrist::en_passant_key(self.en_passant_hash_square);
+        hash ^= zobrist::piece_square_key(color, moving.kind, mv.from);
+        hash ^= zobrist::piece_square_key(color, mv.flag.promotion_piece().unwrap_or(moving.kind), mv.to);
+        if mv.flag.is_capture() {
+            let capture_square = if mv.flag == MoveFlag::EnPassant { Square::new(mv.to.file(), mv.from.rank()) } else { mv.to };
+            if let Some(captured) = self.piece_at(capture_square) {
+                hash ^= zobrist::piece_square_key(captured.color, captured.kind, capture_square);
+            }
+        }
+        if mv.flag.is_castle() {
+            let (rook_from, rook_to) = Self::castle_rook_squares(color, mv.flag);
+            hash ^= zobrist::piece_square_key(color, PieceType::Rook, rook_from)
+                ^ zobrist::piece_square_key(color, PieceType::Rook, rook_to);
+        }
+        if self.castling.0 != 0 {
+            let after = Self::next_castling_rights(self.castling, mv.from, mv.to, moving);
+            hash ^= zobrist::castling_key(self.castling) ^ zobrist::castling_key(after);
+        }
+        hash
     }
 
     /// Passes the turn to the opponent without moving any piece. Used for
@@ -832,5 +877,67 @@ mod tests {
         let quiet = Move::new(Square::A1, Square::new(1, 0), MoveFlag::Quiet);
         board.make_move(quiet);
         assert_eq!(board.halfmove_clock, u16::MAX);
+    }
+
+    /// `hash_after_approx` against the hash `make_move` really produces, over
+    /// every legal move of a tree with captures, promotions, castling and en
+    /// passant. Only a double push may differ (its en passant key is left out).
+    #[test]
+    fn hash_after_approx_matches_make_move_except_for_double_pushes() {
+        fn walk(board: &mut Board, depth: u32, exact: &mut u32) {
+            if depth == 0 {
+                return;
+            }
+            for mv in crate::movegen::generate_legal_moves(board) {
+                let predicted = board.hash_after_approx(mv);
+                let undo = board.make_move(mv);
+                if mv.flag != MoveFlag::DoublePawnPush {
+                    assert_eq!(predicted, board.hash, "{mv} from {}", board.to_fen());
+                    *exact += 1;
+                }
+                walk(board, depth - 1, exact);
+                board.unmake_move(mv, undo);
+            }
+        }
+        let mut exact = 0;
+        for fen in [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        ] {
+            walk(&mut Board::from_fen(fen).unwrap(), 3, &mut exact);
+        }
+        assert!(exact > 1000, "the tree was too small to mean anything: {exact} moves checked");
+    }
+
+    /// The cached per-color occupancy against the OR of the piece bitboards it
+    /// stands for, at every node of a small tree full of captures, promotions,
+    /// castling and en passant.
+    #[test]
+    fn cached_color_occupancy_matches_the_piece_bitboards_through_make_and_unmake() {
+        fn walk(board: &mut Board, depth: u32) {
+            for color in [Color::White, Color::Black] {
+                let expected = board.pieces[color as usize].iter().fold(Bitboard::EMPTY, |acc, &bb| acc | bb);
+                assert!(board.by_color[color as usize] == expected, "cached occupancy drifted in {}", board.to_fen());
+            }
+            if depth == 0 {
+                return;
+            }
+            for mv in crate::movegen::generate_legal_moves(board) {
+                let before = board.by_color;
+                let undo = board.make_move(mv);
+                walk(board, depth - 1);
+                board.unmake_move(mv, undo);
+                assert!(board.by_color == before, "unmake did not restore the occupancy after {mv}");
+            }
+        }
+        for fen in [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+        ] {
+            walk(&mut Board::from_fen(fen).unwrap(), 3);
+        }
     }
 }

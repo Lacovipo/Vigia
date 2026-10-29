@@ -35,3 +35,6 @@ nets/*.pt
 # binario ya congelado) y el objetivo de compilación alternativo: artefactos.
 /juez*/
 /target*/
+
+# Borradores y mediciones sueltas de una sesion (parches de un solo uso, logs, binarios de prueba).
+/scratch/

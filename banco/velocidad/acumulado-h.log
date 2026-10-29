@@ -1,0 +1,57 @@
+target\release\vigia.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       399      2290145  g1f3
+kiwipete                    1096236      1705      2571468  d5e6
+final-torres                 140866       182      3092642  b4f4
+promocion                   3104198      4325      2870582  g2h1q
+siciliana                    213113       411      2073638  e1g1
+cerrada                      678601      1179      2301089  d3h7
+india-rey                    205647       371      2216710  f6d7
+mediojuego-táctico           439370       765      2295220  f3e5
+damas-cambiadas              466334       808      2306549  f1e1
+final-alfiles                103914       153      2712168  h2g3
+final-peones                 126331       189      2663876  e1d2
+torre-y-peones               122976       167      2932731  c1d1
+TOTAL                       6926178     10659      2599157
+
+Release\Vigia 0.36.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       614      1489143  g1f3
+kiwipete                    1096236      2668      1643030  d5e6
+final-torres                 140866       254      2218179  b4f4
+promocion                   3104198      6698      1853671  g2h1q
+siciliana                    213113       650      1311033  e1g1
+cerrada                      678601      1769      1534262  d3h7
+india-rey                    205647       603      1362478  f6d7
+mediojuego-táctico           439370      1234      1423559  f3e5
+damas-cambiadas              466334      1315      1418076  f1e1
+final-alfiles                103914       232      1787007  h2g3
+final-peones                 126331       254      1986063  e1d2
+torre-y-peones               122976       242      2029600  c1d1
+TOTAL                       6926178     16537      1675229
+
+=== Comparación a profundidad 12 ===
+A = target\release\vigia.exe
+B = Release\Vigia 0.36.exe
+
+posición                   nodos/s A     nodos/s B       A/B
+inicial                      2290145       1489143     1.54x
+kiwipete                     2571468       1643030     1.57x
+final-torres                 3092642       2218179     1.39x
+promocion                    2870582       1853671     1.55x
+siciliana                    2073638       1311033     1.58x
+cerrada                      2301089       1534262     1.50x
+india-rey                    2216710       1362478     1.63x
+mediojuego-táctico           2295220       1423559     1.61x
+damas-cambiadas              2306549       1418076     1.63x
+final-alfiles                2712168       1787007     1.52x
+final-peones                 2663876       1986063     1.34x
+torre-y-peones               2932731       2029600     1.44x
+GLOBAL                       2599157       1675229     1.55x
+MEDIA GEOMÉTRICA                                      1.522x   (por posición: de 1.34x a 1.63x)
+
+Nodos idénticos en las 12 posiciones: el cambio es de solo velocidad y el resultado de arriba es la mejora limpia.
+Veredicto: más rápido (+52.2 % de nodos/segundo)
+
+=== 12 pasadas ===
+A/B = 1.4998x  (+49.98 % de nodos/segundo), error típico ±0.29 %, pasadas de 1.469x a 1.525x

@@ -1,0 +1,57 @@
+target\release\vigia.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       433      2111431  g1f3
+kiwipete                    1096236      1935      2265994  d5e6
+final-torres                 140866       197      2860078  b4f4
+promocion                   3104198      4846      2562012  g2h1q
+siciliana                    213113       449      1895083  e1g1
+cerrada                      678601      1297      2091357  d3h7
+india-rey                    205647       421      1949912  f6d7
+mediojuego-táctico           439370       864      2032276  f3e5
+damas-cambiadas              466334       937      1989811  f1e1
+final-alfiles                103914       188      2208598  h2g3
+final-peones                 126331       210      2398026  e1d2
+torre-y-peones               122976       176      2785682  c1d1
+TOTAL                       6926178     11959      2316640
+
+Release\vigia-037-prefetch.exe — profundidad 12
+posición                      nodos        ms      nodos/s  jugada
+inicial                      228592       527      1734563  g1f3
+kiwipete                    1096236      2401      1825802  d5e6
+final-torres                 140866       219      2567116  b4f4
+promocion                   3104198      5839      2126375  g2h1q
+siciliana                    213113       541      1573530  e1g1
+cerrada                      678601      1511      1795842  d3h7
+india-rey                    205647       542      1517150  f6d7
+mediojuego-táctico           439370      1051      1671525  f3e5
+damas-cambiadas              466334      1120      1664325  f1e1
+final-alfiles                103914       212      1953041  h2g3
+final-peones                 126331       238      2121116  e1d2
+torre-y-peones               122976       215      2284037  c1d1
+TOTAL                       6926178     14421      1921034
+
+=== Comparación a profundidad 12 ===
+A = target\release\vigia.exe
+B = Release\vigia-037-prefetch.exe
+
+posición                   nodos/s A     nodos/s B       A/B
+inicial                      2111431       1734563     1.22x
+kiwipete                     2265994       1825802     1.24x
+final-torres                 2860078       2567116     1.11x
+promocion                    2562012       2126375     1.20x
+siciliana                    1895083       1573530     1.20x
+cerrada                      2091357       1795842     1.16x
+india-rey                    1949912       1517150     1.29x
+mediojuego-táctico           2032276       1671525     1.22x
+damas-cambiadas              1989811       1664325     1.20x
+final-alfiles                2208598       1953041     1.13x
+final-peones                 2398026       2121116     1.13x
+torre-y-peones               2785682       2284037     1.22x
+GLOBAL                       2316640       1921034     1.21x
+MEDIA GEOMÉTRICA                                      1.193x   (por posición: de 1.11x a 1.29x)
+
+Nodos idénticos en las 12 posiciones: el cambio es de solo velocidad y el resultado de arriba es la mejora limpia.
+Veredicto: más rápido (+19.3 % de nodos/segundo)
+
+=== 12 pasadas ===
+A/B = 1.1868x  (+18.68 % de nodos/segundo), error típico ±0.28 %, pasadas de 1.165x a 1.213x

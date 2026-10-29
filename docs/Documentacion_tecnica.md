@@ -1,6 +1,6 @@
 # Vigía — Documentación técnica
 
-**Versión:** 0.34.0 (`Cargo.toml`).
+**Versión:** 0.37.0 (`Cargo.toml`). Liberada por El Juez: 0.36.0.
 **Lenguaje:** Rust, edición 2021, sin dependencias externas
 (`[dependencies]` vacío en `Cargo.toml`).
 **Protocolo:** UCI.
@@ -31,7 +31,7 @@ Cargo.toml          # crate "vigia", lib + 4 binarios, sin dependencias
 src/
   lib.rs             # re-exporta todos los módulos como pub mod
   main.rs            # fn main() { vigia::uci::run(); }  — el motor real
-  types.rs           # Color, PieceType, Square, CastlingRights, Move, MoveFlag
+  types.rs           # Color, PieceType, Square, CastlingRights, Move, MoveFlag, MoveList
   bitboard.rs        # Bitboard(u64) + operaciones e iterador
   board.rs           # Board, FEN, make/unmake, hash Zobrist incremental
   zobrist.rs         # claves Zobrist generadas en tiempo de compilación
@@ -43,10 +43,12 @@ src/
   kpk.rs             # oráculo exacto Rey+Peón vs Rey
   search.rs          # búsqueda: PVS/negamax, TT, poda, Lazy SMP
   sha256.rs          # SHA-256 sin dependencias: manifiestos del banco y cabecera de la red
+  perfil.rs          # tiempo de búsqueda por fases; solo con `--features perfil` (§8.9)
   uci.rs             # protocolo UCI + comando extra "eval"
   bin/selfplay.rs    # harness antiguo de autojuego (superado, ver §8)
   bin/banco/         # banco de pruebas: SPRT, velocidad, EPD (ver §8)
   bin/generador.rs   # datos de la red NNUE: corpus de autojuego, vector dorado y evaluar una red
+  bin/perfil.rs      # (feature perfil) reparte el tiempo de las 12 posiciones del banco entre fases
 nets/
   atalaya-256-<sha>.bin  # la red empotrada (§4); las anteriores, en su etiqueta de versión
   material-256.bin   # la de la fase 1, solo material, sin entrenar: la usan los tests
@@ -349,6 +351,24 @@ usados por la poda de *null move*.
   rápido busca más hondo. Medido en `028-velocidad-en-elo-estimacion`
   (§8.7): **+72,4 Elo, IC 95 % [+67,3, +77,6]** sobre 12.144 partidas, con
   +0,493 plies de profundidad media.
+- **Listas en pila y legalidad bajo demanda (0.37.0).** La búsqueda reservaba
+  una lista de jugadas en el montículo en cada nodo, y quiescencia, que es la
+  mayoría de los nodos, construía además la lista legal entera para leer tres
+  capturas. Ahora `MoveList` (`types.rs`) es un array de `MAX_MOVES` = 320
+  jugadas en la pila, sin `unsafe` (la memoria se inicializa a cero), y
+  `negamax` trabaja con la lista **pseudolegal** y comprueba cada jugada
+  cuando el bucle llega a ella (`Vetting::is_legal`): la mayoría de los nodos
+  acaba en un corte tras dos o tres jugadas, y comprobar las otras treinta era
+  una décima parte de toda la búsqueda. En jaque se filtra antes de ordenar,
+  porque de unas treinta jugadas solo valen un puñado de evasiones. Lo que no
+  puede cambiar es lo que el bucle cuenta: `legal_seen` suma las jugadas
+  legales encontradas (la excluida y las podadas incluidas), que es el índice
+  que tenía la jugada en la lista legal completa y de lo que dependen «la
+  primera jugada», LMR y futility. Mate y ahogado son los nodos donde el bucle
+  no encuentra ninguna. El bitset de tranquilas ya buscadas (`tried_quiets`)
+  tiene `MAX_MOVES.div_ceil(64)` palabras, porque la lista pseudolegal puede
+  tener más jugadas que la legal; lo vigila un test sobre la posición de 218
+  jugadas. Medición y atribución paso a paso en §8.9.
 - **`gives_check(board, mv)`** (0.25.0): responde si una jugada da jaque
   *sin jugarla*, con la misma respuesta que `make_move` + `is_in_check` +
   `unmake_move`. Cubre jaque directo desde la casilla de destino (con la
@@ -967,10 +987,33 @@ material.
   para la misma clave**; una colisión de clave distinta, o una entrada de
   una generación anterior, se sobrescriben sin comparar profundidad. Es
   menos selectivo de lo que "depth-preferred" sugiere y está anotado como
-  tal (GPT P2-03); pasar a *buckets* de 4 con prioridad combinada va junto
-  con quitar el `Mutex` global, ver `docs/MejorasPendientes.md`. Persistente entre llamadas `go` de
-  la misma partida (se limpia en `ucinewgame`), protegida por un `Mutex` con
-  *locking* por llamada.
+  tal (GPT P2-03); pasar a *buckets* de 4 con prioridad combinada queda en
+  `docs/MejorasPendientes.md`. Persistente entre llamadas `go` de la misma
+  partida (se limpia en `ucinewgame`).
+- **Sin cerrojo desde 0.37.0.** Hasta 0.36 la tabla iba tras un único `Mutex`,
+  y el perfil por fases (§8.9) la puso en el 23 % del tiempo de búsqueda, entre
+  el cerrojo y el fallo de caché sobre el hueco. Ahora cada hueco son dos
+  palabras atómicas de 64 bits (16 bytes alineados a 16: cuatro llenan una
+  línea de caché y ninguno la cruza). `data` lleva la entrada empaquetada
+  (profundidad 8 bits, puntuación `i16`, cota 2, jugada 17, generación 8,
+  reloj de cincuenta jugadas 7 y un bit de «válido») y `check` la clave de la
+  posición XOR `data`. Un lector acepta un hueco solo si `check ^ data` le
+  devuelve la clave que preguntó, de modo que un hueco sorprendido a medio
+  escribir por otro hilo (`data` nuevo con el `check` viejo, o al revés) se
+  lee como fallo: el precio de una carrera es una entrada perdida, nunca una
+  equivocada. Los accesos son `Relaxed`, porque no hay otra memoria que
+  ordenar. El número de huecos sale del mismo presupuesto de 24 bytes por
+  entrada de antes (`SLOT_BUDGET_BYTES`), así que `Hash=N` da los mismos
+  huecos, las mismas colisiones y los mismos nodos; la tabla ocupa dos
+  tercios de lo pedido, y llenarlo entero (el doble de huecos) cambia la
+  búsqueda y se medirá como tal.
+  `threads_sharing_the_table_never_read_an_entry_nobody_stored` lo estresa con
+  cuatro hilos escribiendo y leyendo 4.096 claves sobre 8 huecos, con campos
+  que son función de la clave, de modo que una mezcla de dos escritores se
+  vería como un campo que no cuadra. Además, `prefetch` del hueco del hijo
+  antes de hacer la jugada (`Board::hash_after_approx`, exacta salvo por la
+  casilla *al paso*): la sonda llega varias decenas de nanosegundos después y
+  el hueco ya está en caché.
 - **Sensible al reloj de 50 jugadas** (0.25.0). El hash excluye
   `halfmove_clock` a propósito (dos posiciones que solo difieren en ese
   contador *son* la misma posición para repetición), pero el valor práctico
@@ -1111,13 +1154,22 @@ o reforzando el error en vez de corregirlo.
 
 ### Quiescencia
 
-- Genera la lista legal completa **primero** y solo después la filtra a
-  jugadas ruidosas, para que "no hay capturas que valga la pena leer" y "no
-  hay ninguna jugada legal" sigan siendo distinguibles. Confundirlas hacía
-  que un **ahogado** se puntuara con la evaluación estática: desde
-  `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1` el motor *elegía* `Kd2`, ahogando a las
-  negras, y anunciaba más de diez peones de ventaja (medido en
-  `docs/Rev_GPTSol.md` §P0-02).
+- Distingue **siempre** «no hay capturas que valga la pena leer» de «no hay
+  ninguna jugada legal». Confundirlas hacía que un **ahogado** se puntuara con
+  la evaluación estática: desde `8/8/8/8/8/8/2Q5/k2K4 w - - 0 1` el motor
+  *elegía* `Kd2`, ahogando a las negras, y anunciaba más de diez peones de
+  ventaja (medido en `docs/Rev_GPTSol.md` §P0-02). Hasta 0.36 se conseguía
+  generando la lista legal completa y filtrándola después; **desde 0.37 por
+  etapas** (`movegen::Vetting`): `check_info` una vez, `any_legal` (una sola
+  jugada legal basta para descartar mate y ahogado: peones primero, rey el
+  último, sin probar el enroque) y, solo si se llega a leer algo, las
+  ruidosas generadas aparte (`generate_noisy_list`, en el mismo orden
+  relativo que en la lista completa) y comprobadas de legalidad **antes** del
+  SEE, la más cara de las pruebas. Los veredictos son los de
+  `legal_moves_scratch` y el árbol es el mismo (nodos idénticos en las 12
+  posiciones del banco de velocidad); `the_quiescence_view_matches_*` compara
+  cada vista con la lista completa sobre árboles de referencia y sobre 60
+  partidas aleatorias que llegan a mates y ahogados.
 - Corte *stand-pat* cuando no hay jaque; con jaque se buscan todas las
   evasiones legales, sin *stand-pat*.
 - **Fail-soft** como `negamax`: devolvía `alpha`, tirando la diferencia
@@ -1287,8 +1339,9 @@ búsqueda es determinista (misma jugada y mismo recuento de nodos).
 
 `MAX_HASH_MB` está deliberadamente en 1024: se detectó y corrigió un bug
 real donde pedir 4096 MB podía casi doblar la memoria reservada por
-redondeo hacia arriba del tamaño de tabla. `Threads` está topado en 16
-porque la TT usa un único `Mutex`.
+redondeo hacia arriba del tamaño de tabla. `Threads` está topado en 16:
+nadie prueba con más, y la TT, que hasta 0.36 iba tras un único `Mutex`, es
+sin cerrojo desde 0.37.
 
 ---
 
@@ -1521,6 +1574,74 @@ un artefacto del control rápido en el que se midió. A 300 ms es la misma.
 test* rápido. Está superado por `banco` para cualquier medición y no debe
 usarse para aprobar un cambio.
 
+### 8.9 El carril de velocidad de 0.37: de dónde sale el +50 %
+
+0.37.0 no cambia ninguna decisión de la búsqueda ni de la evaluación: es la
+misma búsqueda, jugada a jugada y nodo a nodo, ejecutada más deprisa. Por eso
+se pudo medir en minutos con `banco velocidad` en vez de en horas de `sprt`.
+
+**La herramienta.** `src/perfil.rs` y el binario `perfil` (`cargo build
+--release --features perfil --bin perfil --target-dir target-perfil`) reparten
+el tiempo de la búsqueda entre fases (generación, legalidad, ordenación, SEE,
+red, TT, quiescencia, historia, resto) sobre las 12 posiciones del banco de
+velocidad. Sin la característica `perfil` las guardas de fase no generan
+código. Tiene sesgo propio —leer el reloj en cada guarda cuesta, y el coste
+cae sobre las fases pequeñas—, pero ordena: el primer perfil, con la TT tras
+un `Mutex` y las listas en el montículo, dio generación y legalidad 28,9 %,
+TT 22,8 %, ordenación 12,1 % y `push` de la red 9,5 %. Con él se cambió el
+orden previsto del carril, que empezaba por la red.
+
+**Cada paso se midió contra el anterior**, con `banco velocidad --profundidad
+12 --hash 32 --hilos 1 --pasadas 12`, un binario congelado por paso y la salida
+guardada en `banco/velocidad/`. Condición para dar un paso por bueno: nodos
+idénticos en las 12 posiciones. Si no lo fueran, el cambio no sería de solo
+velocidad y habría que medirlo como fuerza.
+
+| paso | cambio | nodos/s sobre el anterior | salida |
+|---|---|---:|---|
+| 1 | `MoveList` en la pila y `tried_quiets` como bitset | +1,69 % ± 0,33 % (sobre 0.36.0) | `movelist-a.log` |
+| 2 | TT sin cerrojo | +3,83 % ± 0,29 % | `tt-lockfree-b.log` |
+| 3 | ocupación por color cacheada y `prefetch` del hueco de TT (medidos juntos) | +10,20 % ± 0,30 % | `bycolor-prefetch-c.log` |
+| 4 | quiescencia por etapas | +18,68 % ± 0,28 % | `qs-staged-d.log` |
+| 5 | legalidad perezosa en `negamax` | +4,80 % ± 0,34 % (el primer intento dio −0,61 % ± 0,31 %, `lazy-vet-e.log`) | `lazy-vet-f.log` |
+| 6 | claves de ordenación `u64` y fila de continuación una vez por nodo | +4,91 % ± 0,30 % | `order-keys-g.log` |
+| 7 | atajo de SEE en quiescencia | −0,11 % ± 0,70 %: **descartado** (`docs/Descartados.md`) | `see-shortcut-i.log` |
+| | **acumulado, medido directamente contra 0.36.0** | **+49,75 % ± 0,49 %** (pasadas de 1,450x a 1,528x) | `acumulado-j.log` |
+
+Con el atajo de SEE todavía puesto, la medida directa fue +49,98 % ± 0,29 %
+(`acumulado-h.log`). El producto de los pasos 1 a 6 da ×1,518 y la medida
+directa ×1,4975: queda un 1,4 % por debajo, dentro de lo que suman los
+errores de siete medidas hechas con la máquina en estados distintos. **La cifra
+que vale es la directa.** Se midió con un binario de la misma fuente que se
+publica (la compilación final difiere solo en el módulo de tests; el sha256 de
+cada compilación cambia aunque el código sea el mismo, por la cabecera del
+ejecutable).
+
+**Con varios hilos.** `banco velocidad` se niega a medirlo (exige nodos
+deterministas y con Lazy SMP no lo son: «el mismo motor visitó 234145 nodos y
+luego 325614»), así que se comparó a mano por UCI con `Threads=2` y 3 s por
+posición. 0.37.0 hizo 11.004.724 nodos desde la inicial y 11.748.791 en
+Kiwipete; 0.36.0, 7.511.386 y 8.360.765 (+46 % y +41 %). Una sola ejecución
+por posición: vale como comprobación de que quitar el `Mutex` no empeora con
+dos hilos, no como medida.
+
+Lo que se aprendió, porque dos de las tres veces la estimación fue mía y falló:
+
+- La **micromedida de la reserva en el montículo** (35–45 ns por lista, contra
+  ~12 ns la lista en la pila) prometía mucho más que lo que el banco midió
+  (+1,69 %): el asignador reutiliza bloques calientes y el coste real era una
+  fracción.
+- La primera **legalidad perezosa** salió **−0,61 %**, no la mejora que
+  predecía el perfil. Se reperfiló, se ajustó y quedó en +4,80 %.
+- Lo que más rindió (+18,7 %, la quiescencia por etapas) no iba el primero de
+  la lista: salió de volver a **medir** tras cada paso en vez de seguirla.
+
+**Lo que queda**, según el último perfil: `push` de la red 12,9 %, ordenación y
+`sort` 13,8 %, TT 11,8 %, resto de `negamax` 11,3 %, prueba de legalidad 8,9 %
+y lista pseudolegal completa 6,7 %. Los candidatos exactos siguientes (el
+acumulador perezoso y la selección en vez de ordenación completa) están en
+`docs/MejorasPendientes.md`.
+
 ---
 
 ## 9. Historia y decisiones relevantes
@@ -1706,6 +1827,38 @@ usarse para aprobar un cambio.
   corrección del espejo, en cambio, aguantó: las ocho mutaciones del núcleo que
   se le aplicaron mueren en los tests.
 
+- **0.35.0 — Atalaya-384.** El acumulador pasa de 256 a 384 dimensiones por
+  perspectiva (`772 → 2×384 → 1`, unos 303.000 parámetros, 591 KB). Banco
+  propio: **+19,3 Elo** [+8,6, +30,1] en 1.278 parejas
+  (`035-n384-estimacion`). El Juez: `comparar liberar` APROBADO contra 0.34.0
+  (run 20261025-105119-comparar-94ba3c, 1.010 parejas; solidez APTO,
+  20261025-103256-solidez-51baae). Peaje de velocidad, medido con una red 256
+  rellena de ceros hasta 384 (mismas salidas, nodos idénticos): −1,93 % ±
+  0,32 % de nodos/s (`banco/velocidad/n384-peaje.log`). Un experimento
+  posterior, **dos cubos de rey con factorizador sobre N = 384**, se descartó
+  por validación (0,012521 contra 0,012250 de la red sin cubos): sobreajusta
+  con unos 72 M de posiciones (rama `descartado/cubos-rey-kb2`; reabrir solo
+  con más corpus).
+
+- **0.36.0 — LMR por tranquilas buscadas, PV/improving e historia.** Un solo
+  cambio de búsqueda (§6): la tabla logarítmica se indexa por el número de
+  tranquilas ya buscadas y la reducción se ajusta por nodo PV, por si la
+  posición mejora y por la historia de la jugada. Banco propio: **+9,8 Elo**
+  [−0,0, +19,7] en 1.500 parejas (`036-lmr-historia-estimacion`). El Juez:
+  `comparar liberar` APROBADO contra 0.35.0 (run
+  20261028-052705-comparar-e36e02, 4.354 parejas, sha256 3aa98d187b18;
+  solidez APTO, 20261028-050319-solidez-8f9f1f). Su +7,2 ± 5,5 está sesgado
+  al alza porque el SPRT paró al cruzar la frontera: no vale como magnitud.
+
+- **0.37.0 — velocidad pura: +49,75 % de nodos/segundo con el mismo árbol.**
+  No toca ninguna decisión de búsqueda ni de evaluación: listas de jugadas en
+  la pila, TT sin cerrojo con `prefetch`, quiescencia por etapas, legalidad
+  bajo demanda y claves de ordenación enteras (§3, §6 y §8.9). Nodos idénticos
+  en las 12 posiciones del banco de velocidad. Un perfilador por fases
+  (`--features perfil`) decidió el orden de los pasos y cada uno se midió
+  contra el anterior con la salida guardada. Estado en El Juez: ver
+  `docs/Relevo.md`.
+
 ---
 
 ## 10. Mapa de los hallazgos de las revisiones
@@ -1772,7 +1925,7 @@ su motivo, están en `docs/Descartados.md`.
 ## 12. Cómo verificar el estado del código
 
 ```bash
-cargo test --release              # 266 del motor + 129 del banco + 3 del generador + 8 del harness antiguo
+cargo test --release              # 282 del motor + 129 del banco + 3 del generador + 8 del harness antiguo
 cargo test --release -- --ignored # + perft profundos (lentos a propósito)
 cargo clippy --release --all-targets   # debe quedar en 0 avisos
 ```

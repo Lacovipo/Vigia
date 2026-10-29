@@ -63,3 +63,11 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 - Aviso: `Release/vigia-036-lmr.exe` (el del banco propio) tiene otro sha256 que el liberado (misma fuente, otra compilación): el liberado es `Release/Vigia 0.36.exe`.
 - Corrección: el NMP **ya era dinámico** (`R = 2 + prof/3 + min((eval−beta)/200, 3)`); lo que le falta es verificación a gran profundidad, guarda de TT y umbral que dependa de la profundidad. Siguiente: idea 2 (NMP) con 0.36.0 como base; después correction history multi-clave, ProbCut, capture history.
 - Máx. 2 CPUs también para el banco y el Juez: no solapar tandas.
+
+## Actualización (29-oct-2026, tarde): candidata 0.37.0 (velocidad pura)
+
+- **0.37.0 = mismo árbol, +49,75 % de nodos/s ± 0,49 %** frente a 0.36.0 (`banco/velocidad/acumulado-j.log`, 12 pasadas, nodos idénticos en las 12 posiciones). Pasos y atribución en `docs/Documentacion_tecnica.md` §8.9; cada paso con su `.log` en `banco/velocidad/`. Con 2 hilos por UCI, +46 % y +41 % (una ejecución).
+- Hecho: `MoveList` en pila, TT sin cerrojo + prefetch, ocupación por color cacheada, quiescencia por etapas (`Vetting`), legalidad perezosa, claves de orden `u64`, perfilador por fases (`--features perfil`). Bitset `tried_quiets` ampliado a `MAX_MOVES` (la lista es pseudolegal), con test sobre la posición de 218 jugadas.
+- Descartado: atajo de SEE en quiescencia (−0,11 % ± 0,70 %, `see-shortcut-i.log`), quitado antes de commitear.
+- Verificado: 422 tests (282 motor), clippy en 0 con y sin `perfil`, perft profundos (`--ignored`) OK.
+- **Siguiente: El Juez** (perft completa, solidez liberar, comparar liberar 0.37.0 vs `juez036/`). Si APROBADO: copiar a `Release/Vigia 0.37.exe`, etiqueta `0.37`, anotar aquí y en `MEMORY.md`. Luego, carril de velocidad: acumulador perezoso y selección en vez de ordenación (`docs/MejorasPendientes.md`).

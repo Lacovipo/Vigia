@@ -268,17 +268,39 @@ no era un artefacto del control rápido en el que se midió**.
   **ahogado** se puntuara con la evaluación estática. El test que lo cubre
   tiene que estar escrito *antes* de tocar la generación, no después.
 
-- **TT sin `Mutex` global** (Gemini 4.4, GPT P2-03, Opus). Cambio de diseño
-  real (clusters atómicos o *sharding*). Su valor depende de cuánta
-  contención hay realmente con el número de hilos que se va a usar en la
-  práctica: el usuario prueba siempre con 1 hilo, como mucho 2/4/8 — nadie
-  prueba con más de 8. Por tanto **no es prioritario subir `MAX_THREADS`
-  por encima de 16**, y el caso de uso real (pocos hilos) es precisamente
-  donde un `Mutex` único pesa menos. Se revisita solo si el banco
-  muestra pérdida de nodos/seg medible a 4–8 hilos, lo que se comprueba con
-  `banco velocidad --hilos 4` y `--hilos 8` frente a `--hilos 1`; si no
-  aparece, se deja como está. La carrera de generación que GPT describía, que sí era un
-  bug, ya está arreglada (§6 del documento técnico).
+- **TT sin `Mutex` global** (Gemini 4.4, GPT P2-03, Opus) — **hecho en 0.37.0**
+  (huecos de dos palabras atómicas, clave XOR dato; §6 del documento técnico).
+  Se esperaba que solo importara con muchos hilos, y no: con **un** hilo, sin
+  contención alguna, quitar el cerrojo dio +3,83 % de nodos/s
+  (`banco/velocidad/tt-lockfree-b.log`), porque adquirirlo y soltarlo se
+  pagaba en cada sondeo y cada escritura. No es prioritario subir
+  `MAX_THREADS` por encima de 16. La carrera de generación que GPT describía,
+  que sí era un bug, ya estaba arreglada (§6 del documento técnico).
+  Pendiente: medir `banco velocidad --hilos 2` (y, con autorización de CPU,
+  `--hilos 4`) frente a 0.36.0, y lo que esto deja abierto: **el doble de
+  huecos** (los de 16 bytes se reparten un presupuesto de 24 y la tabla usa
+  dos tercios de lo pedido) y **buckets de 4 con prioridad combinada**. Los
+  dos cambian la búsqueda: se miden por fuerza, no por nodos idénticos.
+
+- **Carril de velocidad, lo que queda tras 0.37** (perfil por fases, §8.9 del
+  documento técnico: `push` de la red 12,9 %, ordenación y `sort` 13,8 %, TT
+  11,8 %, resto de `negamax` 11,3 %, prueba de legalidad 8,9 %, lista
+  pseudolegal completa 6,7 %). Candidatos **exactos** (mismo árbol; se miden
+  por nodos idénticos con `banco velocidad`), de más a menos prometedor:
+  1. **Acumulador perezoso**: calcular la ranura de la red al evaluar o
+     cuando un hijo la necesita, no en cada `make_move`. Muchos hijos vuelven
+     sin evaluar (corte de TT, repetición, quiescencia con acierto de TT).
+     Guardar el `Change` (barato) y diferir las filas. Cuidado con el reflejo
+     del rey (`rebuild_half_after`): al diferirlo el tablero ya es el
+     posterior. El test que compara el acumulador con un refresco en cada
+     evaluación (`Context::evaluate`, builds de test) cubre el resto.
+  2. **Selección en vez de ordenación completa** en `negamax`: sacar el
+     máximo de las claves `u64` jugada a jugada. Las claves son únicas (llevan
+     la posición), así que el orden es idéntico; ahorra el `sort` de unas 35
+     jugadas en los nodos que cortan en la 2.ª o 3.ª.
+  3. Lo que el perfil vuelva a señalar tras 1 y 2.
+  Medidos y **descartados**: el atajo de SEE en quiescencia (−0,11 % ± 0,70 %,
+  `banco/velocidad/see-shortcut-i.log`).
 
 ## Prioridad baja / exploratorio — validar una vez haya banco de pruebas
 
