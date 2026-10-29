@@ -30,3 +30,8 @@ desktop.ini
 
 # Los checkpoints del entrenador: se regeneran, y lo que juega es el .bin
 nets/*.pt
+
+# Carpetas autocontenidas para El Juez (un solo exe cada una, copia de un
+# binario ya congelado) y el objetivo de compilación alternativo: artefactos.
+/juez*/
+/target*/

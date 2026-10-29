@@ -1,13 +1,10 @@
 # Notas de trabajo (Vigía en BurroCode)
 
-- Release vigente **0.35.0** (Atalaya-384) LIBERADA por El Juez: comparar liberar APROBADO vs 0.34.0 (run 20261025-105119-comparar-94ba3c, sha256 516f201bf93a; 1010 parejas). Solidez APTO (run 20261025-103256-solidez-51baae). Elo de la tanda sesgado al alza (+24,6): la cifra honesta es +19,3 (IC 8,6..30,1) del banco propio.
-- Anterior: 0.34.0 liberada (run 20261022-204707-comparar-839470).
-- El Juez exige `perft N` por UCI (formato divide). Para el Juez: carpetas autocontenidas `juez035/`, `juez034base/` (un solo exe cada una).
-- Descartado: alinear a 64 bytes (+0,44 % nps); caché de acumuladores (techo ~1 %).
-- Hecho: rebuild_half_after por juego de instrucciones (+1,81 % nps), N=384 (peaje -1,93 % nps).
-- Siguiente: cubos de rey con factorizador (docs/MejorasPendientes.md).
-- Compilar/probar: `cargo test --release`, `cargo clippy --release --all-targets`, `cargo build --release`.
-- Máx. 2 CPUs.
-- IDEAS de _Top_Ajedrez (leer `_documentación_consolidada/temas/01_BUSQUEDA.md`, `03_...`): búsqueda de Vigía básica (NMP R=2 fijo, LMR simple por move_index, corrección solo por clave de peones, cont-history 1 ply, sin ProbCut/multicut). Orden propuesto: LMR por quiets_tried + historia; NMP R dinámico (eval-beta) con verificación; correction history multi-clave (peones, menores, no peones) + uso del residuo en LMR/RFP; ProbCut (prefiltro `banco velocidad`); capture history; singular con multicut/extensión doble; tiempo adaptativo. Una por vez.
-- DESCARTADO: cubos de rey (2) con factorizador sobre N=384: validación final 0.012521 (mejor 0.012342, ép. 6) frente a 0.012250 sin cubos; sobreajuste (corpus ~72 M). Código en rama `descartado/cubos-rey-kb2`; main limpio. Reabrir solo con más corpus.
-- 036 LMR por quiets_tried+historia: banco 1500 parejas vs 0.35.0 = +9,8 (IC -0,0..+19,7, LOS 97,5 %), sin decision. IC toca 0 (preinscripcion decia ajustar); decision del jefe: llevar directo al Juez como 0.36.0 (el SPRT 0..5 es el arbitro real). Si no aprueba, descartar o ajustar una vez.
+- Release vigente **0.36.0** (LMR por quiets_tried + PV/improving + historia) LIBERADA por El Juez: comparar liberar APROBADO vs 0.35.0 (run 20261028-052705-comparar-e36e02, sha256 3aa98d187b18; 4354 parejas, +7,2 ±5,5 sesgado al alza). Solidez APTO (run 20261028-050319-solidez-8f9f1f). Cifra honesta del banco propio: +9,8 (IC -0,0..+19,7, 1500 parejas). Copia en `Release/Vigia 0.36.exe`; carpeta del Juez `juez036/`.
+- Anteriores: 0.35.0 (Atalaya-384, run 20261025-105119-comparar-94ba3c, +19,3 IC 8,6..30,1 banco propio), 0.34.0 (run 20261022-204707-comparar-839470).
+- El Juez exige `perft N` por UCI (formato divide). Para el Juez: carpetas autocontenidas `juezNNN/` (un solo exe cada una; ignoradas por git). La base de la siguiente comparación es `juez036/`.
+- Compilar/probar: `cargo test --release`, `cargo clippy --release --all-targets`, `cargo build --release -j 2`.
+- Máx. 2 CPUs (también para el Juez y el banco: no solapar tandas).
+- Descartado: alinear a 64 bytes (+0,44 % nps); caché de acumuladores (techo ~1 %); cubos de rey (2) con factorizador sobre N=384 (validación 0.012521 vs 0.012250 sin cubos; sobreajuste, corpus ~72 M; rama `descartado/cubos-rey-kb2`; reabrir solo con más corpus).
+- Hecho: rebuild_half_after por juego de instrucciones (+1,81 % nps), N=384 (peaje -1,93 % nps), LMR 0.36.
+- IDEAS de _Top_Ajedrez (`_documentación_consolidada/temas/01_BUSQUEDA.md`, `03_...`). Estado real de la búsqueda: NMP YA es dinámico (R = 2 + prof/3 + min((eval-beta)/200,3)) pero sin verificación, sin guarda de TT; corrección solo por clave de peones; cont-history 1 ply; sin ProbCut/multicut/capture history. Orden: (1 hecho) LMR; (2) NMP: verificación a gran profundidad + guarda de TT + condición eval>=beta-k*prof; (3) correction history multi-clave (menores, no peones) + residuo en LMR/RFP; (4) ProbCut (prefiltro `banco velocidad`); (5) capture history; singular con multicut/extensión doble; (6) tiempo adaptativo. Una por vez; binario único al Juez cuando la suma lo justifique (un +4 Elo no cruza el SPRT 0..5).

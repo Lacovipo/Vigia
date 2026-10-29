@@ -1062,8 +1062,14 @@ o reforzando el error en vez de corregirlo.
   (±12) rompe la antisimetría que en teoría haría incompatibles las dos
   condiciones de nulo, así que el caso es real.
 - *Late Move Reductions* (LMR) con tabla logarítmica
-  `0.75 + ln(prof)·ln(índice)/2.5`, a partir de la 4ª jugada y profundidad
-  ≥3, sobre tranquilas que no dan ni reciben jaque.
+  `0.75 + ln(prof)·ln(n)/2.5`, a partir de la 4ª jugada de la lista y
+  profundidad ≥3, sobre tranquilas que no dan ni reciben jaque. **Desde 0.36.0**
+  `n` es el número de tranquilas ya buscadas más una (no el índice en la lista,
+  que las capturas inflan), y la reducción se ajusta: −1 en nodos PV, +1 si la
+  posición no mejora y −`(history + cont_history)/8192` (la historia negativa
+  suma). Banco propio: +9,8 Elo (IC −0,0..+19,7, 1500 parejas,
+  `036-lmr-historia-estimacion`); El Juez, APROBADO vs 0.35.0 (run
+  20261028-052705-comparar-e36e02, 4354 parejas).
 - *Late Move Pruning* (LMP): a profundidad ≤8 se dejan de probar jugadas
   tranquilas más allá de `(3+prof²)`, dividido por 2 cuando la posición
   **no** está mejorando. **El contador es de tranquilas realmente

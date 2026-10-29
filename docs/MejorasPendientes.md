@@ -340,6 +340,14 @@ no era un artefacto del control rápido en el que se midió**.
   delante de LMR-sensible-a-la-historia. Cambia nodos, así que se valida
   con `sprt`.
 
+  **HECHA en 0.36.0** (junto con el ajuste por PV, `improving` e historia,
+  que era la otra idea de este punto). Banco propio `036-lmr-historia-estimacion`:
+  +9,8 Elo (IC −0,0..+19,7, LOS 97,5 %, 1500 parejas, sin decisión por sí
+  sola); El Juez, comparar liberar APROBADO vs 0.35.0 (run
+  20261028-052705-comparar-e36e02, 4354 parejas). Quedan por probar, de una en
+  una: NMP con verificación y guarda de TT, correction history multi-clave,
+  ProbCut, capture history, singular con multicut.
+
 ## NNUE — ya no está fuera de planificación (decisión del usuario, 2026-09)
 
 El criterio anterior era que hacía falta un HCE de 3000+ CCRL antes de

@@ -6,7 +6,8 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 
 ## Estado
 
-- **Release vigente: 0.34.0** (etiqueta `0.34`, commit `b72b05e`): red Atalaya-256
+- **Release vigente: 0.36.0** (ver «Actualización (29-oct-2026)» al final). Histórico:
+  0.34.0 (etiqueta `0.34`, commit `b72b05e`): red Atalaya-256
   con espejo horizontal, +8,5 Elo [+0,8, +16,2] sobre 0.33 a 100 ms por jugada.
 - Validada por El Juez (oct. 2026): comparar liberar APROBADO vs 0.33, run 20261022-204707-comparar-839470 (5551 parejas, SPRT acepta H1). (a) alinear a 64 B descartado (+0,44 % ± 0,49 % nps).
 - 406 tests, clippy en cero. Binarios congelados en `Release/` (fuera de git).
@@ -55,3 +56,10 @@ Allí no recordaré nada de esto; el usuario sí. Lo que no esté aquí está en
 ## Actualización (28-oct-2026)
 
 - Cubos de rey (2) + factorizador, N=384: **descartado por validación** (0.012521 final, 0.012342 mejor en ép. 6, vs 0.012250 de la 384 sin cubos; cp 0.008935 vs 0.008664). Sobreajusta con el corpus actual. Rama `descartado/cubos-rey-kb2`. Release vigente sigue siendo 0.35.0.
+
+## Actualización (29-oct-2026)
+
+- **0.36.0 (LMR por `quiets_tried` + PV/improving + historia) LIBERADA por El Juez**: comparar liberar APROBADO vs 0.35.0, run 20261028-052705-comparar-e36e02 (4354 parejas, sha256 3aa98d187b18, SPRT acepta H1); solidez APTO 20261028-050319-solidez-8f9f1f. El +7,2 ± 5,5 de la tanda esta sesgado al alza; cifra del banco propio: +9,8 (IC −0,0..+19,7, 1500 parejas, `036-lmr-historia-estimacion`). Copia en `Release/Vigia 0.36.exe`.
+- Aviso: `Release/vigia-036-lmr.exe` (el del banco propio) tiene otro sha256 que el liberado (misma fuente, otra compilación): el liberado es `Release/Vigia 0.36.exe`.
+- Corrección: el NMP **ya era dinámico** (`R = 2 + prof/3 + min((eval−beta)/200, 3)`); lo que le falta es verificación a gran profundidad, guarda de TT y umbral que dependa de la profundidad. Siguiente: idea 2 (NMP) con 0.36.0 como base; después correction history multi-clave, ProbCut, capture history.
+- Máx. 2 CPUs también para el banco y el Juez: no solapar tandas.
