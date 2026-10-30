@@ -1,0 +1,18 @@
+== juez037\vigia.exe profundidad 2500
+  pila  2097152 B  PV max  25  prof max  20  OK  rc=0
+  pila  1048576 B  PV max  25  prof max  20  OK  rc=0
+  pila   786432 B  PV max  25  prof max  20  OK  rc=0
+  pila   524288 B  PV max  25  prof max  20  OK  rc=0
+  pila   393216 B  PV max  25  prof max  20  OK  rc=0
+  pila   262144 B  PV max  25  prof max  20  OK  rc=0
+  pila   196608 B  PV max  25  prof max  20  OK  rc=0
+  pila   131072 B  PV max  25  prof max  20  CAE en {'KNNKP': 'eof'}  rc=3221225725
+== juez036\vigia.exe profundidad 2500
+  pila  2097152 B  PV max  25  prof max  19  OK  rc=0
+  pila  1048576 B  PV max  25  prof max  19  OK  rc=0
+  pila   786432 B  PV max  25  prof max  20  OK  rc=0
+  pila   524288 B  PV max  25  prof max  20  OK  rc=0
+  pila   393216 B  PV max  25  prof max  20  OK  rc=0
+  pila   262144 B  PV max  25  prof max  19  OK  rc=0
+  pila   196608 B  PV max  25  prof max  20  OK  rc=0
+  pila   131072 B  PV max  25  prof max  19  OK  rc=0

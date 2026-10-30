@@ -32,6 +32,10 @@ Validar un cambio (detalle completo en `docs/BancoPruebas.md`):
 ./target/release/banco.exe humo --motor target/release/vigia.exe   # ¿mide bien el banco?
 ./target/release/banco.exe velocidad --motor <nuevo> --contra <viejo>  # solo velocidad
 python -I tools/diferencial.py --a <viejo> --b <nuevo>  # ¿misma búsqueda en cientos de posiciones? (cambios "exactos")
+python -I tools/diferencial.py --a <viejo> --b <nuevo> --fens tools/posiciones_adversarias.txt --del-libro 0 --aleatorias 0  # las "tricky" de legalidad, repeticiones, reloj
+python -I tools/genera_posiciones_ricas.py <exe> <n> <min_jugadas> <semilla> > ricas.txt  # posiciones con muchísima movilidad (>70 jugadas); luego diferencial.py --fens ricas.txt
+python -I tools/soak_uci.py <exe> banco/libros/vigia-2000.epd 150 2 1 time  # humo con 2 hilos (El Juez juega con Threads=1): ilegales, cuelgues, pánicos
+python -I tools/sonda_pila.py <viejo> <nuevo>  # margen de pila (RUST_MIN_STACK, umbral por profundidad)
 ./target/release/banco.exe sprt --config banco/configs/<experimento>.json  # fuerza
 ```
 

@@ -302,6 +302,24 @@ no era un artefacto del control rápido en el que se midió**.
   Medidos y **descartados**: el atajo de SEE en quiescencia (−0,11 % ± 0,70 %,
   `banco/velocidad/see-shortcut-i.log`).
 
+  **Robustez pendiente (no cambia la búsqueda)**, salida de la revisión externa
+  de 0.37 y de la sonda de pila (§8.9 del documento técnico). (1) Pila
+  explícita para los hilos de búsqueda con `thread::Builder::stack_size`: hoy
+  van con los 2 MiB por defecto y 0.37 gasta más pila que 0.36 (`MoveList` y
+  claves de orden viven en la pila). Sondeado con `RUST_MIN_STACK`
+  (`tools/sonda_pila.py`; `banco/velocidad/pila-*.log`): en finales de 2,5 s
+  (profundidad ~20) 0.37 aguanta con 196 KiB y cae con 128 KiB, mientras 0.36
+  aguanta con 128; en el medio juego de Kiwipete el umbral pasa de 67 a 131 KiB.
+  Los 2 MiB dan ~×10 sobre lo observado, pero ninguna sonda se acercó a
+  `MAX_PLY = 128` (el motor no imprime `seldepth`), así que el margen en el peor
+  caso es una extrapolación y lo que lo sostiene es un número que nadie vigila.
+  (2) Tope a la profundidad de `perft` por UCI: recursa N niveles con ~1 KiB de
+  `MoveList` cada uno, y con un N absurdo agotaría la pila del hilo principal
+  (en la práctica inalcanzable: el árbol no acabaría nunca). **Ninguna de las dos
+  se libera sola**: una corrección que deja el árbol idéntico no puede ganar un
+  SPRT 0/5 contra la versión que ya la lleva. Entran con el primer cambio de
+  fuerza o de velocidad que ya vaya a pasar por El Juez.
+
 ## Prioridad baja / exploratorio — validar una vez haya banco de pruebas
 
 - **Clavadas en SEE** (GPT P1-03, `4k3/4n3/8/3p4/8/8/Q7/4R1K1 w`, donde el

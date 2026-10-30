@@ -1,0 +1,61 @@
+# Posiciones adversarias para tools/diferencial.py (--fens). Una por linea:
+# FEN, o FEN moves j1 j2 ... (el historial cuenta para repeticiones y reloj).
+# Las "tricky" de perft (Martin Sedlak) son las mas dificiles de legalidad: al
+# paso ilegal por clavada en fila, enroque que da jaque, promocion que da jaque
+# o sale de jaque, jaque descubierto, ahogado propio. Las demas buscan lo que
+# solo una busqueda ve: zugzwang, fortalezas, repeticion por historial.
+3k4/3p4/8/K1P4r/8/8/8/8 b - - 0 1
+8/8/4k3/8/2p5/8/B2P2K1/8 w - - 0 1
+8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1
+5k2/8/8/8/8/8/8/4K2R w K - 0 1
+3k4/8/8/8/8/8/8/R3K3 w Q - 0 1
+r3k2r/1b4bq/8/8/8/8/7B/R3K2R w KQkq - 0 1
+r3k2r/8/3Q4/8/8/5q2/8/R3K2R b KQkq - 0 1
+2K2r2/4P3/8/8/8/8/8/3k4 w - - 0 1
+8/8/1P2K3/8/2n5/1q6/8/5k2 b - - 0 1
+4k3/1P6/8/8/8/8/K7/8 w - - 0 1
+8/P1k5/K7/8/8/8/8/8 w - - 0 1
+K1k5/8/P7/8/8/8/8/8 w - - 0 1
+8/k1P5/8/1K6/8/8/8/8 w - - 0 1
+8/8/2k5/5q2/5n2/8/5K2/8 b - - 0 1
+r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1
+n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1
+8/8/8/KPp4r/8/8/8/7k w - c6 0 1
+k7/8/8/2pP4/8/8/8/K7 w - c6 0 1
+8/8/8/8/k2Pp2R/8/8/4K3 b - d3 0 1
+4k3/8/8/8/8/8/4q3/R3K2R w KQ - 0 1
+r3k2r/8/8/8/8/8/8/4K2q w kq - 0 1
+8/8/p1p5/1p5p/1P5p/8/PPP2K1p/4R1rk w - - 0 1
+8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 w - - 0 1
+8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 b - - 0 1
+7k/8/6K1/6P1/8/8/8/8 w - - 0 1
+8/8/8/8/8/6k1/6p1/6K1 w - - 0 1
+7k/8/8/8/8/8/P7/KB6 w - - 0 1
+8/8/8/8/3k4/8/8/KBN5 w - - 0 1
+8/5pk1/6p1/7p/5P1P/6P1/5K2/3Q4 w - - 0 1
+2r3k1/5ppp/8/8/8/8/5PPP/2R3K1 w - - 0 1
+6k1/5ppp/8/8/8/8/1q3PPP/3Q2K1 w - - 0 1
+3k4/8/3K4/3P4/8/8/8/3r4 w - - 0 1
+4k3/8/4K3/4P3/8/8/8/8 w - - 0 1
+4k3/4P3/4K3/8/8/8/8/8 b - - 0 1
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 moves g1f3 g8f6 f3g1 f6g8 g1f3 g8f6 f3g1
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 moves e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1
+4k3/8/8/8/8/8/8/3QK3 w - - 90 80 moves d1d8 e8d8
+7k/5Q2/6K1/8/8/8/8/8 b - - 97 1
+8/8/8/4k3/8/4K3/4P3/8 w - - 0 1 moves e3d3 e5d5 d3e3 d5e5 e3d3 e5d5 d3e3
+# Añadidas con 0.37, para los caminos que reescribió (Vetting::is_legal, any_legal,
+# quiescencia por etapas): clavada que sí puede capturar al clavador o empujar por su
+# línea, al paso que resuelve un jaque de peón, enroques con casillas atacadas,
+# ahogados, jaque que solo se resuelve con el rey, caballo clavado.
+4k3/8/8/8/8/2b5/3P4/4K3 w - - 0 1
+4k3/4r3/8/8/8/8/4P3/4K3 w - - 0 1
+8/8/8/2k5/3Pp3/8/8/4K3 b - d3 0 1
+1r2k3/8/8/8/8/8/8/R3K3 w Q - 0 1
+4k3/8/8/8/8/8/5r2/4K2R w K - 0 1
+r3k2r/8/8/8/8/8/8/R2QK2R b KQkq - 0 1
+r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1
+7k/5K2/6Q1/8/8/8/8/8 b - - 0 1
+7k/8/5K2/8/8/8/8/6Q1 w - - 0 1
+8/8/8/8/8/2k5/8/K1q5 w - - 0 1
+7k/8/8/8/8/8/3q4/3K4 w - - 0 1
+4k3/4n3/8/8/8/8/8/4RK2 b - - 0 1

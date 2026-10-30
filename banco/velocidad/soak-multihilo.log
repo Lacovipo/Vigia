@@ -1,0 +1,15 @@
+modo=time hilos=2 hash=1MB posiciones=164
+fallos=0 codigo_salida=0 panics=0
+profundidad media=13.32 nps aprox=3697464 max retraso=0.003s
+modo=stop hilos=2 hash=16MB posiciones=114
+fallos=0 codigo_salida=0 panics=0
+profundidad media=12.45 nps aprox=3402773 max retraso=0.000s
+modo=depth hilos=2 hash=16MB posiciones=74
+fallos=0 codigo_salida=0 panics=0
+profundidad media=10.42 nps aprox=4570091 max retraso=0.000s
+modo=time hilos=2 hash=1MB posiciones=414
+fallos=0 codigo_salida=0 panics=0
+profundidad media=13.36 nps aprox=3539661 max retraso=0.013s
+modo=stop hilos=2 hash=4MB posiciones=414
+fallos=0 codigo_salida=0 panics=0
+profundidad media=12.95 nps aprox=3568469 max retraso=0.000s

@@ -1652,6 +1652,37 @@ Kiwipete; 0.36.0, 7.511.386 y 8.360.765 (+46 % y +41 %). Una sola ejecución
 por posición: vale como comprobación de que quitar el `Mutex` no empeora con
 dos hilos, no como medida.
 
+**Verificación añadida antes de El Juez** (candidato `juez037/vigia.exe`, sha256
+`a77c208d…`; todo con un hilo salvo el soak; los logs, en `banco/velocidad/`):
+
+| prueba | qué ejercita | resultado |
+|---|---|---|
+| `diferencial.py --fens tools/posiciones_adversarias.txt` (51 posiciones: las «tricky» de perft, al paso, enroques bajo ataque, ahogados, repeticiones por historial, reloj de 50) a profundidad 9, 12 con tabla de 1 MB y 13 | legalidad perezosa y quiescencia por etapas en los casos que las rompen | 0 distintas |
+| `--nodos 60`, `400`, `4000`, `40000` (`go nodes`: aborta a mitad de iteración) sobre 483 posiciones cada una | el camino de aborto, que `go depth` no toca | 0 distintas |
+| 120 posiciones con más de 70 jugadas legales (`tools/genera_posiciones_ricas.py`), a profundidad 7, a 60.000 nodos y a profundidad 9 con 1 MB | las palabras altas del bitset de tranquilas y el desempate de 9 bits de las claves | 0 distintas |
+| test `every_vetting_path_agrees_with_make_unmake_over_thousands_of_random_games` (ignorado, 8 s) | `is_legal` jugada a jugada (el camino de `negamax`), `legal`, `any_legal`, `noisy_legal` y la lista de ruidosas contra el filtro por make/unmake | 2.624.539 posiciones de 20.000 partidas aleatorias (1.589 mates, 2.192 ahogados, 810 al paso, 28.633 promociones): ninguna discrepancia |
+| `tools/soak_uci.py`, 2 hilos, tabla de 1 a 16 MB, por tiempo, con `stop` aleatorio y a profundidad fija | pánicos, cuelgues y jugadas ilegales con la TT sin cerrojo compartida | 1.180 búsquedas, 0 fallos |
+
+El diferencial comprueba ahora, antes de comparar, que **los dos motores aceptan
+cada posición** (`Motor.acepta`): un `position` con un FEN imposible o una jugada
+ilegal se ignora en silencio, y entonces se compararía la posición anterior; se
+detecta dejando antes una posición centinela y viendo si la lista de jugadas
+legales sigue siendo la suya.
+
+**Pila.** `tools/sonda_pila.py` busca por bisección el menor `RUST_MIN_STACK` con el
+que la búsqueda termina. En finales de 2,5 s (profundidad ~20) 0.37 aguanta con
+196 KiB y cae con 128 KiB; 0.36 aguanta con 128. En Kiwipete el umbral pasa de 67 a
+131 KiB. Los 2 MiB por defecto dan ~×10 sobre lo observado, pero ninguna sonda se
+acercó a `MAX_PLY = 128`, así que el peor caso es una extrapolación; la pila
+explícita para los hilos de búsqueda queda como robustez pendiente
+(`docs/MejorasPendientes.md`).
+
+**Revisión externa**, por lectura (nadie ejecutó código): tres modelos
+revisaron la TT, `unsafe`, hilos y pila (parte A) y la legalidad perezosa,
+quiescencia y ordenación (parte B). No salió ningún fallo del motor. Los dos
+hallazgos leves están aceptados y escritos: la limitación del esquema XOR de la
+TT (§6) y que `perft N` por UCI no tiene tope de profundidad.
+
 Lo que se aprendió, porque dos de las tres veces la estimación fue mía y falló:
 
 - La **micromedida de la reserva en el montículo** (35–45 ns por lista, contra

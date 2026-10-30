@@ -69,6 +69,10 @@ FIJAS = [
 
 MOVE = re.compile(r"^([a-h][1-8][a-h][1-8][qrbn]?): \d+$")
 
+# Posición cuya lista de jugadas no coincide con la de ninguna otra del diferencial:
+# ver `Motor.acepta`.
+CENTINELA = "k7/8/8/8/8/8/8/K6R w - - 0 1"
+
 
 class Motor:
     def __init__(self, exe, hash_mb):
@@ -100,18 +104,41 @@ class Motor:
     def posicion(self, fen, jugadas):
         self.send(f"position fen {fen} moves {' '.join(jugadas)}" if jugadas else f"position fen {fen}")
 
-    def legales(self, fen, jugadas):
-        self.posicion(fen, jugadas)
+    def lista(self):
+        """Jugadas legales de la posición actual del motor."""
         self.send("perft 1")
         return [m.group(1) for l in self.leer_hasta("Nodes searched") if (m := MOVE.match(l))]
 
-    def analiza(self, fen, jugadas, prof):
+    def legales(self, fen, jugadas):
+        self.posicion(fen, jugadas)
+        return self.lista()
+
+    def acepta(self, fen, jugadas):
+        """None si el motor entiende la posición; si no, un texto que dice por qué.
+
+        Un `position` que el motor rechaza (FEN imposible, o una jugada ilegal de la
+        lista) se ignora en silencio, y la búsqueda siguiente analizaría la posición
+        de antes: dos motores que «coinciden» en ella no habrían comparado nada. Se
+        detecta dejando antes una posición centinela y viendo si la lista de
+        jugadas legales sigue siendo la suya."""
+        self.posicion(CENTINELA, [])
+        centinela = self.lista()
+        for i in range(len(jugadas) + 1):
+            self.posicion(CENTINELA, [])
+            legales = self.legales(fen, jugadas[:i])
+            if legales == centinela:
+                return f"el motor ignoró 'position fen {fen} moves {' '.join(jugadas[:i])}'"
+            if i < len(jugadas) and jugadas[i] not in legales:
+                return f"la jugada {jugadas[i]} no es legal tras 'moves {' '.join(jugadas[:i])}'"
+        return None
+
+    def analiza(self, fen, jugadas, limite):
         """{profundidad: (puntuación, nodos, variante)} y la jugada elegida."""
         self.send("ucinewgame")
         self.send("isready")
         self.leer_hasta("readyok")
         self.posicion(fen, jugadas)
-        self.send(f"go depth {prof}")
+        self.send(f"go {limite}")
         lineas = self.leer_hasta("bestmove")
         por_profundidad = {}
         for l in lineas:
@@ -139,10 +166,10 @@ def lee_libro(ruta):
         return [l.strip() for l in f if l.strip() and not l.startswith("#")]
 
 
-def compara(a, b, fen, jugadas, prof):
+def compara(a, b, fen, jugadas, limite):
     """None si coinciden; si no, un texto que dice dónde se separan."""
-    ra, ba = a.analiza(fen, jugadas, prof)
-    rb, bb = b.analiza(fen, jugadas, prof)
+    ra, ba = a.analiza(fen, jugadas, limite)
+    rb, bb = b.analiza(fen, jugadas, limite)
     for d in sorted(set(ra) | set(rb)):
         if ra.get(d) != rb.get(d):
             return f"profundidad {d}:\n      A {ra.get(d)}\n      B {rb.get(d)}"
@@ -156,10 +183,15 @@ def main():
     ap.add_argument("--a", required=True, help="binario de referencia (p. ej. la versión liberada)")
     ap.add_argument("--b", required=True, help="binario candidato")
     ap.add_argument("--libro", default="banco/libros/vigia-2000.epd")
+    ap.add_argument("--fens", help="archivo con posiciones extra, una por línea: FEN o FEN moves j1 j2 ... "
+                    "(las líneas que empiezan por # se ignoran); p. ej. tools/posiciones_adversarias.txt")
     ap.add_argument("--del-libro", type=int, default=200, help="posiciones tomadas tal cual del libro")
     ap.add_argument("--aleatorias", type=int, default=200, help="partidas aleatorias desde el libro")
     ap.add_argument("--plies", type=int, default=40, help="máximo de jugadas aleatorias por partida")
     ap.add_argument("--profundidad", type=int, default=10)
+    ap.add_argument("--nodos", type=int, help="busca con `go nodes N` en vez de `go depth`: así la búsqueda se "
+                    "aborta a mitad de una iteración (con N pequeño, en la primera), que es el camino que `go depth` "
+                    "nunca ejercita")
     ap.add_argument("--hash", type=int, default=64, help="MB de tabla de los dos motores")
     ap.add_argument("--semilla", type=int, default=20261029)
     ap.add_argument("--max-fallos", type=int, default=15, help="cuántas diferencias detallar")
@@ -168,9 +200,21 @@ def main():
     rng = random.Random(args.semilla)
     libro = lee_libro(args.libro)
     casos = [(fen, []) for fen in FIJAS]
+    if args.fens:
+        for linea in lee_libro(args.fens):
+            fen, _, jugadas = linea.partition(" moves ")
+            casos.append((fen.strip(), jugadas.split()))
     casos += [(fen, []) for fen in rng.sample(libro, min(args.del_libro, len(libro)))]
+    externos = len(casos)  # las demás las juega el propio motor, así que son legales por construcción
 
     a, b = Motor(args.a, args.hash), Motor(args.b, args.hash)
+    for motor in (a, b):
+        for fen, jugadas in casos[:externos]:
+            problema = motor.acepta(fen, jugadas)
+            if problema:
+                print(f"POSICIÓN NO VÁLIDA para {motor.exe}: {problema}\n"
+                      "Un `position` rechazado se ignora en silencio y se compararía la posición anterior.")
+                sys.exit(2)
     for fen in rng.sample(libro, min(args.aleatorias, len(libro))):
         jugadas = []
         for _ in range(rng.randint(4, args.plies)):
@@ -180,11 +224,12 @@ def main():
             jugadas.append(rng.choice(legales))
         casos.append((fen, jugadas))
 
-    print(f"{len(casos)} posiciones, profundidad {args.profundidad}, Hash {args.hash}, semilla {args.semilla}")
+    limite = f"nodes {args.nodos}" if args.nodos else f"depth {args.profundidad}"
+    print(f"{len(casos)} posiciones, go {limite}, Hash {args.hash}, semilla {args.semilla}")
     print(f"A = {args.a}\nB = {args.b}", flush=True)
     iguales, fallos, inicio = 0, [], time.time()
     for n, (fen, jugadas) in enumerate(casos, 1):
-        dif = compara(a, b, fen, jugadas, args.profundidad)
+        dif = compara(a, b, fen, jugadas, limite)
         if dif is None:
             iguales += 1
         else:

@@ -1,0 +1,14 @@
+532 posiciones, profundidad 11, Hash 16, semilla 777
+A = juez036\vigia.exe
+B = juez037\vigia.exe
+  50/532  iguales 50  distintas 0  (39 s)
+  100/532  iguales 100  distintas 0  (53 s)
+  150/532  iguales 150  distintas 0  (64 s)
+  200/532  iguales 200  distintas 0  (78 s)
+  250/532  iguales 250  distintas 0  (87 s)
+  300/532  iguales 300  distintas 0  (98 s)
+  350/532  iguales 350  distintas 0  (110 s)
+  400/532  iguales 400  distintas 0  (121 s)
+  450/532  iguales 450  distintas 0  (134 s)
+  500/532  iguales 500  distintas 0  (145 s)
+RESULTADO: 532 iguales, 0 distintas, de 532 (154 s)

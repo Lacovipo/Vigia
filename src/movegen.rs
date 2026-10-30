@@ -1708,6 +1708,88 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "lento (~10 s): ejecutar con --release cuando se toque la legalidad"]
+    fn every_vetting_path_agrees_with_make_unmake_over_thousands_of_random_games() {
+        // The test above plays 60 games from the initial position. This plays
+        // twenty thousand from fourteen starting points, the tricky ones included
+        // (castling under fire, en passant along a rank, promotions on both
+        // sides, the 218-move position), and asks more of every position:
+        // `is_legal` for each pseudo-legal move in turn -- the path `negamax`
+        // takes since 0.37 -- against the make/unmake filter, on top of the
+        // whole quiescence view.
+        let starts = [
+            crate::board::STARTPOS_FEN,
+            KIWIPETE_FEN,
+            POSITION3_FEN,
+            POSITION4_FEN,
+            POSITION5_FEN,
+            POSITION6_FEN,
+            "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+            "r3k2r/1b4bq/8/8/8/8/7B/R3K2R w KQkq - 0 1",
+            "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1",
+            "8/8/8/KPp4r/8/8/8/7k w - c6 0 1",
+            "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
+            "r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1",
+            "R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNN1KB1 w - - 0 1",
+            "4k3/8/8/8/8/2b5/3P4/4K3 w - - 0 1",
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut positions, mut mates, mut stalemates, mut en_passants, mut promotions) = (0u64, 0, 0, 0, 0);
+        for game in 0..20_000 {
+            let mut board = Board::from_fen(starts[game % starts.len()]).unwrap();
+            for _ in 0..250 {
+                positions += 1;
+                assert_quiescence_view_agrees(&mut board);
+                let legal = legal_moves_scratch(&mut board);
+                assert_eq!(legal, legal_moves_by_make_unmake(&mut board), "legality in {}", board.to_fen());
+
+                let vetting = Vetting::new(&board);
+                let pseudo = generate_pseudo_legal_list(&board);
+                let vetted: Vec<Move> =
+                    pseudo.iter().copied().filter(|&mv| vetting.is_legal(&mut board, mv)).collect();
+                assert_eq!(legal, vetted, "is_legal move by move in {}", board.to_fen());
+
+                if legal.is_empty() {
+                    if is_in_check(&board, board.side_to_move) {
+                        mates += 1;
+                    } else {
+                        stalemates += 1;
+                    }
+                    break;
+                }
+                if crate::eval::is_insufficient_material(&board) {
+                    break;
+                }
+                // A quarter of the time prefer a capture or a promotion, if there is one:
+                // uniform random play shuffles pieces about and rarely trades down.
+                let noisy: Vec<Move> = legal.iter().copied().filter(|m| m.is_capture() || m.promotion().is_some()).collect();
+                let mv = if !noisy.is_empty() && next() % 4 == 0 {
+                    noisy[(next() % noisy.len() as u64) as usize]
+                } else {
+                    legal[(next() % legal.len() as u64) as usize]
+                };
+                en_passants += (mv.flag == MoveFlag::EnPassant) as u32;
+                promotions += mv.promotion().is_some() as u32;
+                board.make_move(mv);
+            }
+        }
+        eprintln!(
+            "{positions} positions: {mates} mates, {stalemates} stalemates, {en_passants} en passant captures, {promotions} promotions"
+        );
+        // If the generator or the RNG ever changes so that these counts drop to zero, the
+        // test has stopped looking at the cases that matter.
+        assert!(mates > 0 && stalemates > 0, "mates {mates}, stalemates {stalemates}");
+        assert!(en_passants > 0 && promotions > 0, "en passants {en_passants}, promotions {promotions}");
+        assert!(positions > 100_000, "only {positions} positions were checked");
+    }
+
+    #[test]
     fn a_king_may_not_retreat_along_the_ray_of_the_rook_checking_it() {
         // The single most likely way to get this wrong: testing the
         // destination for attacks with the king still standing on its
